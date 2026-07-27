@@ -116,6 +116,15 @@ function deriveVisualInput({ generationStrategies, configuration, explicitBindin
 
 function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolution, visualInput, generationStrategies }) {
   const duration = Number(shot.durationSeconds) > 0 ? Number(shot.durationSeconds) : 5;
+  const configuredVirtualPersonAssetIds = unique([
+    ...(Array.isArray(generationStrategies.video_generation?.virtualPersonAssetIds) ? generationStrategies.video_generation.virtualPersonAssetIds : []),
+    ...(Array.isArray(generationStrategies.video_generation?.virtualPersonAssetIdsByShotId?.[shot.shotId])
+      ? generationStrategies.video_generation.virtualPersonAssetIdsByShotId[shot.shotId]
+      : [])
+  ]);
+  if (generationStrategies.video_generation?.requireVirtualPersonAssets === true && configuredVirtualPersonAssetIds.length === 0) {
+    throw new UnuTvError("virtual_person_asset_required", `Shot ${shot.shotId} requires at least one virtual person asset ID`, 409);
+  }
   const movement = shot.cinematography?.movementPath || shot.cameraTrajectoryPlan?.pathDescription || "按分镜镜头合同执行";
   const actionPhases = Array.isArray(shot.actionChain) ? shot.actionChain.join("、") : (shot.actionChain || shot.storyBeat || "按分镜动作合同执行");
   return {
@@ -125,7 +134,8 @@ function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolu
     requiredCapabilities: unique([
       ...(Array.isArray(generationStrategies.video_generation?.requiredCapabilities) ? generationStrategies.video_generation.requiredCapabilities : []),
       ...(visualInput.mode === "first_frame" || visualInput.mode === "first_last_frame" ? [visualInput.mode] : []),
-      ...(visualInput.referenceMediaIds.length ? ["multi_reference"] : [])
+      ...(visualInput.referenceMediaIds.length ? ["multi_reference"] : []),
+      ...(configuredVirtualPersonAssetIds.length || generationStrategies.video_generation?.requireVirtualPersonAssets === true ? ["virtual_person_asset"] : [])
     ]),
     executionNodeId,
     lifecycle: "active",
@@ -208,6 +218,7 @@ function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolu
       ...(visualInput.firstFrameMediaId ? { firstFrameMediaId: visualInput.firstFrameMediaId } : {}),
       ...(visualInput.lastFrameMediaId ? { lastFrameMediaId: visualInput.lastFrameMediaId } : {}),
       referenceMediaIds: visualInput.referenceMediaIds,
+      ...(configuredVirtualPersonAssetIds.length ? { virtualPersonAssetIds: configuredVirtualPersonAssetIds } : {}),
       providerOptions: generationStrategies.video_generation?.providerOptions || {}
     },
     createdAt: nowIso(),

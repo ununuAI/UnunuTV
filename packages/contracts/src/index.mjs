@@ -57,6 +57,7 @@ export * from "./cinematic-image-prompt-policy.mjs";
 export * from "./authority-board-constraint-scope-policy.mjs";
 export * from "./character-voice-profile-contract.mjs";
 export * from "./video-model-capability-policy.mjs";
+export * from "./generation-parameter-contracts.mjs";
 export * from "./workbench-contracts.mjs";
 export * from "./storyboard-contracts.mjs";
 export * from "./node-presentation-contracts.mjs";

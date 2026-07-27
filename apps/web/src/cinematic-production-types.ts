@@ -337,6 +337,7 @@ export interface GenerationParameters extends Record<string, unknown> {
   count: number;
   generateAudio: boolean;
   referenceMediaIds: string[];
+  virtualPersonAssetIds?: string[];
 }
 
 export interface CinematicSequenceState extends Record<string, unknown> {

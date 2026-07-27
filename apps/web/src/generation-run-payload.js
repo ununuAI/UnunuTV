@@ -64,7 +64,10 @@ export function generationRunPayload(node, input, edges, nodes) {
       referenceNodeIds: input.referenceNodeIds,
       ...((isVideoNode ? videoReferences : referenceMediaIds).length ? { referenceMediaIds: isVideoNode ? videoReferences : referenceMediaIds } : {}),
       ...(firstFrameMediaId ? { firstFrameMediaId } : {}),
-      ...(lastFrameMediaId ? { lastFrameMediaId } : {})
+      ...(lastFrameMediaId ? { lastFrameMediaId } : {}),
+      ...(Array.isArray(parameters.virtualPersonAssetIds) && parameters.virtualPersonAssetIds.length
+        ? { virtualPersonAssetIds: parameters.virtualPersonAssetIds }
+        : {})
     }
   };
 }

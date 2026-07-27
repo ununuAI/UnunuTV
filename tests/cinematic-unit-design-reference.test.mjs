@@ -65,3 +65,52 @@ test("unit design refuses a declared visual-anchor policy without a real binding
     (error) => error?.code === "visual_anchor_reference_required"
   );
 });
+
+test("unit design binds per-shot virtual-person assets and makes the capability mandatory", async () => {
+  const saved = [];
+  await ensureGenerationUnitsForProduction({
+    projectId: "project-1",
+    productionId: "production-1",
+    cinematic: {
+      listShots: async () => [{ shotId: "shot-01", durationSeconds: 5 }],
+      listGenerationUnits: async () => [],
+      saveGenerationUnit: async (input) => { saved.push(input); return input; }
+    },
+    projects: { open: async () => ({ rootCanvasId: "canvas-1" }), openCanvas: async () => ({ nodes: [{ id: "video-node", kind: "video" }] }) },
+    generationStrategies: {
+      video_generation: {
+        provider: "ark",
+        model: "doubao-seedance-2-0-mini-260615",
+        requireVirtualPersonAssets: true,
+        virtualPersonAssetIdsByShotId: {
+          "shot-01": ["asset-20260310030618-88hlb"]
+        }
+      }
+    }
+  });
+  assert.deepEqual(saved[0].generationUnit.generationParameters.virtualPersonAssetIds, ["asset-20260310030618-88hlb"]);
+  assert.equal(saved[0].generationUnit.requiredCapabilities.includes("virtual_person_asset"), true);
+});
+
+test("unit design blocks a person-required shot before payment when its virtual-person binding is missing", async () => {
+  await assert.rejects(
+    () => ensureGenerationUnitsForProduction({
+      projectId: "project-1",
+      productionId: "production-1",
+      cinematic: {
+        listShots: async () => [{ shotId: "shot-01", durationSeconds: 5 }],
+        listGenerationUnits: async () => [],
+        saveGenerationUnit: async () => null
+      },
+      projects: { open: async () => ({ rootCanvasId: "canvas-1" }), openCanvas: async () => ({ nodes: [{ id: "video-node", kind: "video" }] }) },
+      generationStrategies: {
+        video_generation: {
+          provider: "ark",
+          model: "doubao-seedance-2-0-mini-260615",
+          requireVirtualPersonAssets: true
+        }
+      }
+    }),
+    (error) => error?.code === "virtual_person_asset_required"
+  );
+});

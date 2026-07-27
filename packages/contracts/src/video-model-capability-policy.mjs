@@ -22,7 +22,7 @@ const PROFILES = [
     supportsIndependentNegativePrompt: false,
     supportsInternalCuts: true,
     supportsPromptTimeSlots: true,
-    supportedCapabilities: ["first_frame", "first_last_frame", "multi_reference", "native_audio", "internal_cuts", "storyboard_reference", "prompt_time_slots"],
+    supportedCapabilities: ["first_frame", "first_last_frame", "multi_reference", "native_audio", "internal_cuts", "storyboard_reference", "prompt_time_slots", "virtual_person_asset"],
     supportedAspectRatios: ["16:9", "9:16", "1:1"],
     supportedResolutions: ["480p", "720p", "1080p"],
     evidence: "official-volcengine-seedance-2-series-and-owner-confirmation-2026-07-20",
@@ -98,6 +98,9 @@ export function videoModelDurationRange({ generateAudio = false, mode, model, pr
 export function preflightVideoModelCapability({ generationParameters, generationUnit, promptBytes, referenceBindings = [] }) {
   const errors = [];
   const degradations = [];
+  const virtualPersonAssetIds = Array.isArray(generationParameters?.virtualPersonAssetIds)
+    ? generationParameters.virtualPersonAssetIds
+    : [];
   const profile = getVideoModelCapability({ model: generationParameters?.model, provider: generationParameters?.provider });
   if (!profile) {
     errors.push({ code: "unknown_model_capability", message: "The provider/model combination is not registered." });
@@ -116,6 +119,9 @@ export function preflightVideoModelCapability({ generationParameters, generation
     if (!profile.supportedCapabilities.includes(capability)) {
       errors.push({ code: "unsupported_required_capability", message: `${profile.displayName} does not support required capability ${capability}.` });
     }
+  }
+  if ((generationUnit.requiredCapabilities ?? []).includes("virtual_person_asset") && virtualPersonAssetIds.length === 0) {
+    errors.push({ code: "missing_virtual_person_asset", message: "virtual_person_asset requires at least one virtualPersonAssetId." });
   }
   if (profile.supportedAspectRatios.length && !profile.supportedAspectRatios.includes(generationParameters.aspectRatio)) {
     errors.push({ code: "unsupported_aspect_ratio", message: `${profile.displayName} does not support aspect ratio ${generationParameters.aspectRatio}.` });
@@ -144,7 +150,7 @@ export function preflightVideoModelCapability({ generationParameters, generation
   const frameInputMode = ["first_frame", "first_last_frame"].includes(generationParameters.mode);
   const forbidsMixedFrameReferences = profile.forbidsReferenceImagesWithFrameInput
     || (profile.forbidsReferenceImagesWithFirstLastFrame && generationParameters.mode === "first_last_frame");
-  if (forbidsMixedFrameReferences && frameInputMode && generationParameters.referenceMediaIds?.length) {
+  if (forbidsMixedFrameReferences && frameInputMode && (generationParameters.referenceMediaIds?.length || virtualPersonAssetIds.length)) {
     errors.push({ code: "frame_reference_conflict", message: `${profile.displayName} cannot mix first/last-frame input with ordinary reference images.` });
   }
   if (["STORYBOARD_SHEET", "SHOT_FRAME_SET", "ACTION_PHASE_BOARD", "DUPLICATE_HANDOFF"].includes(generationUnit.visualAnchorPolicy) && referenceBindings.length === 0) {
@@ -163,7 +169,7 @@ export function preflightVideoModelCapability({ generationParameters, generation
   if (profile.promptMaxBytes && promptBytes > profile.promptMaxBytes) {
     errors.push({ code: "prompt_byte_limit", message: `Prompt is ${promptBytes} UTF-8 bytes; model limit is ${profile.promptMaxBytes}.` });
   }
-  if (profile.maxReferenceImages !== null && referenceBindings.length > profile.maxReferenceImages) {
+  if (profile.maxReferenceImages !== null && referenceBindings.length + virtualPersonAssetIds.length > profile.maxReferenceImages) {
     errors.push({ code: "too_many_references", message: `Reference count exceeds ${profile.maxReferenceImages}.` });
   }
   if (generationParameters.generateAudio && profile.supportsNativeAudio === false) {

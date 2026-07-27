@@ -12,6 +12,8 @@ import { validateGenerationControlIntent, validateReferenceSemanticControl } fro
 import { validateCameraTrajectoryPlan, validateOrbitCameraTrajectory } from "./cinematic-camera-trajectory-policy.mjs";
 import { validatePromptConstraintCoverage } from "./cinematic-prompt-coverage-policy.mjs";
 import { validateCinematicSequenceState } from "./cinematic-sequence-state-policy.mjs"; import { validateSequenceWorkspaceBinding } from "./cinematic-sequence-workspace-contracts.mjs"; export { validateAssetAuthorityBoardSpec, validateCharacterAuthorityBoardSpec } from "./character-authority-board-contract.mjs";
+import { CINEMATIC_RESERVED_PROVIDER_OPTION_KEYS, validateVirtualPersonAssetIds } from "./generation-parameter-contracts.mjs";
+export { CINEMATIC_RESERVED_PROVIDER_OPTION_KEYS } from "./generation-parameter-contracts.mjs";
 export { validateCinematicContinuityPlan, validateCinematicContinuityState } from "./cinematic-continuity-contracts.mjs";
 export { CINEMATIC_REVIEW_DECISIONS } from "./cinematic-review-gate-policy.mjs";
 export const CINEMATIC_CONTRACT_VERSION = "2.0.0";
@@ -48,21 +50,6 @@ export const CINEMATIC_CHARACTER_BOARD_REFERENCE_POLICIES = Object.freeze([
   "accepted_authority_versions"
 ]);
 export const CINEMATIC_STORYBOARD_LAYOUTS = Object.freeze(["storyboard_sheet", "shot_frame_set", "action_phase_board"]);
-export const CINEMATIC_RESERVED_PROVIDER_OPTION_KEYS = Object.freeze([
-  "approvedPaid",
-  "prompt",
-  "provider",
-  "model",
-  "mode",
-  "duration",
-  "aspectRatio",
-  "resolution",
-  "count",
-  "generateAudio",
-  "firstFrameMediaId",
-  "lastFrameMediaId",
-  "referenceMediaIds"
-]);
 export const CINEMATIC_STRATEGY_PROTOCOL = Object.freeze({
   single_shot: "ununu.video.single-shot.v2",
   designed_multi_shot: "ununu.video.multi-shot.v2",
@@ -311,6 +298,7 @@ export function validateGenerationParameters(value) {
   positiveInteger(value.count, "count", issues);
   if (typeof value.generateAudio !== "boolean") issues.push(issue("generateAudio", "generateAudio must be boolean", "invalid_type"));
   requiredArray(value.referenceMediaIds, "referenceMediaIds", issues);
+  issues.push(...validateVirtualPersonAssetIds(value.virtualPersonAssetIds));
   if (value.providerOptions !== undefined && !isRecord(value.providerOptions)) {
     issues.push(issue("providerOptions", "providerOptions must be an object", "invalid_type"));
   } else if (isRecord(value.providerOptions)) {

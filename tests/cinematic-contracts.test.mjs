@@ -98,6 +98,25 @@ test("provider-specific options cannot override canonical Prompt or generation p
   assert.equal(validation.issues.some((entry) => entry.path === "providerOptions.approvedPaid" && entry.code === "reserved_field"), true);
 });
 
+test("virtual-person IDs are first-class protected generation parameters", () => {
+  const valid = validateGenerationParameters(parameters({
+    virtualPersonAssetIds: ["asset-20260310030618-88hlb"]
+  }));
+  assert.equal(valid.ok, true, JSON.stringify(valid.issues));
+
+  const invalid = validateGenerationParameters(parameters({
+    virtualPersonAssetIds: ["asset-not-valid", "asset-not-valid"]
+  }));
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.issues.some((entry) => entry.code === "invalid_virtual_person_asset_id"), true);
+
+  const smuggled = validateGenerationParameters(parameters({
+    providerOptions: { virtualPersonAssetIds: ["asset-20260310030618-88hlb"] }
+  }));
+  assert.equal(smuggled.ok, false);
+  assert.equal(smuggled.issues.some((entry) => entry.path === "providerOptions.virtualPersonAssetIds" && entry.code === "reserved_field"), true);
+});
+
 test("reference numbering must be contiguous and match the exact provider payload order", () => {
   const binding = (displayName, mediaId, providerIndex) => ({
     assetId: `asset-${providerIndex}`,

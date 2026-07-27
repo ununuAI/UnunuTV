@@ -73,6 +73,15 @@ test("Grok audio state is persisted into the provider request", () => {
   assert.equal(payload.request.generateAudio, false);
 });
 
+test("Seedance virtual-person IDs survive the UI request compiler", () => {
+  const payload = generationRunPayload(video, seedanceInput("text_to_video", {
+    duration: 5,
+    generateAudio: true,
+    virtualPersonAssetIds: ["asset-20260310030618-88hlb"]
+  }), [], [video]);
+  assert.deepEqual(payload.request.virtualPersonAssetIds, ["asset-20260310030618-88hlb"]);
+});
+
 test("Grok rejects audio or all-purpose-reference requests above ten seconds before payment", () => {
   assert.throws(
     () => generationRunPayload(video, input("text_to_video", { duration: 15, generateAudio: true }), [], [video]),

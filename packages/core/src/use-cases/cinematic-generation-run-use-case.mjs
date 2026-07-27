@@ -122,7 +122,8 @@ export function createCinematicGenerationRunUseCase({
       generationUnitId,
       ...(parameters.firstFrameMediaId ? { firstFrameMediaId: parameters.firstFrameMediaId } : {}),
       ...(parameters.lastFrameMediaId ? { lastFrameMediaId: parameters.lastFrameMediaId } : {}),
-      ...(parameters.referenceMediaIds?.length ? { referenceMediaIds: parameters.referenceMediaIds } : {})
+      ...(parameters.referenceMediaIds?.length ? { referenceMediaIds: parameters.referenceMediaIds } : {}),
+      ...(parameters.virtualPersonAssetIds?.length ? { virtualPersonAssetIds: parameters.virtualPersonAssetIds } : {})
     };
     const referenceMediaIds = Array.isArray(parameters.referenceMediaIds) ? parameters.referenceMediaIds : [];
     const promptDocument = createBoundPromptDocumentV1(compilation.envelope.compiledContentPrompt, referenceAudit.bindings);
@@ -150,7 +151,8 @@ export function createCinematicGenerationRunUseCase({
         n: parameters.count,
         generateAudio: parameters.generateAudio,
         ...(parameters.firstFrameMediaId ? { firstFrameMediaId: parameters.firstFrameMediaId } : {}),
-        ...(parameters.lastFrameMediaId ? { lastFrameMediaId: parameters.lastFrameMediaId } : {})
+        ...(parameters.lastFrameMediaId ? { lastFrameMediaId: parameters.lastFrameMediaId } : {}),
+        ...(parameters.virtualPersonAssetIds?.length ? { virtualPersonAssetIds: parameters.virtualPersonAssetIds } : {})
       },
       referenceMediaIds
     });

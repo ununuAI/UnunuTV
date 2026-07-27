@@ -92,6 +92,75 @@ test("Seedance blocks ordinary references mixed with any frame input before paid
   assert.equal(firstLastPreflight.errors.some((entry) => entry.code === "frame_reference_conflict"), true);
 });
 
+test("Seedance virtual-person capability blocks missing IDs and accepts an explicit portrait asset", () => {
+  const generationParameters = {
+    provider: "ark",
+    model: ARK_SEEDANCE_2_MINI_MODEL_ID,
+    mode: "text_to_video",
+    duration: 5,
+    aspectRatio: "16:9",
+    resolution: "480p",
+    generateAudio: true,
+    referenceMediaIds: []
+  };
+  const generationUnit = {
+    strategy: "single_shot",
+    visualAnchorPolicy: "NONE",
+    requiredCapabilities: ["virtual_person_asset"]
+  };
+  const missing = preflightVideoModelCapability({ generationParameters, generationUnit, promptBytes: 100, referenceBindings: [] });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.errors.some((entry) => entry.code === "missing_virtual_person_asset"), true);
+
+  const bound = preflightVideoModelCapability({
+    generationParameters: { ...generationParameters, virtualPersonAssetIds: ["asset-20260310030618-88hlb"] },
+    generationUnit,
+    promptBytes: 100,
+    referenceBindings: []
+  });
+  assert.equal(bound.ok, true, JSON.stringify(bound.errors));
+});
+
+test("Seedance virtual-person assets count toward the reference limit and cannot mix with frame input", () => {
+  const virtualPersonAssetIds = Array.from({ length: 9 }, (_, index) => `asset-2026031003061${index}-person${index}`);
+  const tooMany = preflightVideoModelCapability({
+    generationParameters: {
+      provider: "ark",
+      model: ARK_SEEDANCE_2_MINI_MODEL_ID,
+      mode: "image_reference",
+      duration: 5,
+      aspectRatio: "16:9",
+      resolution: "480p",
+      generateAudio: false,
+      referenceMediaIds: ["media-scene"],
+      virtualPersonAssetIds
+    },
+    generationUnit: { strategy: "single_shot", visualAnchorPolicy: "SHOT_FRAME_SET", requiredCapabilities: ["virtual_person_asset"] },
+    promptBytes: 100,
+    referenceBindings: [{ mediaId: "media-scene" }]
+  });
+  assert.equal(tooMany.errors.some((entry) => entry.code === "too_many_references"), true);
+
+  const frameConflict = preflightVideoModelCapability({
+    generationParameters: {
+      provider: "ark",
+      model: ARK_SEEDANCE_2_MINI_MODEL_ID,
+      mode: "first_frame",
+      duration: 5,
+      aspectRatio: "16:9",
+      resolution: "480p",
+      generateAudio: false,
+      firstFrameMediaId: "media-first",
+      referenceMediaIds: [],
+      virtualPersonAssetIds: ["asset-20260310030618-88hlb"]
+    },
+    generationUnit: { strategy: "single_shot", visualAnchorPolicy: "FIRST_FRAME", requiredCapabilities: ["first_frame", "virtual_person_asset"] },
+    promptBytes: 100,
+    referenceBindings: [{ mediaId: "media-first" }]
+  });
+  assert.equal(frameConflict.errors.some((entry) => entry.code === "frame_reference_conflict"), true);
+});
+
 test("Grok duration range reflects native-audio and image-reference limits", () => {
   assert.deepEqual(videoModelDurationRange({ provider: "openrouter", model: OPENROUTER_GROK_VIDEO_MODEL_ID, mode: "text_to_video", generateAudio: false }), { min: 1, max: 15 });
   assert.deepEqual(videoModelDurationRange({ provider: "openrouter", model: OPENROUTER_GROK_VIDEO_MODEL_ID, mode: "text_to_video", generateAudio: true }), { min: 1, max: 10 });

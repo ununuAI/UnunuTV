@@ -2467,6 +2467,14 @@
         "referenceMediaIds": {
           "$ref": "#/$defs/stringArray"
         },
+        "virtualPersonAssetIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^asset-\\d{14}-[a-z0-9]+$"
+          }
+        },
         "providerOptions": {
           "allOf": [
             {
@@ -2488,7 +2496,8 @@
                 "generateAudio",
                 "firstFrameMediaId",
                 "lastFrameMediaId",
-                "referenceMediaIds"
+                "referenceMediaIds",
+                "virtualPersonAssetIds"
               ]
             }
           }

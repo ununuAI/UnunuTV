@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { UnuTvError } from "@ununu/unutv-contracts";
+import { UnuTvError, VIRTUAL_PERSON_ASSET_ID_PATTERN } from "@ununu/unutv-contracts";
 import { fetchUnunuImage, readUnunuImageResponse, ununuImageTimeoutMs } from "./ununu-image-response-adapter.mjs";
 
 const VIDEO_SUCCESS = new Set(["completed", "complete", "succeeded", "success", "done"]);
@@ -65,6 +65,19 @@ function referenceIds(input) {
   const requested = input.request?.referenceMediaIds;
   if (Array.isArray(requested)) return requested;
   return Array.isArray(input.node.payload?.referenceMediaIds) ? input.node.payload.referenceMediaIds : [];
+}
+
+function virtualPersonAssetIds(input) {
+  const requested = input.request?.virtualPersonAssetIds;
+  if (requested === undefined) return [];
+  if (!Array.isArray(requested)) {
+    throw new UnuTvError("invalid_virtual_person_asset_ids", "virtualPersonAssetIds must be an array", 400);
+  }
+  const values = requested.map((value) => typeof value === "string" ? value.trim() : "");
+  if (values.some((value) => !VIRTUAL_PERSON_ASSET_ID_PATTERN.test(value)) || new Set(values).size !== values.length) {
+    throw new UnuTvError("invalid_virtual_person_asset_ids", "Every virtual person asset ID must be unique and match asset-YYYYMMDDhhmmss-suffix", 400);
+  }
+  return values;
 }
 
 function imageMimeFromFormat(format) {
@@ -225,13 +238,17 @@ async function submitArk(input, config, fetchImpl) {
   const firstFrameId = input.request.firstFrameMediaId;
   const lastFrameId = input.request.lastFrameMediaId;
   const ordinaryReferenceIds = referenceIds(input);
-  if ((firstFrameId || lastFrameId) && ordinaryReferenceIds.length) {
+  const portraitAssetIds = virtualPersonAssetIds(input);
+  if ((firstFrameId || lastFrameId) && (ordinaryReferenceIds.length || portraitAssetIds.length)) {
     throw new UnuTvError(
       "provider_mode_reference_conflict",
       "Ark Seedance cannot mix first/last-frame input with ordinary reference media",
       409,
-      { firstFrameMediaId: firstFrameId ?? null, lastFrameMediaId: lastFrameId ?? null, referenceMediaIds: ordinaryReferenceIds }
+      { firstFrameMediaId: firstFrameId ?? null, lastFrameMediaId: lastFrameId ?? null, referenceMediaIds: ordinaryReferenceIds, virtualPersonAssetIds: portraitAssetIds }
     );
+  }
+  if (ordinaryReferenceIds.length + portraitAssetIds.length > 9) {
+    throw new UnuTvError("too_many_video_references", "Ark Seedance accepts at most 9 ordinary and virtual-person references in total", 400);
   }
   const references = await Promise.all(ordinaryReferenceIds.map((mediaId) => mediaUrl(mediaId, input)));
   const firstFrame = firstFrameId ? await mediaUrl(firstFrameId, input) : null;
@@ -239,6 +256,9 @@ async function submitArk(input, config, fetchImpl) {
   const content = [{ type: "text", text: input.request.prompt || input.node.payload?.prompt || "" }];
   if (firstFrame) content.push({ type: "image_url", image_url: { url: firstFrame.url }, role: "first_frame" });
   if (lastFrame) content.push({ type: "image_url", image_url: { url: lastFrame.url }, role: "last_frame" });
+  for (const assetId of portraitAssetIds) {
+    content.push({ type: "image_url", image_url: { url: `asset://${assetId}` }, role: "reference_image" });
+  }
   for (const reference of references) {
     const field = `${reference.media.kind}_url`;
     content.push({ type: field, [field]: { url: reference.url }, role: `reference_${reference.media.kind}` });
@@ -263,7 +283,7 @@ async function submitArk(input, config, fetchImpl) {
   return {
     status: "running",
     task: { provider: "ark", taskId: String(taskId) },
-    requestSummary: { model: requestPayload.model, duration: requestPayload.duration, resolution: requestPayload.resolution, ratio: requestPayload.ratio, firstFrameMediaId: firstFrameId, lastFrameMediaId: lastFrameId, referenceMediaIds: referenceIds(input) },
+    requestSummary: { model: requestPayload.model, duration: requestPayload.duration, resolution: requestPayload.resolution, ratio: requestPayload.ratio, firstFrameMediaId: firstFrameId, lastFrameMediaId: lastFrameId, referenceMediaIds: referenceIds(input), virtualPersonAssetIds: portraitAssetIds },
     submitResponse: payload
   };
 }

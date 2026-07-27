@@ -222,6 +222,68 @@ test("Ark video adapter blocks mixed frame and ordinary references before submis
   assert.equal(submissionCount, 0);
 });
 
+test("Ark video adapter compiles virtual-person IDs as official asset reference images", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-ark-portrait-"));
+  let submittedPayload;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    env: { ARK_API_KEY: "test-key" },
+    fetchImpl: async (url, options = {}) => {
+      assert.equal(url.endsWith("/contents/generations/tasks"), true);
+      submittedPayload = JSON.parse(options.body);
+      return Response.json({ id: "ark-portrait-task-1", status: "queued" });
+    }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "video",
+    payload: { provider: "ark", prompt: "人物走进客厅并停在沙发左侧" }
+  });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    request: {
+      model: "doubao-seedance-2-0-mini-260615",
+      duration: 5,
+      virtualPersonAssetIds: ["asset-20260310030618-88hlb"]
+    }
+  });
+  assert.equal(started.status, "running");
+  assert.deepEqual(submittedPayload.content[1], {
+    type: "image_url",
+    image_url: { url: "asset://asset-20260310030618-88hlb" },
+    role: "reference_image"
+  });
+  assert.deepEqual(started.result.requestSummary.virtualPersonAssetIds, ["asset-20260310030618-88hlb"]);
+});
+
+test("Ark video adapter rejects malformed virtual-person IDs before provider submission", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-ark-invalid-portrait-"));
+  let submissionCount = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    env: { ARK_API_KEY: "test-key" },
+    fetchImpl: async () => {
+      submissionCount += 1;
+      throw new Error("Provider must not be called for an invalid portrait asset ID");
+    }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "video", payload: { provider: "ark", prompt: "人物走入画面" } });
+  const blocked = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    request: { virtualPersonAssetIds: ["asset-invalid"] }
+  });
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.result.code, "invalid_virtual_person_asset_ids");
+  assert.equal(submissionCount, 0);
+});
+
 test("the active dev tunnel is persisted for CLI runtimes that share the same data root", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-shared-tunnel-"));
   const first = createLocalRuntime({ dataRoot, recoverRenders: false, recoverAutomation: false, runAutomationExecutor: false });
