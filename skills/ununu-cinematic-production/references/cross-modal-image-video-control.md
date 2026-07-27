@@ -4,7 +4,9 @@ Use this reference whenever a production moves from text to images, from images
 to video, between adjacent video segments, or from generated media into an edit.
 It turns creative intent into inspectable state transitions. Do not dispatch a
 Provider run until every applicable item is explicit and non-contradictory.
-There is no separate spend/paid-approval gate.
+Image exploration has no spend gate. Formal video needs accepted low-cost proof
+and one exact revision-bound submission intent; that intent is not a separate
+billing popup.
 
 ## Enforce the dependency gate
 
@@ -22,8 +24,9 @@ Run the production in this order:
    handoff from those accepted inputs.
 7. Run contract lint, capability preflight, conflict scans, and current-review
    gates.
-8. When preflight is ready, dispatch through the configured Provider account.
-   Do not ask for a separate spend/paid approval.
+8. When preflight and accepted low-cost proof are ready, record the exact
+   revision-bound formal-generation intent and dispatch once through the
+   configured Provider account. Do not ask for a separate billing approval.
 9. Review the real pixels or dense full timeline; then either accept, reject, or
    recover a separately reviewed usable range.
 
@@ -306,10 +309,11 @@ structural-control adapter requires its own architecture decision, capability
 registration, contract mapping, tests, and Owner approval before it can affect
 the production path.
 
-## Complete preflight before auto-dispatch
+## Complete preflight before recording the single formal-video intent
 
 All applicable answers must be yes before Provider dispatch. Passing preflight
-is the dispatch gate; do not invent a second spend/paid-approval step:
+authorizes creation of the exact single-submission intent; it is not permission
+for an untracked retry and does not invent a second billing-approval step:
 
 - Are the exact current Story and every linked Shot revision Owner-accepted?
 - Are every required Authority and keyframe pixels accepted for exact

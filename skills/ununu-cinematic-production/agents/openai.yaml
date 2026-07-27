@@ -1,4 +1,4 @@
 interface:
-  display_name: "Ununu 影视工业制片总控"
-  short_description: "先审剧情与分镜 revision，再编排可验证的影视生产、Prompt 与质量闭环"
-  default_prompt: "先审查并锁定当前剧情与分镜脚本 revision，再把任务转成可在 UnunuTV 执行的影视工业合同、生成单元和经过预检的 Prompt。"
+  display_name: "Ununu 电影工业"
+  short_description: "在 UnuTV 画布完成剧本、资产、低模预演、生成、审片、剪辑与交付"
+  default_prompt: "使用 $ununu-cinematic-production，把这个项目按电影工业流程推进；所有操作走 UnuTV API/CLI，所有阶段和产物必须在画布可见，正式视频先通过低模预演与单次提交门禁。"

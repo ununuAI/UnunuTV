@@ -16,6 +16,8 @@ import { appendCompilationSourceVersions, auditSelectedStoryboardReferences, bui
 import { createCinematicGenerationRunUseCase } from "./cinematic-generation-run-use-case.mjs";
 import { createCinematicReviewUseCases } from "./cinematic-review-use-cases.mjs";
 import { syncGenerationUnitLifecycleNode, syncGenerationUnitPreflightNode } from "../cinematic-generation-unit-node-policy.mjs";
+import { persistCompiledPromptOnCanvas, resolveCanvasReferenceGraph } from "../cinematic-canvas-prompt-graph-policy.mjs";
+
 function requireProductionPort(ports, method) {
   if (typeof ports.projects?.[method] !== "function") throw new TypeError(`Missing cinematic production port: projects.${method}`);
   return ports.projects[method].bind(ports.projects); }
@@ -339,13 +341,15 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
       unitRecord.generationUnit.generationParameters,
       [...unitRecord.referenceBindings, ...directorReferences, ...storyboardReferences]
     );
-    const combinedReferences = [];
+    let combinedReferences = [];
     const seenMedia = new Set();
     for (const binding of providerReferenceCandidates) {
       if (seenMedia.has(binding.mediaId)) continue;
       seenMedia.add(binding.mediaId);
       combinedReferences.push({ ...binding, providerIndex: combinedReferences.length + 1 });
     }
+    const canvasGraph = await resolveCanvasReferenceGraph({ ports, projectId, generationUnit: unitRecord.generationUnit, referenceBindings: combinedReferences });
+    combinedReferences = canvasGraph.referenceBindings;
     const referenceSetAudit = auditSelectedStoryboardReferences({
       generationParameters: unitRecord.generationUnit.generationParameters,
       referenceBindings: combinedReferences,
@@ -391,6 +395,13 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
         errors: [...(Array.isArray(envelope.preflight?.errors) ? envelope.preflight.errors : []), ...referenceSetAudit.errors]
       };
     }
+    if (unitRecord.generationUnit.canvasGraphPolicy === "required" && !canvasGraph.audit.ok) {
+      envelope.preflight = {
+        ...envelope.preflight,
+        ok: false,
+        errors: [...(Array.isArray(envelope.preflight?.errors) ? envelope.preflight.errors : []), ...canvasGraph.audit.errors]
+      };
+    }
     if (envelope.promptDraft) {
       envelope.promptDraft.status = (envelope.lint?.ok !== false && envelope.preflight?.ok)
         ? "preflight_ready"
@@ -404,14 +415,10 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
       production, professionalContributions, referenceBindings: combinedReferences, reviews,
       storyboardReferences, referenceSetAudit
     });
-    const compilation = {
-      compilationId: createId("prompt-compilation"),
-      productionId,
-      generationUnitId: unitRecord.generationUnit.generationUnitId,
-      envelope,
-      createdAt: nowIso()
-    };
+    envelope.sourceVersions.canvasProductionGraph = canvasGraph.audit;
+    const compilation = { compilationId: createId("prompt-compilation"), productionId, generationUnitId: unitRecord.generationUnit.generationUnitId, envelope, createdAt: nowIso() };
     await saveCompilationRecord(projectId, compilation);
+    await persistCompiledPromptOnCanvas({ dependencies, ports, projectId, compilation, generationUnit: unitRecord.generationUnit, canvasGraph });
     return compilation;
   }
 

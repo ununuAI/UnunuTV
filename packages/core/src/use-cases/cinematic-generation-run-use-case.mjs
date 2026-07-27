@@ -1,4 +1,4 @@
-import { assertCinematicPromptDraft, createBoundPromptDocumentV1, promptDocumentReferenceBindings, UnuTvError, nowIso, requireObject, requireText } from "@ununu/unutv-contracts";
+import { assertCinematicPromptDraft, assertFormalGenerationIntent, createBoundPromptDocumentV1, promptDocumentReferenceBindings, UnuTvError, nowIso, requireObject, requireText } from "@ununu/unutv-contracts";
 import { FORMAL_GENERATION_UNIT_RUN } from "../cinematic-workflow-policy.mjs";
 
 const VIDEO_NODE_KINDS = new Set(["video", "videoShot", "video-clip"]);
@@ -33,6 +33,38 @@ function requireExecutionDependencies(dependencies) {
 async function syncNode(projects, updateNode, projectId, nodeId, payload) {
   const current = await projects.getNode(projectId, nodeId);
   return updateNode({ projectId, nodeId, expectedRevision: current.revision, payload: { ...current.payload, ...payload } });
+}
+
+async function auditLiveCanvasProductionGraph({ compilation, node, projectId, projects }) {
+  const prompt = await projects.getNodePrompt(projectId, node.id);
+  const canvas = await projects.openCanvas(projectId, node.canvasId);
+  const nodes = new Map((canvas?.nodes || []).map((entry) => [entry.id, entry]));
+  const edges = canvas?.edges || [];
+  const errors = [];
+  if (!prompt?.text?.trim() || prompt.text !== compilation.envelope.compiledContentPrompt) {
+    errors.push({ code: "canvas_compiled_prompt_required", message: "正式生成节点必须显示当前编译版本的完整 Prompt。" });
+  }
+  for (const binding of compilation.envelope.referenceBindings || []) {
+    if (binding.required === false) continue;
+    const source = binding.sourceNodeId ? nodes.get(binding.sourceNodeId) : null;
+    if (!source || source.payload?.auditOnly === true || source.payload?.canvasHidden === true) {
+      errors.push({
+        code: "canvas_reference_node_required",
+        message: `${binding.displayName || binding.mediaId || binding.assetId || "参考资产"} 缺少可见画布源节点。`,
+        sourceNodeId: binding.sourceNodeId || null
+      });
+      continue;
+    }
+    const role = `cinematic_reference:${binding.role || "reference"}`;
+    if (!edges.some((edge) => edge.fromNodeId === source.id && edge.toNodeId === node.id && edge.role === role)) {
+      errors.push({
+        code: "canvas_reference_edge_required",
+        message: `${binding.displayName || binding.mediaId || binding.assetId || "参考资产"} 尚未以 ${role} 连到正式生成节点。`,
+        sourceNodeId: source.id
+      });
+    }
+  }
+  return { ok: errors.length === 0, errors, canvasId: node.canvasId };
 }
 
 export function createCinematicGenerationRunUseCase({
@@ -84,6 +116,42 @@ export function createCinematicGenerationRunUseCase({
     if (!node || !VIDEO_NODE_KINDS.has(node.kind)) {
       throw new UnuTvError("video_execution_node_required", "Generation unit executionNodeId must reference an existing video node", 409);
     }
+    let formalGenerationIntent;
+    try {
+      formalGenerationIntent = assertFormalGenerationIntent(input.formalGenerationIntent);
+    } catch (error) {
+      throw new UnuTvError(
+        "formal_generation_intent_required",
+        "正式视频需要绑定当前预演、生成单元和编译版本的一次性提交意图",
+        409,
+        { cause: error.details ?? error.message }
+      );
+    }
+    const intentMismatches = [];
+    if (formalGenerationIntent.generationUnitId !== generationUnitId) intentMismatches.push("generationUnitId");
+    if (formalGenerationIntent.generationUnitRevision !== unitRecord.generationUnit.revision) intentMismatches.push("generationUnitRevision");
+    if (formalGenerationIntent.compilationId !== compilation.compilationId) intentMismatches.push("compilationId");
+    if (formalGenerationIntent.payloadHash !== compilation.envelope.payloadHash) intentMismatches.push("payloadHash");
+    if (formalGenerationIntent.executionNodeId !== nodeId) intentMismatches.push("executionNodeId");
+    if (intentMismatches.length) {
+      throw new UnuTvError(
+        "stale_formal_generation_intent",
+        "正式视频提交意图与当前画布节点或编译版本不一致",
+        409,
+        { mismatches: intentMismatches }
+      );
+    }
+    if (unitRecord.generationUnit.canvasGraphPolicy === "required") {
+      const canvasGraph = await auditLiveCanvasProductionGraph({ compilation, node, projectId, projects });
+      if (!canvasGraph.ok) {
+        throw new UnuTvError(
+          "canvas_production_graph_not_ready",
+          "正式生成只能执行画布上已填写完整 Prompt 且参考资产连线齐全的节点",
+          409,
+          canvasGraph
+        );
+      }
+    }
     requireExecutionDependencies(dependencies);
     const parameters = compilation.envelope.generationParameters;
     const provider = requireText(parameters.provider, "generationParameters.provider");
@@ -119,6 +187,7 @@ export function createCinematicGenerationRunUseCase({
       idempotencyKey,
       cinematicPromptCompilationId: compilation.compilationId,
       cinematicPayloadHash: compilation.envelope.payloadHash,
+      formalGenerationIntent,
       generationUnitId,
       ...(parameters.firstFrameMediaId ? { firstFrameMediaId: parameters.firstFrameMediaId } : {}),
       ...(parameters.lastFrameMediaId ? { lastFrameMediaId: parameters.lastFrameMediaId } : {}),
@@ -168,6 +237,7 @@ export function createCinematicGenerationRunUseCase({
       generationPhase: "requesting",
       generationMessage: `正在生成 ${generationUnitId}…`,
       generationUnitId,
+      formalGenerationIntent,
       cinematicPromptCompilationId: compilation.compilationId
     });
     const existingRuns = await listProviderRuns(projectId);

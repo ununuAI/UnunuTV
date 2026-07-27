@@ -139,6 +139,9 @@ function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolu
     ]),
     executionNodeId,
     lifecycle: "active",
+    // Units designed by the canonical Skill are executable canvas objects,
+    // not hidden database records. Prompt and reference edges are mandatory.
+    canvasGraphPolicy: "required",
     controlIntent: {
       primaryConsistency: "within_clip_temporal",
       cameraFreedom: /固定|静止/u.test(movement) ? "locked" : "limited",

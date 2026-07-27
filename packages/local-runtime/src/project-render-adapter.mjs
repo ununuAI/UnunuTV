@@ -1,11 +1,14 @@
 const parse = (value, fallback) => value ? JSON.parse(value) : fallback;
 
 function renderRow(row) {
-  return row ? {
+  if (!row) return undefined;
+  const renderGraph = parse(row.render_graph_json, {});
+  return {
     id: row.id, projectId: row.project_id, timelineId: row.timeline_id, preset: row.preset, status: row.status, progress: row.progress,
-    renderGraph: parse(row.render_graph_json, {}), outputPath: row.output_path, outputMediaId: row.output_media_id, error: parse(row.error_json, null),
+    outputNodeId: renderGraph.canvasOutputNodeId ?? null,
+    renderGraph, outputPath: row.output_path, outputMediaId: row.output_media_id, error: parse(row.error_json, null),
     idempotencyKey: row.idempotency_key, createdAt: row.created_at, updatedAt: row.updated_at, startedAt: row.started_at, completedAt: row.completed_at
-  } : undefined;
+  };
 }
 
 export function attachProjectRenderMethods(prototype, emitEvent) {
@@ -19,7 +22,7 @@ export function attachProjectRenderMethods(prototype, emitEvent) {
       INSERT INTO render_jobs (id, project_id, timeline_id, preset, status, progress, render_graph_json, output_path, output_media_id, error_json, idempotency_key, created_at, updated_at, started_at, completed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(job.id, projectId, job.timelineId, job.preset, job.status, job.progress, JSON.stringify(job.renderGraph), job.outputPath, job.outputMediaId, null, job.idempotencyKey, job.createdAt, job.updatedAt, job.startedAt, job.completedAt);
-    emitEvent(database, "render.job_created", job.id, { timelineId: job.timelineId, preset: job.preset });
+    emitEvent(database, "render.job_created", job.id, { timelineId: job.timelineId, outputNodeId: job.outputNodeId, preset: job.preset });
     return job;
   };
   prototype.updateRenderJob = function updateRenderJob(projectId, job) {

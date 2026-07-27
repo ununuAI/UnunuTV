@@ -90,7 +90,7 @@ function initialSequenceState() {
   };
 }
 
-async function setup(runtime, { withBudget = true } = {}) {
+async function setup(runtime, { withBudget = true, canvasGraphPolicy = null } = {}) {
   const { project, canvas } = await runtime.app.createProject({ title: "正式视频执行" });
   const script = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "script", title: "剧本" });
   const video = await runtime.app.createNode({
@@ -118,6 +118,7 @@ async function setup(runtime, { withBudget = true } = {}) {
       visualAnchorPolicy: "NONE",
       requiredCapabilities: ["native_audio"],
       executionNodeId: video.id,
+      ...(canvasGraphPolicy ? { canvasGraphPolicy } : {}),
       controlIntent: controlIntent(),
       promptCoverage: promptCoverage(),
       sequenceState: initialSequenceState(),
@@ -148,6 +149,130 @@ async function setup(runtime, { withBudget = true } = {}) {
   }
   return { canvas, compilation, production, project, unit, video };
 }
+
+function formalGenerationIntent(state) {
+  return {
+    version: "formal_generation_intent_v1",
+    generationUnitId: state.unit.generationUnit.generationUnitId,
+    generationUnitRevision: state.unit.generationUnit.revision,
+    compilationId: state.compilation.compilationId,
+    payloadHash: state.compilation.envelope.payloadHash,
+    executionNodeId: state.video.id,
+    maxNewSubmissions: 1,
+    createdAt: new Date().toISOString()
+  };
+}
+
+test("Skill-governed units persist compiled Prompt, connect typed reference edges, and fail closed when the live graph changes", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-generation-unit-canvas-graph-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let calls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: {
+      async run() { calls += 1; return { status: "succeeded", artifacts: [] }; },
+      async poll() { throw new Error("not used"); }
+    },
+    recoverRenders: false,
+    recoverAutomation: false,
+    runAutomationExecutor: false
+  });
+  context.after(() => runtime.close());
+  const state = await setup(runtime, { withBudget: false, canvasGraphPolicy: "required" });
+  const source = await runtime.app.createNode({
+    projectId: state.project.id,
+    canvasId: state.canvas.id,
+    kind: "image",
+    title: "林夏身份权威",
+    payload: { assetId: "asset-linxia", currentMediaId: "media-linxia-authority" }
+  });
+  const binding = {
+    sourceNodeId: source.id,
+    assetId: "asset-linxia",
+    versionId: "asset-linxia-v1",
+    mediaId: "media-linxia-authority",
+    displayName: "林夏身份权威",
+    role: "shot_keyframe",
+    shotId: state.unit.generationUnit.shotLinks[0].shotId,
+    authorityRevision: "authority-linxia-r1",
+    controls: ["人物身份", "服装"],
+    doesNotControl: ["动作时序", "运镜"],
+    required: true,
+    providerIndex: 1,
+    semanticControl: { temporalRole: "static_state", preserve: ["人物身份", "服装"], replace: [], complete: [], ignore: [], styleOnly: [] }
+  };
+  const updated = await runtime.app.updateGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: state.unit.generationUnit.generationUnitId,
+    patch: {
+      visualAnchorPolicy: "SHOT_FRAME_SET",
+      requiredCapabilities: ["native_audio", "multi_reference"],
+      generationParameters: { mode: "image_reference", referenceMediaIds: [binding.mediaId] }
+    },
+    referenceBindings: [binding]
+  });
+  const compilation = await runtime.app.compileGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: updated.generationUnit.generationUnitId
+  });
+  assert.equal(compilation.envelope.sourceVersions.canvasProductionGraph.ok, true);
+  const prompt = await runtime.app.getNodePrompt({ projectId: state.project.id, nodeId: state.video.id });
+  assert.equal(prompt.text, compilation.envelope.compiledContentPrompt);
+  assert.equal(prompt.referenceNodeIds[0], source.id);
+  const canvas = await runtime.app.openCanvas({ projectId: state.project.id, canvasId: state.canvas.id });
+  const edge = canvas.edges.find((candidate) => candidate.fromNodeId === source.id
+    && candidate.toNodeId === state.video.id
+    && candidate.role === "cinematic_reference:shot_keyframe");
+  assert.ok(edge);
+  await runtime.app.disconnectEdge({ projectId: state.project.id, edgeId: edge.id });
+  const plainUnit = await runtime.app.updateGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: updated.generationUnit.generationUnitId,
+    patch: {
+      visualAnchorPolicy: "NONE",
+      requiredCapabilities: ["native_audio"],
+      generationParameters: { mode: "text_to_video", referenceMediaIds: [] }
+    },
+    referenceBindings: []
+  });
+  const plainCompilation = await runtime.app.compileGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: plainUnit.generationUnit.generationUnitId
+  });
+  assert.equal(plainCompilation.envelope.lint.ok, true, JSON.stringify(plainCompilation.envelope.lint));
+  assert.equal(plainCompilation.envelope.preflight.ok, true, JSON.stringify(plainCompilation.envelope.preflight));
+  await runtime.app.saveNodePrompt({
+    projectId: state.project.id,
+    nodeId: state.video.id,
+    text: "被旁路篡改的 Prompt"
+  });
+  await assert.rejects(
+    () => runtime.app.runGenerationUnit({
+      projectId: state.project.id,
+      productionId: state.production.productionId,
+      generationUnitId: plainUnit.generationUnit.generationUnitId,
+      billingMode: "provider_account",
+      idempotencyKey: "unit-canvas-graph-v1",
+      formalGenerationIntent: {
+        version: "formal_generation_intent_v1",
+        generationUnitId: plainUnit.generationUnit.generationUnitId,
+        generationUnitRevision: plainUnit.generationUnit.revision,
+        compilationId: plainCompilation.compilationId,
+        payloadHash: plainCompilation.envelope.payloadHash,
+        executionNodeId: state.video.id,
+        maxNewSubmissions: 1,
+        createdAt: new Date().toISOString()
+      }
+    }),
+    (error) => error.code === "canvas_production_graph_not_ready"
+      && error.details.errors.some((entry) => entry.code === "canvas_compiled_prompt_required")
+  );
+  assert.equal(calls, 0);
+});
 
 test("generation unit run reserves once, materializes video, updates its canvas node, and reuses the paid result", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-generation-unit-run-"));
@@ -184,6 +309,7 @@ test("generation unit run reserves once, materializes video, updates its canvas 
     billingMode: "legacy_budget",
     amount: 2.5,
     currency: "CNY",
+    formalGenerationIntent: formalGenerationIntent(state),
     idempotencyKey: "unit-u01-v1"
   };
   const completed = await runtime.app.runGenerationUnit(input);
@@ -192,6 +318,7 @@ test("generation unit run reserves once, materializes video, updates its canvas 
   assert.equal(completed.pending, false);
   assert.equal(completed.canvasNode.payload.generationStatus, "succeeded");
   assert.equal(completed.canvasNode.payload.cinematicPromptCompilationId, state.compilation.compilationId);
+  assert.deepEqual(completed.canvasNode.payload.formalGenerationIntent, input.formalGenerationIntent);
   assert.deepEqual(completed.canvasNode.payload.referenceMediaIds, []);
   assert.deepEqual(completed.canvasNode.payload.cinematicReferenceBindings, []);
   const savedPrompt = await runtime.app.getNodePrompt({ projectId: state.project.id, nodeId: state.video.id });
@@ -243,6 +370,7 @@ test("generation unit run keeps an asynchronous Provider reservation pending and
     billingMode: "legacy_budget",
     amount: 2,
     currency: "CNY",
+    formalGenerationIntent: formalGenerationIntent(state),
     idempotencyKey: "unit-u01-async-v1"
   };
   const pending = await runtime.app.runGenerationUnit(input);
@@ -334,7 +462,8 @@ test("generation unit legacy_budget path reserves budget before Provider and rel
     generationUnitId: state.unit.generationUnit.generationUnitId,
     billingMode: "legacy_budget",
     amount: 2,
-    currency: "CNY"
+    currency: "CNY",
+    formalGenerationIntent: formalGenerationIntent(state)
   };
   await assert.rejects(
     () => runtime.app.runGenerationUnit({ ...base, idempotencyKey: "unit-no-budget" }),
@@ -382,12 +511,48 @@ test("provider-account cinematic workflow runs without project budget or owner p
     productionId: state.production.productionId,
     generationUnitId: state.unit.generationUnit.generationUnitId,
     billingMode: "provider_account",
+    formalGenerationIntent: formalGenerationIntent(state),
     idempotencyKey: "unit-provider-account-v1"
   });
   assert.equal(completed.run.status, "succeeded");
   assert.equal(completed.reservation, null);
   assert.equal(calls, 1);
   assert.equal((await runtime.app.listRuns({ projectId: state.project.id })).length, 1);
+});
+
+test("formal video refuses a missing or stale single-submission intent before Provider dispatch", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-generation-unit-formal-intent-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let calls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: { async run() { calls += 1; throw new Error("must not submit"); }, async poll() { throw new Error("must not poll"); } },
+    recoverRenders: false,
+    recoverAutomation: false,
+    runAutomationExecutor: false
+  });
+  context.after(() => runtime.close());
+  const state = await setup(runtime, { withBudget: false });
+  const base = {
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: state.unit.generationUnit.generationUnitId,
+    billingMode: "provider_account",
+    idempotencyKey: "unit-formal-intent-gate-v1"
+  };
+  await assert.rejects(
+    () => runtime.app.runGenerationUnit(base),
+    (error) => error.code === "formal_generation_intent_required"
+  );
+  await assert.rejects(
+    () => runtime.app.runGenerationUnit({
+      ...base,
+      formalGenerationIntent: { ...formalGenerationIntent(state), payloadHash: "stale-payload-hash" }
+    }),
+    (error) => error.code === "stale_formal_generation_intent" && error.details.mismatches.includes("payloadHash")
+  );
+  assert.equal(calls, 0);
+  assert.equal((await runtime.app.listRuns({ projectId: state.project.id })).length, 0);
 });
 
 test("superseded generation units fail preflight before budget reservation or Provider submission", async (context) => {

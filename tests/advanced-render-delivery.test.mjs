@@ -40,6 +40,9 @@ test("advanced rendering applies transitions/effects and delivers multi-aspect, 
   const runtime = createLocalRuntime({ dataRoot, recoverRenders: false, recoverAutomation: false });
   context.after(() => runtime.close());
   const { project } = await runtime.app.createProject({ title: "高级渲染" });
+  const openedProject = await runtime.app.openProject({ projectId: project.id });
+  const videoOutputNode = await runtime.app.createNode({ projectId: project.id, canvasId: openedProject.rootCanvasId, kind: "compose", title: "高级母版" });
+  const audioOutputNode = await runtime.app.createNode({ projectId: project.id, canvasId: openedProject.rootCanvasId, kind: "audio", title: "混音母版" });
   const [firstMedia, secondMedia, audioMedia] = await Promise.all([
     runtime.app.importMedia({ projectId: project.id, filePath: firstPath, kind: "video" }),
     runtime.app.importMedia({ projectId: project.id, filePath: secondPath, kind: "video" }),
@@ -58,7 +61,7 @@ test("advanced rendering applies transitions/effects and delivers multi-aspect, 
   assert.deepEqual([compileRenderGraph(document, "h264_square").width, compileRenderGraph(document, "h264_square").height], [1080, 1080]);
   assert.equal(compileRenderGraph(document, "h264_review").durationMs, 900);
 
-  const render = await runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, preset: "h264_review", idempotencyKey: "advanced-review" });
+  const render = await runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, outputNodeId: videoOutputNode.id, preset: "h264_review", idempotencyKey: "advanced-review" });
   const finished = await waitForJob(runtime.app, project.id, render.id);
   assert.equal(finished.status, "succeeded", JSON.stringify(finished.error));
   const qc = await runtime.app.getTechnicalQcReport({ projectId: project.id, renderJobId: render.id });
@@ -68,7 +71,7 @@ test("advanced rendering applies transitions/effects and delivers multi-aspect, 
   for (const role of ["assPath", "srtPath", "vttPath", "edlPath", "fcpxmlPath", "mixWavPath", "stemTrack1WavPath"]) assert.ok(roles.has(role), role);
   for (const item of delivery.deliverables.filter((entry) => entry.role !== "primary_master")) assert.ok((await stat(item.pathOrMediaId)).size > 0, item.role);
 
-  const wav = await runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, preset: "wav_mix", idempotencyKey: "advanced-wav" });
+  const wav = await runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, outputNodeId: audioOutputNode.id, preset: "wav_mix", idempotencyKey: "advanced-wav" });
   const wavFinished = await waitForJob(runtime.app, project.id, wav.id);
   assert.equal(wavFinished.status, "succeeded", JSON.stringify(wavFinished.error));
   const wavQc = await runtime.app.getTechnicalQcReport({ projectId: project.id, renderJobId: wav.id });

@@ -143,6 +143,16 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
         const unit = entry.generationUnit;
         const preflight = await dependencies.cinematic.preflightGenerationUnit({ projectId, productionId, generationUnitId: unit.generationUnitId });
         if (!preflight.ready) throw new UnuTvError("automation_generation_unit_preflight_failed", `${unit.generationUnitId} 预检失效，已停止 Provider 提交。`, 409, preflight);
+        const formalGenerationIntent = {
+          version: "formal_generation_intent_v1",
+          generationUnitId: unit.generationUnitId,
+          generationUnitRevision: unit.revision,
+          compilationId: preflight.compilationId,
+          payloadHash: preflight.envelope.payloadHash,
+          executionNodeId: unit.executionNodeId,
+          maxNewSubmissions: 1,
+          createdAt: nowIso()
+        };
         const receipt = await dependencies.cinematic.runGenerationUnit({
           projectId,
           productionId,
@@ -153,6 +163,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
             currency: budgetInput.currency
           }),
           idempotencyKey: `${task.idempotencyKey}:attempt:${task.attempt}:unit:${unit.generationUnitId}:provider:v1`,
+          formalGenerationIntent,
           operationContext
         });
         if (receipt.outcomeUnknown) throw new UnuTvError("paid_submission_outcome_unknown", `${unit.generationUnitId} Provider 结果待确认，自动流程不会重复提交。`, 409, { runId: receipt.run?.id });
@@ -380,9 +391,26 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       const timelines = await dependencies.timeline.listTimelines({ projectId });
       const timelineId = resolved.configuration.timelineId ?? timelines[0]?.id;
       if (!timelineId) throw new UnuTvError("timeline_required", "候选渲染需要主时间线", 409);
+      const project = await ports.projects.open(projectId);
+      const canvas = project?.rootCanvasId ? await ports.projects.openCanvas(projectId, project.rootCanvasId) : null;
+      let outputNode = (canvas?.nodes ?? []).find((node) => node.kind === "compose" && node.payload?.auditOnly !== true);
+      if (!outputNode) {
+        if (typeof dependencies.createNode !== "function" || !project?.rootCanvasId) {
+          throw new UnuTvError("render_canvas_node_required", "候选渲染需要画布上的合成输出节点", 409);
+        }
+        outputNode = await dependencies.createNode({
+          projectId,
+          canvasId: project.rootCanvasId,
+          kind: "compose",
+          title: "候选母版",
+          x: 2160,
+          y: 120,
+          payload: { generationPhase: "candidate_render", generationStatus: "ready", timelineId }
+        });
+      }
       const jobs = await dependencies.render.listRenderJobs({ projectId, timelineId });
       let job = jobs.find((entry) => entry.idempotencyKey === `${task.automationRunId}:candidate_render:v1`);
-      if (!job) job = await dependencies.render.createRenderJob({ projectId, timelineId, preset: resolved.configuration.renderPreset ?? "h264_review", idempotencyKey: `${task.automationRunId}:candidate_render:v1` });
+      if (!job) job = await dependencies.render.createRenderJob({ projectId, timelineId, outputNodeId: outputNode.id, preset: resolved.configuration.renderPreset ?? "h264_review", idempotencyKey: `${task.automationRunId}:candidate_render:v1` });
       if (["queued", "running"].includes(job.status)) return { waiting: true, output: output([artifact("render_job", job.id, "候选母版渲染")], { renderJobId: job.id }) };
       if (job.status !== "succeeded") throw new UnuTvError("candidate_render_failed", job.error?.message ?? "候选母版渲染失败", 409, job.error);
       return { output: output([artifact("render_job", job.id, "候选母版", { mediaId: job.outputMediaId })], { renderJobId: job.id }) };

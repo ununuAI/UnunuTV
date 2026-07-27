@@ -173,7 +173,7 @@ Previs verdict 非 ACCEPT、上下文 ID 不匹配时，Provider dispatch 必须
 3. 在导演台完整播放，逐帧/逐边界审核。
 4. 只经专用命令写 Owner ACCEPT；门禁失败就修帧、上下文或切镜。
 5. 把 accepted Previs/context 绑定到 GenerationUnit，执行 compile 和 preflight。
-6. preflight ready 后经 CLI/API 自动派发到已配置 Provider 账户；不存在另一次花钱批准。
+6. preflight ready 且当前连续预演已接受后，经 CLI/API 记录当前精确版本的一次正式生成意图并派发；这不是第二个计费确认。
 7. 对真实 take 写 VisualTakeMemory、Evaluation 和 canon reconciliation。
 8. 写 CreativeDecisionTrace，重新编译下一镜或返工单元。
 

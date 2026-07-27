@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { CINEMATIC_WORKFLOW_SKILL_VERSION } from "@ununu/unutv-contracts";
 
 const REFERENCE_FILES = Object.freeze([
+  "references/api-cli.md",
+  "references/director-skill-bridge.md",
   "references/cross-modal-image-video-control.md",
   "references/sequence-previs-visual-memory-and-trace.md",
   "references/sequence-state-canon-retake-control.md"

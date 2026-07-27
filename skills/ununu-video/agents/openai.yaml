@@ -1,4 +1,0 @@
-interface:
-  display_name: "Ununu Video 平台遥控器"
-  short_description: "驱动 UnunuTV 平台编排：series / nextAction / advance / owner / 正式 GenerationUnit 出片"
-  default_prompt: "用 UnunuTV 平台 OS 生产短剧或连载：short-drama/cinematic-start → 只执行 status.nextAction → owner-decide → promote/ledger。禁止调用 produceShortDramaOnCanvas、手搓正式 Prompt、直跑 node run、直读知识库或走外部 Provider。"

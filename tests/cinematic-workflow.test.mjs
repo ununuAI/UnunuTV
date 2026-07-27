@@ -15,7 +15,14 @@ test("cinematic workflow manifest is an executable, ordered, provider-safe contr
   assert.equal(manifest.referencePolicy.semanticImageReference, true);
   assert.equal(manifest.referencePolicy.firstLastFrameMutuallyExclusive, true);
   assert.equal(manifest.providerPolicy.noProviderOnStart, true);
-  assert.equal(manifest.paidBoundary, "preflight_then_auto_dispatch");
+  assert.equal(manifest.canvasPolicy.compiledPromptsPersisted, true);
+  assert.equal(manifest.canvasPolicy.referenceEdgesRequired, true);
+  assert.equal(manifest.agentPolicy.executorOnly, true);
+  assert.equal(manifest.agentPolicy.nextActionOnly, true);
+  assert.equal(manifest.agentPolicy.officialSkillCliApiOnly, true);
+  assert.equal(manifest.agentPolicy.browserProductionMutationAllowed, false);
+  assert.equal(manifest.agentPolicy.adHocTerminalProductionMutationAllowed, false);
+  assert.equal(manifest.paidBoundary, "previs_accept_then_single_formal_intent");
   assert.equal(manifest.billingMode, "provider_account");
   assert.equal(validateCinematicWorkflowManifest({ ...manifest, phases: [...manifest.phases].reverse() }).ok, false);
 });

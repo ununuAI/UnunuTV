@@ -1,4 +1,5 @@
 import { RENDER_PRESETS, UnuTvError, assertDeliveryPackageManifestV1, assertExportMaster, assertRenderJob, createId, nowIso, requireEnum, requireText } from "@ununu/unutv-contracts";
+import { requireVisibleCanvasExecutionNode } from "../canvas-execution-node-policy.mjs";
 import { compileRenderGraph } from "../render-graph-policy.mjs";
 import { buildTechnicalQcReport } from "../technical-qc-policy.mjs";
 
@@ -38,7 +39,14 @@ export function createRenderUseCases(ports) {
         });
         const live = await getRecord(projectId, current.id);
         if (live?.status === "cancelled") return;
-        const media = await ports.media.importFile({ projectId, nodeId: null, kind: result.kind ?? "video", title: `${current.preset} · ${current.timelineId}`, filePath: result.outputPath, generated: true });
+        await requireVisibleCanvasExecutionNode({
+          allowedKinds: current.preset === "wav_mix" ? ["audio", "compose"] : ["compose", "video", "videoShot", "video-clip"],
+          nodeId: current.outputNodeId,
+          operation: "时间线渲染",
+          projectId,
+          projects: ports.projects
+        });
+        const media = await ports.media.importFile({ projectId, nodeId: current.outputNodeId, kind: result.kind ?? "video", title: `${current.preset} · ${current.timelineId}`, filePath: result.outputPath, generated: true });
         const probe = await ports.render.probe(result.outputPath);
         const qcReport = buildTechnicalQcReport({ graph: current.renderGraph, mediaId: media.id, probe, projectId, renderJobId: current.id });
         await saveQcReport(projectId, qcReport);
@@ -59,10 +67,18 @@ export function createRenderUseCases(ports) {
     const projectId = requireText(input.projectId, "projectId");
     const timelineId = requireText(input.timelineId, "timelineId");
     const preset = requireEnum(input.preset ?? "h264_review", RENDER_PRESETS, "preset");
+    const outputNode = await requireVisibleCanvasExecutionNode({
+      allowedKinds: preset === "wav_mix" ? ["audio", "compose"] : ["compose", "video", "videoShot", "video-clip"],
+      nodeId: input.outputNodeId,
+      operation: "时间线渲染",
+      projectId,
+      projects: ports.projects
+    });
     const timeline = await ports.projects.getTimeline(projectId, timelineId);
     const timestamp = nowIso();
     const job = assertRenderJob({
-      id: createId("render-job"), projectId, timelineId, preset, status: "queued", progress: 0, renderGraph: compileRenderGraph(timeline, preset),
+      id: createId("render-job"), projectId, timelineId, outputNodeId: outputNode.id, preset, status: "queued", progress: 0,
+      renderGraph: { ...compileRenderGraph(timeline, preset), canvasOutputNodeId: outputNode.id },
       outputPath: null, outputMediaId: null, error: null, idempotencyKey: input.idempotencyKey ?? input.operationContext?.idempotencyKey ?? null,
       createdAt: timestamp, updatedAt: timestamp, startedAt: null, completedAt: null
     });

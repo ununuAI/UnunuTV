@@ -1,9 +1,9 @@
 node_modules/
 dist/
+apps/web/.next/
 .DS_Store
 *.log
 coverage/
 .env
 .env.*
 !.env.example
-

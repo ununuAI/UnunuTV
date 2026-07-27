@@ -77,7 +77,7 @@ export const api = {
   updateGenerationUnit: (projectId, productionId, unitId, input) => request(`/api/projects/${projectId}/cinematic-productions/${productionId}/generation-units/${unitId}`, { method: "PATCH", body: JSON.stringify(input) }),
   compileGenerationUnit: (projectId, productionId, unitId, input = {}) => request(`/api/projects/${projectId}/cinematic-productions/${productionId}/generation-units/${unitId}/compile`, { method: "POST", body: JSON.stringify(input) }),
   preflightGenerationUnit: (projectId, productionId, unitId, input = {}) => request(`/api/projects/${projectId}/cinematic-productions/${productionId}/generation-units/${unitId}/preflight`, { method: "POST", body: JSON.stringify(input) }),
-  runGenerationUnit: (projectId, productionId, unitId) => request(`/api/projects/${projectId}/cinematic-productions/${productionId}/generation-units/${unitId}/runs`, { method: "POST", body: JSON.stringify({ billingMode: "provider_account" }) }),
+  runGenerationUnit: (projectId, productionId, unitId, input) => request(`/api/projects/${projectId}/cinematic-productions/${productionId}/generation-units/${unitId}/runs`, { method: "POST", body: JSON.stringify({ billingMode: "provider_account", ...input }) }),
   cinematicEvaluations: (projectId, productionId) => request(`/api/projects/${projectId}/cinematic-productions/${productionId}/evaluations`),
   sequencePrevis: (projectId, productionId) => request(`/api/projects/${projectId}/cinematic-productions/${productionId}/sequence-previs`),
   saveSequencePrevis: (projectId, productionId, input) => request(`/api/projects/${projectId}/cinematic-productions/${productionId}/sequence-previs`, { method: "POST", body: JSON.stringify(input) }),

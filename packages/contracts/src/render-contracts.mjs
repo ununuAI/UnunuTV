@@ -6,7 +6,7 @@ export const DELIVERY_PACKAGE_STATES = Object.freeze(["review_ready", "delivery_
 
 export function assertRenderJob(value) {
   const issues = [];
-  for (const field of ["id", "projectId", "timelineId", "preset", "status", "createdAt", "updatedAt"]) if (typeof value?.[field] !== "string" || !value[field].trim()) issues.push(`${field} is required`);
+  for (const field of ["id", "projectId", "timelineId", "outputNodeId", "preset", "status", "createdAt", "updatedAt"]) if (typeof value?.[field] !== "string" || !value[field].trim()) issues.push(`${field} is required`);
   if (!RENDER_PRESETS.includes(value?.preset)) issues.push("preset is invalid");
   if (!RENDER_JOB_STATES.includes(value?.status)) issues.push("status is invalid");
   if (typeof value?.progress !== "number" || value.progress < 0 || value.progress > 1) issues.push("progress must be between zero and one");

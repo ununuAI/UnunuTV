@@ -1,395 +1,316 @@
 ---
 name: ununu-cinematic-production
 description: >
-  Deep cinematic contract appendix for UnunuTV (story/shot/previs/prompt design).
-  For end-to-end short-drama / multi-episode orchestration prefer ununu-video
-  (thin remote control + nextAction). Use this skill when you need industrial
-  contract detail; pair with ununu-unutv-operator for durable mutations only.
-  UnunuTV remains the sole orchestrator and runtime; the Agent only supplies
-  structured creative input and decisions.
+  Operate UnuTV as the single end-to-end film-production Skill for films,
+  series, multi-episode short drama, commercials, MV, animation, trailers, and
+  social video. Use it for story and series canon, reusable asset authority,
+  AI-video shot design, low-poly spatial previs, camera and actor trajectories,
+  compiled image/video prompts, Provider submission, actual-take review,
+  continuity, editing, sound, render, QC, and delivery. Every durable action and
+  artifact must use the official UnuTV CLI/API and appear on a visible canvas
+  node; the browser is read-only UI verification except while fixing UI bugs.
 ---
 
-# Ununu 影视工业制片总控（附录）
+# Ununu 电影工业 Skill
 
-**主入口已迁移**: 平台编排请用 `ununu-video`（`status.nextAction` 循环）。
-本 Skill 保留为深度合同 / 预演 / Prompt 设计附录，不是第二套出片流水线。
-禁止从 Agent 或兼容入口调用旧的 `produceShortDramaOnCanvas`；所有短剧入口都必须
-进入 UnunuTV 的 `startCinematicWorkflow`，再按持久化 `nextAction` 推进。
+Use this as the only Ununu film-production Skill. Do not route to another
+Ununu video or operator Skill. UnuTV is the single durable runtime; this Skill
+is its agent contract.
 
-Turn creative intent into revisioned production contracts, continuous visual
-evidence, provider-ready prompts, and reviewed actual screen state. Keep
-UnunuTV as the only durable production runtime.
+## Product definition
 
-## Mandatory UnunuTV execution boundary
+Treat UnuTV as an **AI-video low-poly previs and shot-control console**, not a
+simplified Blender, a Prompt form, or a generic node-graph wrapper.
 
-All durable UnunuTV work MUST run through the repository's
-`ununu-unutv-operator` Skill API/CLI and the loopback UnunuTV API: projects,
-canvases, nodes, edges, media, assets, authorities, storyboards, shots,
-generation units, prompts, reviews, runs, timelines, renders, and production
-contracts. Do not write SQLite, call an alternate product, invent HTTP routes,
-or use a browser to perform production mutations.
+Use low-detail geometry to lock what AI video is bad at preserving:
 
-The in-app browser is read-only verification only: use it to inspect visible
-state after an API/CLI mutation. Do not click, type, drag, upload, generate,
-approve, reject, or otherwise write production state from the browser. The
-only exceptions are an explicitly scoped UI bug fix or a source-code change;
-those must be implemented with `apply_patch`, then re-verified through the
-UnunuTV API/CLI and read-only browser inspection. Image/video/provider work is
-not an exception: it must use existing UnunuTV image/video nodes and provider
-adapters through the Skill API/CLI.
+- scene topology, portals, zones, scale, collision and occlusion;
+- actor positions, facing, gaze, contacts, paths and subject following;
+- camera position, lens, framing, axis, path, speed curve, focus and stop state;
+- start frame, decisive motion phases, end frame and edit handles;
+- the relationship between blocking, performance, camera, sound and cut.
 
-The Agent is not a second creative runtime. It may submit the Owner's brief,
-locked facts, approved media IDs, annotations, structured camera/motion data,
-and Owner decisions. UnunuTV must own story decomposition, shot planning,
-reference binding, prompt compilation, preflight, Provider dispatch, continuity
-review, timeline assembly, render, and delivery. If one of those inputs is
-missing, persist a blocker and stop; never invent a character/scene/Prompt,
-create a placeholder image, auto-accept a revision, or silently remove an
-image reference.
+Do not spend effort on final character appearance or fine body animation in the
+previs stage. Accepted visual assets own appearance. Director Stage owns space,
+time and camera control. The Provider produces final pixels only after those
+responsibilities agree.
 
-## Canonical input and reference modes (runtime-enforced)
+## Single execution boundary
 
-There are only two legal ways to enter visual production:
+Perform every persistent operation through this repository:
 
-1. **Owner-supplied anchors**: import the user's real character/scene/prop
-   media through the UnunuTV media/asset/authority APIs, preserve its exact
-   `mediaId`/checksum and declared controls, then bind it to the relevant
-   storyboard shot or GenerationUnit.
-2. **UnunuTV-created anchors**: derive the VisualBible/shot storyboard from
-   already structured story and shot contracts, generate the still through the
-   UnunuTV image stage, select the generated image as a semantic storyboard
-   composition, and only then compile the video unit.
+```text
+/Users/zhangxiaohao/ununu/ununuAI/ununu-unutv
+```
 
-Both modes converge on the same `ReferenceBinding` manifest. A semantic image
-reference is not a first frame: it carries identity, scene topology, spatial
-blocking, costume/material and other explicitly listed static facts; the shot
-contract carries time, action, performance, camera path, focus, physics and
-edit boundary. `first_frame`/`first_last_frame` are literal temporal boundary
-inputs and are mutually exclusive with ordinary references for models that
-forbid mixed inputs. The runtime rejects missing bindings, mixed modes and
-implicit downgrades instead of submitting a text-only request.
+Use `node apps/cli/src/index.mjs ...` or the loopback API at
+`http://127.0.0.1:4318`, and only as commands prescribed by this Skill's
+persisted `nextAction`. Never use Codex prose, ad-hoc terminal scripts or
+browser interaction as an alternate production control plane. Never write
+SQLite directly, call a Provider outside UnuTV, invent routes, or create a
+second workflow.
 
-The one-shot entry accepts only structured `StoryPacket`, `VisualBible`, script
-rows and reference bindings. A brief is raw source material, not permission to
-invent a protagonist, dialogue, scene, fixed camera or generic action. When a
-required contract is absent, the durable workflow records a blocker and
-stops. It does not fabricate an image or auto-ACCEPT a take.
+The browser is read-only verification. Do not click, type, drag, upload,
+generate, approve, reject, edit, or run production state in the browser.
+Browser interaction is allowed only to reproduce or verify a UI bug after the
+source fix.
 
-After image generation, every generated storyboard image must be explicitly
-selected as `storyboard_composition` (unless the shot intentionally selected a
-literal first-frame role). The executor may persist a video as a **candidate**,
-but only a real `CinematicEvaluationRecord` can become ACCEPT and unlock
-continuity, timeline, render and delivery.
+Before the first mutation in a task, read
+[api-cli.md](references/api-cli.md). For each mutation:
 
-## Load the mandatory production references
+1. Resolve exact project, canvas, node and revision IDs.
+2. State the bounded persisted delta.
+3. Mutate through CLI/API.
+4. Re-read the affected resource.
+5. Verify the same state is visible on the canvas.
 
-Before any production image, video, continuation, or edit decision, read and
-execute:
+## Canvas-visible production law
 
-- [cross-modal-image-video-control.md](references/cross-modal-image-video-control.md)
-  for image-reference versus first/last-frame roles, prompt coverage, acting,
-  annotations, motion, camera, seams, and image/text conflict checks;
+Every source, contract, stage, request, candidate and delivery artifact must
+bind a real node on the project's one visible canvas.
+
+Required examples:
+
+| Production object | Visible canvas projection |
+| --- | --- |
+| script / series canon | script or story node |
+| VisualBible / project style | cinematic or asset node |
+| character, scene, prop, costume, voice authority | asset node with accepted media version |
+| Shot Intent / storyboard | shot or storyboard node |
+| low-poly scene and camera previs | director node |
+| image generation | image or imageEdit node |
+| formal video GenerationUnit | videoShot or video node |
+| dialogue / ambience / effects | audio node |
+| continuity and take evaluation | review or qa node |
+| timeline render / master | compose, video or audio node |
+| QC / delivery manifest | qa or compose node |
+
+Reject an operation when its execution/output node is absent, belongs to
+another project/canvas, is hidden/audit-only, has the wrong kind, or does not
+show the same effective revisions, Prompt, references, run and media IDs.
+`nodeId: null` is never legal for generated or rendered production media.
+
+The canvas is not a decorative diagram over a hidden second system. Lists,
+timeline panels and inspectors may be alternate views, but the authoritative
+execution object and current result must remain visible as a canvas node.
+
+Every generative node must display its complete compiled Prompt before
+dispatch. Every referenced character, scene, prop, style carrier, storyboard
+frame, Director capture or accepted continuation must be a visible source node
+with an explicit typed edge into the consuming node. A reference ID stored only
+inside JSON is incomplete. The compiler must persist the Prompt and resolve the
+edges; preflight and the formal run boundary must block missing or stale graph
+evidence.
+
+## Director Skill compatibility floor
+
+Read [director-skill-bridge.md](references/director-skill-bridge.md) whenever
+building assets, shots, previews or Seedance inputs.
+
+Treat the referenced Director Skill workflow as the minimum production
+semantics:
+
+1. `05` establishes stable reusable asset identity and reference duties.
+2. `04` turns the locked script into complete executable shot language.
+3. `06` compiles only the Provider-facing prompt for the selected model.
+
+Do not copy its template mechanically and do not stop at Prompt text. Compile
+its semantics into UnuTV contracts, Director Stage geometry and gates. UnuTV
+adds sequence canon, low-poly timed previs, camera routes, model capability
+profiles, cost control, actual-take memory, editing, sound, QC and delivery.
+
+Never write a random Prompt. Every image/video Prompt is a deterministic
+projection of current accepted Story, Authorities, Shot, Previs,
+ReferenceBinding, Provider capability and continuity state.
+
+## Canonical production flow
+
+Run this dependency order. Persist a blocker instead of inventing missing
+facts or silently skipping a gate.
+
+1. **Develop**: classify project/series, episode, platform, target duration and
+   audience; create Series for episode one when recurrence is expected.
+2. **Lock story**: store exact source facts, dialogue, causal events, character
+   objective/resistance/subtext, reveal order, entrance/exit state and Owner
+   locks. Accept the exact current revision.
+3. **Build visual rules**: define format, camera grammar, motivated light,
+   palette, production design, sound and VFX physics.
+4. **Build reusable authority**: create only risk-relevant character, scene,
+   prop, costume and voice assets; inspect actual pixels and promote accepted
+   versions. Reuse accepted authority before generating new assets.
+5. **Design Shot Intent**: define narrative job, opening/trigger/action/reaction/
+   ending state, blocking, performance, camera purpose, light, sound, physics,
+   edit boundary and visible acceptance checks.
+6. **Create low-poly previs**: stage scene zones, actor routes and camera route;
+   preview 2.5D top-down, editor view, camera POV and start/end frames; play the
+   timed motion and accept the exact revision.
+7. **Compile sequence context**: create a playable `SequencePrevisDocument`,
+   one `CutDecision` for every boundary and one current
+   `VisualContextBundle` for every Shot.
+8. **Choose reference mode**: use exactly one supported shape:
+   `text_to_video`, semantic `image_reference`, literal `first_frame`, or
+   literal `first_last_frame`. Bind exact media/checksum and responsibility.
+9. **Compile Prompt Draft**: project all structured facts through one compiler;
+   lint byte limits, reference order, image/text conflict, camera/focus/motion,
+   continuity, dialogue duration and Provider capability.
+10. **Run cheap proof first**: use low-poly playback, stills, animatic, local
+    render and contract simulation. Image generation may iterate freely because
+    it is the low-cost exploration surface, but every candidate remains
+    versioned and canvas-visible. Do not use paid video rerolls to discover a
+    blocking, camera or continuity mistake.
+11. **Record formal-generation intent**: bind the exact GenerationUnit
+    revision, compilation/payload hash, accepted previs revision, output node,
+    Provider/model and a maximum of one new submission. A changed source makes
+    the intent stale.
+12. **Submit once**: use a stable idempotency key. Poll an unresolved request;
+    never submit a replacement while outcome is unknown.
+13. **Review actual time**: inspect the complete candidate, record actual
+    phases, usable range, vetoes, entry/exit state and ACCEPT/PARTIAL/REJECT.
+    Candidate media is never implicit ACCEPT.
+14. **Continue from accepted reality**: compile the next unit from the latest
+    accepted actual exit state, not planned state or chat memory.
+15. **Edit, sound, render and deliver**: assemble only accepted ranges; bind
+    render output to a visible node; run technical QC; create a traceable
+    delivery manifest.
+
+## Director Stage minimum contract
+
+For every moving or spatially risky Shot, persist:
+
+- `scene`: world/zone IDs, portals, fixed obstacles, actor and prop proxies;
+- `actors`: start/end transforms, facing, gaze, contacts, paths and timing;
+- `camera`: route ID, ordered nodes, timestamps, position/orientation or
+  look-at, lens/FOV, aspect ratio, focus distance and speed interpolation;
+- `frames`: accepted start, decisive midpoint(s) and end composition;
+- `axis`: attention axis, allowed camera side and motivated crossing rule;
+- `views`: `top_2_5d`, `editor`, `camera_pov`, and start/end comparison;
+- `playback`: duration, FPS, continuous actor/camera interpolation;
+- `acceptance`: current revision, visible route overlay, Owner verdict and
+  invalidation lineage.
+
+Support fixed, push/pull, pan/tilt, track, follow, crane, handheld, left/right
+arc, orbit and multi-node paths. A camera-motion adjective without a visible
+route and start/stop state is not a camera plan.
+
+Simple static shots may skip timed previs only when a structured risk check
+records why blocking, axis, camera motion and continuity are already provable.
+They still require a visible Shot node and accepted start/end composition.
+
+## Asset and reference discipline
+
+Prefer reuse in this order:
+
+1. current accepted frozen Series/Project Authority;
+2. accepted child variant with explicit parent lineage;
+3. accepted current-episode asset;
+4. new image candidates for a gap or intentional visual exploration.
+
+Image generation has no spend gate. Generate and compare as many structured
+image candidates as useful, but do not randomize the production contract,
+overwrite accepted Authority, hide candidates outside the canvas, or
+auto-promote an unreviewed image. Reuse remains the default for continuity, not
+a restriction on useful image exploration.
+
+Keep appearance, spatial, temporal and control responsibilities separate.
+Read
+[cross-modal-image-video-control.md](references/cross-modal-image-video-control.md)
+before any image/video transition.
+
+A semantic reference is not automatically `t0`. A first frame owns literal
+`t0`; a last frame owns literal `tEnd`; the Prompt and temporal plan still own
+the transitions. Annotated control images are never clean Authority or literal
+frame carriers.
+
+The canvas node, Prompt Draft and Provider request must expose the same ordered
+effective reference manifest. Do not expose internal IDs as naked Prompt
+language; compile them to natural-language controls and official media
+references.
+
+## Formal video cost and reroll policy
+
+Video is expensive, but it is a normal required production stage. Generate it
+when the upstream evidence is ready; do not normalize blind “抽卡”.
+
+- Preflight readiness plus accepted low-cost proof authorizes the workflow to
+  create an exact formal-generation intent; this is not a second billing popup.
+- Require that exact formal-generation intent at the run boundary.
+- Allow at most one new Provider submission for that exact intent.
+- Reusing/polling the same idempotent request is not a new submission.
+- Never retry while the previous outcome is unknown.
+- Diagnose a rejection before the next intent.
+- Change one attributable control variable per retake.
+- Use `REROLL` only when the contract is correct and the failure is sampling
+  variance; otherwise use `REWRITE`, `REANCHOR`, `EDIT_SOURCE` or post repair.
+- Never auto-accept a take, freeze an unreviewed asset or continue from a
+  rejected candidate.
+
+Provider credentials and billing stay outside project creative state, but the
+runtime must still enforce the formal-generation intent and idempotency gate.
+
+## Actual-take memory and long-form continuity
+
+Read:
+
 - [sequence-previs-visual-memory-and-trace.md](references/sequence-previs-visual-memory-and-trace.md)
-  for the continuous playable visual model, CutDecision, per-shot context,
-  Owner acceptance gate, actual-take memory, and decision trace;
 - [sequence-state-canon-retake-control.md](references/sequence-state-canon-retake-control.md)
-  for actual accepted exit state, continuation depth, canon reconciliation,
-  and retake discipline.
 
-Read the cinematic contract documents only as the current task requires:
+Use `VisualTakeMemory` and `CinematicEvaluationRecord` for real observed
+screen state. Only the latest ACCEPT may update canon, supply a continuation
+frame or unlock editorial stages.
 
-- [01-overview.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/01-overview.md)
-- [02-story-and-visual-bible.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/02-story-and-visual-bible.md)
-- [02a-asset-authority-and-image-prompts.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/02a-asset-authority-and-image-prompts.md)
-- [03-shot-contract.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/03-shot-contract.md)
-- [04-generation-unit-and-anchors.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/04-generation-unit-and-anchors.md)
-- [05-prompt-compilation.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/05-prompt-compilation.md)
-- [06-expert-routing.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/06-expert-routing.md)
-- [07-provider-boundary.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/07-provider-boundary.md)
-- [08-quality-review-and-feedback.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/08-quality-review-and-feedback.md)
-- [09-knowledge-to-shot-execution.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/09-knowledge-to-shot-execution.md)
-- [10-text-image-video-edit-pipeline.md](/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv/docs/cinematic/10-text-image-video-edit-pipeline.md)
+For multi-episode work:
 
-## Build and approve in dependency order
+- create Series at episode one;
+- freeze accepted identity assets;
+- bind shared assets before each episode;
+- carry revealed facts, forbidden-early information, injuries, props,
+  relationships, wardrobe and location state through the continuity ledger;
+- commit accepted episode-end canon after editorial review;
+- never create a new face or scene version merely because a new episode began.
 
-1. Classify `projectType` and choose `direct` only for an isolated experiment.
-   Use `production` whenever story, identity, space, performance, camera,
-   action, sound, editing, or continuity matters.
-2. Build `StoryProductionPacket` from source facts, exact dialogue, causal
-   events, character objective/resistance/subtext, entrance/exit state,
-   irreversible facts, forbidden early information, and Owner-locked text.
-3. Audit the current Story revision before visual planning. Resolve motive,
-   causal sufficiency, reveal order, prop custody, limb occupancy, and movement
-   vector. Do not invent retreat, escape, or a sealed exit when the characters
-   entered to attack. Persist the exact revision verdict; latest review wins.
-4. Build `VisualBible` with project camera grammar, motivated light, palette,
-   character look, production design, material/aging, sound, VFX physics,
-   spatial rules, and continuity locks.
-5. Build the complete ordered `CinematicShotSpec` set. Each Shot needs a
-   narrative job, opening/trigger/action/reaction/ending state, named blocking,
-   performance beats, camera trajectory and purpose, light, sound, physics,
-   edit boundary, and visible acceptance checks.
-6. Audit the whole Shot script against the accepted Story revision. Treat
-   adjacent Shots as one state machine and preserve position, facing, axis,
-   gaze, hands, contacts, props, injuries, damage, counts, action phase, light,
-   and sound unless a visible cause changes them. Persist Owner acceptance for
-   every exact current Shot revision.
-7. Create only the `CharacterAuthoritySet`, `SceneAuthoritySet`, and
-   `PropAuthoritySpec` required by current risks. Review actual pixels at
-   original resolution; accepted text or status is not pixel evidence.
-8. Create a playable `SequencePrevisDocument` before formal video generation.
-   It must bind the accepted story and current ordered Shots, real reviewed
-   frames, one CutDecision for every boundary, and a current
-   `VisualContextBundle` for every Shot. Candidate drafts may be incomplete;
-   Owner ACCEPT and generation may not.
-9. Group one or more artistic Shots—or one Provider segment of a long take—into
-   `GenerationUnit`. Never collapse Shot, Provider request, and continuation
-   segment into one object. Bind the accepted Sequence Previs revision and the
-   current Shot's VisualContextBundle.
-10. Route professional contributions, compile a visible Prompt Draft, run the
-    complete preflight, and dispatch automatically through the configured
-    Provider account. Approval is for the current Story/Shot/Previs/Authority
-    facts and the resulting creative take—not for a second billing dialog.
+## Persisted next-action loop
 
-## Preserve physical and dramatic truth
+Drive the workflow from state, not chat memory:
 
-- Lock objective, target, world axis, screen vector, actor facing, eyelines,
-  leading foot, weapon/VFX direction, and camera direction to one compatible
-  motive.
-- Reject impossible limb use or invisible prop transfer. A hand holding a
-  weapon cannot simultaneously make an incompatible contact.
-- Decompose every unusual identity/anatomy rule into required ordinary state,
-  required abnormal state, and forbidden common interpretations. A failed
-  defining identity, anatomy, topology, count, origin, or contact is a veto;
-  aggregate quality cannot compensate.
-- Keep exact-count props visible from origin through independent paths,
-  contacts, consequences, and remains. Sample high-risk action every
-  0.25–0.5 seconds during review.
-- Write acting as visible causality: initial state, stimulus, attention,
-  judgment/subtext, restraint, breath/tension, hands/weight, control break,
-  consequence, and recovery. Use evidence readable at the selected shot size.
-- Never claim an opaque surface or off-camera fact is visible. Keep offscreen
-  identity rules as Authority invariants and apply the pixel veto when that
-  surface appears.
+```text
+cinematic-start
+  → cinematic-status
+  → execute exactly nextAction
+  → re-read status
+  → done or explicit blocker
+```
 
-## Select image and motion control honestly
+Interpret `advance/run_worker`, `wait_provider`, `owner_gate`, `repair`,
+`promote_asset`, `commit_ledger`, `done` and `failed` literally. Do not invent
+a parallel stage or use storyboard batch as formal video.
 
-Use exactly one Provider input shape supported by the registered model:
-`text_to_video`, semantic `image_reference`, literal `first_frame`, or literal
-`first_last_frame`.
+The Agent is an executor, not a second director or workflow author:
 
-- A semantic reference controls only declared identity, scene, topology,
-  blocking, region, material, style, or control geometry. It is not `t0`.
-- A first frame owns literal `t0` only. From `t0+1`, the Prompt and temporal
-  plan own action, performance, camera, physics, timing, and exit state.
-- First/last frames own two compatible boundaries, never the transitions.
-- A local crop needs an accepted whole-scene or Director region locator.
-- An annotation derivative may carry circles, regions, paths, pivots, arrows,
-  focus, or timing only in a Provider-supported semantic-reference route. Its
-  IDs, directions, regions, and time windows must match the Prompt. It can
-  never become Authority, a clean state carrier, or a first/last frame.
-- Image and Prompt facts must not conflict. Declare `preserve`, `replace`,
-  `complete`, `ignore`, `styleOnly`, `temporalRole`, `controls`, and
-  `doesNotControl` for every positive payload image.
-- Include only selected and pixel-reviewed storyboard media as positive visual
-  context. Keep rejected or unreviewed pixels only as named negative examples.
+- it may inspect state, execute the one returned `nextAction`, and report the
+  persisted result;
+- it may not improvise a different phase order, free-write a production Prompt,
+  create unlinked references, accept a creative revision, or bypass a blocker;
+- local shell work is permitted only to develop, repair and test UnuTV or this
+  Skill, never to author or mutate a film outside the official UnuTV API/CLI;
+- browser interaction is permitted only for UI defect reproduction and
+  verification, never for production mutation.
 
-For every medium/high motion Shot, persist one gap-free `temporalMotionPlan`
-covering `t0` through `tEnd`. Track every moving subject, prop, camera, and
-environment element with ordered phases, positions/orientations, paths,
-interpolation, velocity/acceleration, contact evolution, action phase,
-screen direction, occlusion, and endpoint. Prose time ranges without connected
-state transitions are insufficient.
+`workflow short-drama` and `workflow one-shot` may only enter the same canonical
+workflow. Legacy `produceShortDramaOnCanvas` and production-bound direct
+`node run` are forbidden.
 
-Treat focus as a numeric time-varying camera state. Any rack focus or changing
-focus distance needs endpoint-complete focus states, targets, interpolation,
-and agreement between Shot and GenerationUnit. Camera movement also needs a
-structured path/orientation/lens/motion-envelope plan; camera adjectives alone
-are not executable.
+## Completion evidence
 
-For every moving-camera shot, materialize that plan in Director Stage as a
-typed `camera` route with ordered points, timestamps, look-at or orientation,
-and a stable route ID. Every camera snapshot used for the shot must bind the
-route ID, and the Director editor must render the route as a visible line or
-arrow overlay. A clean capture without a visible route is not proof of a camera
-plan. If the Provider supports semantic references, derive a separate
-`provider_reference_only` annotated image from the clean capture and bind the
-same `controlGeometryId` and route direction. Never paint the route onto a
-clean Authority, first frame, last frame, or continuity carrier.
+Report:
 
-## Route professional capability
+- project/canvas/production/series/episode IDs;
+- current Story, Authority, Shot, Director Previs and GenerationUnit revisions;
+- visible execution/output node IDs for every generated/rendered artifact;
+- Prompt compilation/payload hash and exact reference manifest;
+- Provider run/idempotency status without exposing credentials;
+- actual candidate media/checksum, evaluation and accepted usable range;
+- timeline, render, QC and delivery IDs;
+- blockers and the single next action.
 
-Build the smallest `TeamManifest` that covers actual risks. Always retain
-production orchestration, director judgment, Prompt compilation, and
-continuity; add performance, cinematography, editing, action, sound, lighting,
-color, VFX, design, costume, music, advertising, or documentary fact roles as
-needed.
-
-Every accepted `ProfessionalContribution` must bind the current target and
-source revisions, approved TeamManifest, at least one applicable `cap-*`
-capability, at least one source-backed `kn-*` atom, selected method,
-applicability boundary, concrete field changes, hard constraints, visible
-acceptance checks, and an empty `vetoFindings` list. A contribution becomes
-stale when any covered Story, Shot, GenerationUnit, Authority, Previs, context,
-or TeamManifest revision changes. Advice, chat text, document paths, or a
-production-wide memo do not satisfy a current shot gate.
-
-External review may diagnose and challenge at Story, Shot, pre-dispatch plan,
-rough-cut, or final-delivery gates. It may not persist production state,
-approve creative work, compile the final Prompt, call a Provider, edit,
-render, or publish. Translate accepted findings into formal current
-contributions.
-
-Resolve conflicts in this order: Owner hard requirements; locked Story and
-dialogue; accepted identity/scene/prop pixels; approved Shot; accepted Sequence
-Previs/CutDecision; VisualBible; current specialist contribution; sourced
-knowledge; model optimization.
-
-## Compile and preflight deterministically
-
-Compile from structured inputs, never by concatenating independent specialist
-prompts. First persist a Prompt Draft containing the source revision digest,
-ordered prompt sections, effective reference manifest, motion/camera contract,
-negative constraints, and model parameters. Then lint and preflight that exact
-Draft; the Provider request is a deterministic projection of the Draft, not a
-new prompt invented at dispatch time. Keep duration, resolution, aspect ratio,
-model, count, audio flags, and Provider settings in `GenerationParameters`, not
-content prose. Requested image dimensions are Provider parameters; persist
-requested and actual sizes and judge usable composition against the documented
-delivery ceiling.
-
-The envelope must retain exact revision lineage for Story, Shots, Authorities,
-storyboards, Director captures, Sequence Previs, VisualContextBundle,
-professional contributions, evaluations, reviews, references, and model
-registry. Provider payload order determines reference numbering. Strip runtime
-IDs and internal audit prose from visible image/video content.
-
-Run contract validation, Prompt lint, reference conflict checks, camera/focus/
-temporal audits, current-review checks, Sequence Previs audit, model capability
-preflight, and byte/reference limits before dispatch. The cinematic workflow
-does not require a project budget, budget grant, reservation, or per-task spend
-approval. A high score,
-model-capability pass, old ACCEPT, or manual Prompt edit cannot override a hard
-gate. A manual edit creates a new version and repeats all checks.
-
-## Execute only through UnunuTV
-
-Invoke `ununu-unutv-operator` and the official `unutv` CLI/API for every
-project, canvas, node, contract, asset, media, review, run, timeline, render,
-and UI verification operation. Never write SQLite directly. The
-operator receives a compiled envelope; it must not redesign the Shot.
-
-Keep external workflows, including ComfyUI graphs, as source evidence only.
-Do not copy their runtime, checkpoints, custom nodes, or assumptions into the
-active production path.
-
-The cinematic workflow dispatches the configured Provider automatically after
-the exact GenerationUnit preflight passes; there is no budget dialog or paid
-approval step in this path. Confirm the production binds the intended script,
-then prove Story, Shot, Previs, current visual context, reference roles,
-professional signoffs, continuity, and Provider capability before execution.
-An HTTP success alone is not creative success.
-
-## Use the executable workflow manifest, not chat memory
-
-When an Owner asks for a one-shot or end-to-end short film, create a
-`UnunuCinematicWorkflowManifest` through the `workflow cinematic-start` CLI
-command or `POST /api/projects/:projectId/cinematic-workflow/start`. The
-manifest is persisted in the AutomationRun configuration and is the handoff
-contract for any AI agent, not a suggestion stored only in this document. It
-must carry the Skill id/version, production and source-node IDs, target
-duration, canonical 13-stage order, semantic-reference policy, the
-`preflight_then_auto_dispatch` execution boundary, and `provider_account`
-billing mode (Provider account billing is outside UnunuTV project state).
-
-At workflow start the runtime must load and hash this Skill and the three
-mandatory reference documents into `skillContext`, then persist an
-`UnunuCinematicAgentContextV1` index in the manifest. That index is the
-Agent's machine-readable memory of the current Story, VisualBible, Authorities,
-Shots, Storyboards, GenerationUnits, Evaluations, and Timelines. A chat summary
-or canvas screenshot is not context. Every automation advance refreshes the
-index; if its Skill hash or current artifact revisions are absent, the run is
-invalid and must stop before any Provider call.
-
-"One click" means one orchestration request that advances the persisted DAG
-with an indexed context packet; it does not mean one Provider request or one
-giant Prompt. The orchestration may pause at a creative gate only when the
-context packet names the missing artifact and its exact completion condition.
-It must never silently invent a Story, Shot, reference image, or Prompt. Use
-`workflow cinematic-status` or `GET /api/projects/:projectId/cinematic-workflow/status`
-to resume from persisted stage/task state. Never use direct `node run` for a
-production-bound image/video/audio node; compile and preflight a GenerationUnit
-first. Direct node runs remain only for explicitly isolated `direct` experiments.
-
-The manifest is intentionally provider-neutral: a model adapter may change,
-but the state machine, reference roles, timing contracts, actual-take memory,
-continuation handoff, review precedence, and auto-dispatch boundary do not. A
-different AI can operate the workflow only after loading this Skill and using
-the UnunuTV CLI/API; it cannot honestly promise perfect output without accepted
-assets, complete prompts, real media review, and Provider-specific validation.
-
-## Review actual screen time and update canon
-
-Run `dense-video-analysis` on every real candidate's complete timeline, reusing
-an existing checksum-matched analysis pack. Persist exact run/media/checksum,
-actual duration/FPS/audio, phase samples, plan-versus-actual observations,
-internal cuts, usable ranges, actual start/end state, continuity breaks,
-scores, visible entity checks, vetoes, decision, responsibility, and repair in
-`VisualTakeMemory` and `CinematicEvaluationRecord`.
-
-Only the latest evaluation per GenerationUnit authorizes reuse. A later Owner
-REJECT revokes an older ACCEPT and every dependent first frame, reference,
-context, compilation, and continuation. `ACCEPT` requires every blocking
-visible check to pass and no veto. Never average conflicting decisions.
-
-Reconcile only accepted observed facts into canon. The next unit compiles from
-the latest accepted actual `carryForwardState`, not its planned endpoint or
-chat memory. Choose exactly one retake action—reroll, rewrite one source
-variable, reanchor, edit a separately reviewed usable range, or keep/fix in
-post—and record the reason and alternative in `CreativeDecisionTrace`.
-
-For a Provider duration ceiling, use explicit `TAIL_CONTINUE`,
-`DUPLICATE_HANDOFF`, or a motivated cut. Continue only from a latest accepted
-tail. Overlap uses distinct H0/H1 from the same accepted take, reproduces H0→H1
-once, then advances beyond H1; trim the repeated region from actual motion
-evidence. Preserve blocking, props, light, action phase, screen direction,
-camera/lens/focus/exposure, and ambient audio across the seam. Never apply a
-universal overlap duration.
-
-## Preserve Owner authority
-
-Only the Owner approves creative taste, TeamManifest, current revisions,
-candidates, asset promotion, publication, and destructive deletion. Provider
-dispatch itself is not a second money gate: after creative contracts pass and
-preflight is ready, UnunuTV dispatches through the configured Provider account.
-Pause when a choice changes locked Story, accepted Authority, or release state.
-Preserve rejected evidence for audit, but never let it remain a
-positive reference or current visual state.
-
-## Mandatory final-reference manifest gate (before every Provider dispatch)
-
-The compiled envelope, the canvas node, and the Provider request are one
-auditable manifest. A run is blocked unless all three contain the same ordered
-`mediaId` list, checksum/version, role, and semantic/temporal responsibility.
-The canvas must render that exact effective list, including derived storyboard
-composition, scene/blocking, and camera-guide references; showing only assets
-found in the library is not a valid projection. Every prompt placeholder
-`参考图N` must resolve to the same `providerIndex=N` binding. `first_frame` and
-`first_last_frame` are mutually exclusive with ordinary image references.
-
-A selected storyboard image is the current composition source, not an excuse
-to keep an older composition board. Any non-current composition/keyframe media
-in the effective Provider list is a hard `stale_storyboard_composition_reference`
-failure; a selected storyboard image absent from the list is a hard
-`selected_storyboard_reference_missing` failure. A structurally valid old
-checksum is still stale. When appearance, anatomy, scene layout, or blocking
-changes, generate and pixel-review a new media asset, bind it, recompile, and
-show its checksum before dispatch; changing only text is not asset regeneration.
-
-The run boundary must persist a rich prompt document containing every effective
-reference and an immutable `cinematicReferenceAudit`. If the prompt document,
-canvas payload, compilation, or Provider parameters diverge, fail closed before
-calling a Provider. `preflight.ready=true` means only that this manifest may
-enter the boundary; it is not visual acceptance. Use the official UnunuTV
-CLI/API for the audit and mutation; never repair this state in the browser or
-SQLite.
+Do not claim a film, episode, Shot, reference, Prompt, preview, candidate,
+render or delivery exists unless it is persisted and visible in UnuTV.

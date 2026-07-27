@@ -88,7 +88,7 @@ export function createApplication(ports) {
     : null;
   const automationExecutor = createAutomationExecutorUseCases(ports, {
     agentContext, automationTasks, authorities: cinematicAssetAuthority, budget, cinematic: cinematicProduction, getScriptDocument,
-    knowledge: ports.knowledge ?? null,
+    knowledge: ports.knowledge ?? null, createNode: (input) => createNode(input),
     listAssets, pollRun: (input) => pollRun(input), projectControl, render: renderJobs, runNode: (input) => runNode(input), scriptPlanning, storyboards: storyboard, timeline
   });
   const cinematicWorkflow = createCinematicWorkflowUseCases(ports, {

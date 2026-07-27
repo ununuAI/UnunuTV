@@ -416,7 +416,7 @@ async function execute(app, positionals, flags) {
   if (area === "timeline" && action === "keyframe-add") return app.addTimelineKeyframe({ projectId: required(flags, "project"), timelineId: required(flags, "timeline"), clipId: required(flags, "clip"), ...objectFlag(flags, "data") });
   if (area === "timeline" && action === "keyframe-update") return app.updateTimelineKeyframe({ projectId: required(flags, "project"), timelineId: required(flags, "timeline"), keyframeId: required(flags, "keyframe"), patch: objectFlag(flags, "data") });
   if (area === "timeline" && action === "keyframe-remove") return app.removeTimelineKeyframe({ projectId: required(flags, "project"), timelineId: required(flags, "timeline"), keyframeId: required(flags, "keyframe") });
-  if (area === "render" && action === "create") return app.createRenderJob({ projectId: required(flags, "project"), timelineId: required(flags, "timeline"), preset: flags.preset, idempotencyKey: flags["idempotency-key"] });
+  if (area === "render" && action === "create") return app.createRenderJob({ projectId: required(flags, "project"), timelineId: required(flags, "timeline"), outputNodeId: required(flags, "output-node"), preset: flags.preset, idempotencyKey: flags["idempotency-key"] });
   if (area === "render" && action === "list") return { jobs: await app.listRenderJobs({ projectId: required(flags, "project"), timelineId: flags.timeline || null }) };
   if (area === "render" && action === "get") return app.getRenderJob({ projectId: required(flags, "project"), renderJobId: required(flags, "render-job") });
   if (area === "render" && action === "qc") return app.getTechnicalQcReport({ projectId: required(flags, "project"), renderJobId: required(flags, "render-job") });

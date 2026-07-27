@@ -16,7 +16,7 @@ function trackCode(track, tracks) {
   return `${prefix}${tracks.filter((entry) => entry.kind === track.kind && entry.order <= track.order).length}`;
 }
 
-export function CanvasTimelineDock({ initialHeight = 280, notify, onClose, onHeightChange, onPlaybackChange, onPreviewMedia, onSeek, projectId, readOnly, selected }) {
+export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClose, onHeightChange, onPlaybackChange, onPreviewMedia, onSeek, projectId, readOnly, refreshCanvas, selected }) {
   const [height, setHeight] = useState(initialHeight);
   const [timeline, setTimeline] = useState(null);
   const [scale, setScale] = useState(1);
@@ -156,7 +156,23 @@ export function CanvasTimelineDock({ initialHeight = 280, notify, onClose, onHei
 
   async function renderPreset(preset, label) {
     if (!timelineId) return;
-    try { await api.createRenderJob(projectId, timelineId, { preset, idempotencyKey: `${timelineId}:${preset}:${Date.now()}` }); await load(); notify(`${label}已进入后台渲染`, false); }
+    try {
+      const allowedKinds = preset === "wav_mix" ? ["audio", "compose"] : ["compose", "video", "videoShot", "video-clip"];
+      let outputNode = allowedKinds.includes(selected?.kind) ? selected : canvas?.nodes?.find((node) => allowedKinds.includes(node.kind) && node.payload?.auditOnly !== true);
+      if (!outputNode) {
+        outputNode = await api.createNode(projectId, canvas.id, {
+          kind: preset === "wav_mix" ? "audio" : "compose",
+          title: preset === "wav_mix" ? "混音母版" : "渲染母版",
+          x: Math.max(120, ...(canvas.nodes || []).map((node) => node.x + node.width + 80)),
+          y: 120,
+          payload: { generationPhase: "candidate_render", generationStatus: "ready", timelineId }
+        });
+        await refreshCanvas?.();
+      }
+      await api.createRenderJob(projectId, timelineId, { outputNodeId: outputNode.id, preset, idempotencyKey: `${timelineId}:${preset}:${Date.now()}` });
+      await load();
+      notify(`${label}已进入画布节点后台渲染`, false);
+    }
     catch (error) { notify(error); }
   }
 

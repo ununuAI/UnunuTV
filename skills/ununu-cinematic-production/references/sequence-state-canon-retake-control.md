@@ -100,7 +100,7 @@ Core 在正式制作模式自动开启 `requireSequenceState`。后续单元只�
 1. 先审剧情合同，再审分镜脚本和时序合同。
 2. 选择参考职责：身份/场景/空间普通参考，真实续接才用首帧或已接受尾部。
 3. 编译并检查三段节拍边界、实际入口和具体动态承担项。
-4. 经 CLI/API 在 preflight 通过后自动派发到已配置 Provider 账户；不存在另一次花钱批准。
+4. 经 CLI/API 在低模预演接受和 preflight 通过后，为当前精确版本记录一次正式生成意图，再派发到已配置 Provider 账户；这不是另一次计费确认。
 5. 对实际成片做完整时间线审片，写 observation、canon reconciliation、retake disposition。
 6. 只有最新 `ACCEPT` 可更新正典和续接父源。
 7. 重新编译下一单元；不得复用上次编译结果或聊天中记住的状态。

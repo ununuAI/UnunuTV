@@ -109,7 +109,7 @@ export function AutomationFlowWindow({ control, executionNodes = [], onClose, pr
       tasks={control.automationTasks}
       workflowManifest={control.workflowStatus?.workflowManifest}
       providerCallsIssued={control.workflowStatus?.run?.configuration?.workflowManifest ? Boolean(control.workflowStatus.run.configuration.workflowManifest.providerCallsIssued) : false}
-      nextGate={control.workflowStatus?.run?.configuration?.workflowManifest ? "preflight_then_auto_dispatch" : null}
+      nextGate={control.workflowStatus?.run?.configuration?.workflowManifest ? "previs_accept_then_single_formal_intent" : null}
     />
     <button aria-label="调整全自动生产流窗口大小" className="automation-flow-resize-handle" onPointerDown={(event) => beginPointer(event, "resize")} type="button" />
   </section>;

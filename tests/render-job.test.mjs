@@ -52,10 +52,12 @@ test("local render preserves embedded audio from a video-track clip", async (con
   ]);
 
   const { project } = await runtime.app.createProject({ title: "嵌入音轨回归" });
+  const openedProject = await runtime.app.openProject({ projectId: project.id });
+  const outputNode = await runtime.app.createNode({ projectId: project.id, canvasId: openedProject.rootCanvasId, kind: "compose", title: "嵌入音轨母版" });
   const media = await runtime.app.importMedia({ projectId: project.id, filePath: sourcePath, kind: "video" });
   const timeline = await runtime.app.createTimeline({ projectId: project.id, title: "嵌入音轨", frameRate: 24, width: 64, height: 64 });
   await runtime.app.addTimelineClip({ projectId: project.id, timelineId: timeline.id, mediaId: media.id, track: 0, startMs: 0, durationMs: 700 });
-  const render = await runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, preset: "h264_review", idempotencyKey: "embedded-audio-v1" });
+  const render = await runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, outputNodeId: outputNode.id, preset: "h264_review", idempotencyKey: "embedded-audio-v1" });
   const completed = await waitForTerminal(runtime.app, project.id, render.id);
   assert.equal(completed.status, "succeeded", completed.error?.message);
   const qc = await runtime.app.getTechnicalQcReport({ projectId: project.id, renderJobId: completed.id });
@@ -71,6 +73,25 @@ test("technical QC reports missing audio as a warning without hiding video failu
   assert.equal(report.checks.find((check) => check.id === "audio_stream").status, "warning");
 });
 
+test("timeline render refuses hidden output and incompatible canvas nodes", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-render-canvas-gate-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  const runtime = createLocalRuntime({ dataRoot, recoverRenders: false, recoverAutomation: false });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject({ title: "画布渲染门禁" });
+  const timeline = await runtime.app.createTimeline({ projectId: project.id, frameRate: 24, width: 64, height: 64 });
+  const script = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "script", title: "错误输出节点" });
+  await assert.rejects(
+    () => runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id }),
+    (error) => error.code === "invalid_payload"
+  );
+  await assert.rejects(
+    () => runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, outputNodeId: script.id }),
+    (error) => error.code === "canvas_execution_node_kind_invalid"
+  );
+  assert.equal((await runtime.app.listRenderJobs({ projectId: project.id, timelineId: timeline.id })).length, 0);
+});
+
 test("local FFmpeg render creates an auditable H.264 candidate master without duplicate jobs", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-render-"));
   context.after(async () => rm(dataRoot, { recursive: true, force: true }));
@@ -82,13 +103,15 @@ test("local FFmpeg render creates an auditable H.264 candidate master without du
   await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=0.75", "-c:a", "pcm_s16le", audioPath]);
 
   const { project } = await runtime.app.createProject({ title: "渲染回归" });
+  const openedProject = await runtime.app.openProject({ projectId: project.id });
+  const outputNode = await runtime.app.createNode({ projectId: project.id, canvasId: openedProject.rootCanvasId, kind: "compose", title: "候选母版" });
   const media = await runtime.app.importMedia({ projectId: project.id, filePath: sourcePath, kind: "video" });
   const audio = await runtime.app.importMedia({ projectId: project.id, filePath: audioPath, kind: "audio" });
   const timeline = await runtime.app.createTimeline({ projectId: project.id, title: "候选母版", frameRate: 24, width: 64, height: 64 });
   await runtime.app.addTimelineClip({ projectId: project.id, timelineId: timeline.id, mediaId: media.id, track: 0, startMs: 250, durationMs: 500 });
   await runtime.app.addTimelineClip({ projectId: project.id, timelineId: timeline.id, mediaId: audio.id, track: 1, startMs: 0, durationMs: 750, payload: { volume: .8 } });
   await runtime.app.addTimelineClip({ projectId: project.id, timelineId: timeline.id, track: 2, startMs: 100, durationMs: 500, payload: { text: "第一句真实对白" } });
-  const input = { projectId: project.id, timelineId: timeline.id, preset: "h264_review", idempotencyKey: "candidate-master-v1" };
+  const input = { projectId: project.id, timelineId: timeline.id, outputNodeId: outputNode.id, preset: "h264_review", idempotencyKey: "candidate-master-v1" };
   const first = await runtime.app.createRenderJob(input);
   const duplicate = await runtime.app.createRenderJob(input);
   assert.equal(duplicate.id, first.id);
@@ -97,6 +120,8 @@ test("local FFmpeg render creates an auditable H.264 candidate master without du
   assert.equal(completed.status, "succeeded", completed.error?.message);
   assert.equal(completed.progress, 1);
   assert.ok(completed.outputMediaId);
+  assert.equal(completed.outputNodeId, outputNode.id);
+  assert.equal((await runtime.app.openCanvas({ projectId: project.id, canvasId: openedProject.rootCanvasId })).nodes.find((node) => node.id === outputNode.id).payload.currentMediaId, completed.outputMediaId);
   const output = runtime.media.open(project.id, completed.outputMediaId);
   assert.ok(output && existsSync(output.filePath));
   assert.equal(output.mimeType, "video/mp4");
@@ -140,10 +165,12 @@ test("a stale running render resumes after a local runtime restart without creat
   const hangingRender = { start: () => new Promise(() => {}), cancel: () => false, close: () => {} };
   const firstRuntime = createLocalRuntime({ dataRoot, render: hangingRender });
   const { project } = await firstRuntime.app.createProject({ title: "渲染恢复" });
+  const openedProject = await firstRuntime.app.openProject({ projectId: project.id });
+  const outputNode = await firstRuntime.app.createNode({ projectId: project.id, canvasId: openedProject.rootCanvasId, kind: "compose", title: "恢复母版" });
   const media = await firstRuntime.app.importMedia({ projectId: project.id, filePath: sourcePath, kind: "video" });
   const timeline = await firstRuntime.app.createTimeline({ projectId: project.id, frameRate: 24, width: 64, height: 64 });
   await firstRuntime.app.addTimelineClip({ projectId: project.id, timelineId: timeline.id, mediaId: media.id, durationMs: 300 });
-  const started = await firstRuntime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, idempotencyKey: "recover-once" });
+  const started = await firstRuntime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, outputNodeId: outputNode.id, idempotencyKey: "recover-once" });
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal((await firstRuntime.app.getRenderJob({ projectId: project.id, renderJobId: started.id })).status, "running");
   firstRuntime.close();

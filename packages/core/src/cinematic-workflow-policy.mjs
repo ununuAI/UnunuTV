@@ -22,11 +22,10 @@ export function buildCinematicWorkflowManifest(input = {}) {
     phases: [...CINEMATIC_WORKFLOW_PHASES],
     targetDurationSeconds: input.targetDurationSeconds ?? 30,
     deliveryMode: input.deliveryMode ?? "single_request_orchestration",
-    // A cinematic production is not a separate approval/budget product. The
-    // production contract is: preflight first, then dispatch through the
-    // configured provider account. Keep the old values in the contract only
-    // for legacy non-cinematic callers; never let them leak into this path.
-    paidBoundary: "preflight_then_auto_dispatch",
+    // Formal video is a normal production stage, not a second billing dialog.
+    // The workflow first accepts cheap visual proof, then records one exact
+    // revision-bound submission intent before dispatch.
+    paidBoundary: "previs_accept_then_single_formal_intent",
     billingMode: "provider_account",
     referencePolicy: {
       semanticImageReference: true,
@@ -37,9 +36,23 @@ export function buildCinematicWorkflowManifest(input = {}) {
       ...(input.referencePolicy ?? {})
     },
     providerPolicy: {
-      providerCalls: "only_after_preflight_auto_dispatch",
+      providerCalls: "only_after_previs_accept_and_formal_intent",
       noProviderOnStart: true,
       ...(input.providerPolicy ?? {})
+    },
+    canvasPolicy: {
+      allProductionCapabilitiesVisible: true,
+      compiledPromptsPersisted: true,
+      referenceEdgesRequired: true,
+      ...(input.canvasPolicy ?? {})
+    },
+    agentPolicy: {
+      executorOnly: true,
+      nextActionOnly: true,
+      officialSkillCliApiOnly: true,
+      browserProductionMutationAllowed: false,
+      adHocTerminalProductionMutationAllowed: false,
+      ...(input.agentPolicy ?? {})
     },
     generationStrategies: input.generationStrategies ?? {},
     skillContext: input.skillContext,

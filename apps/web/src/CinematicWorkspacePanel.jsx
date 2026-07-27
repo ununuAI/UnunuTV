@@ -145,7 +145,7 @@ export function CinematicWorkspacePanel({ embedded = false, floating = false, on
     loadStoryboardBatchJobs: async (storyboardId) => (await api.storyboardBatchJobs(projectId, production.productionId, storyboardId)).jobs || [],
     createStoryboardBatchJob: async (storyboardId, kind, storyboardShotIds, input = {}) => {
       const result = await api.createStoryboardBatchJob(projectId, production.productionId, storyboardId, { kind, storyboardShotIds, ...input, billingMode: "provider_account" });
-      notify(`${kind === "image" ? "故事板图" : "镜头视频"}批量任务已建立；预检通过后自动派发 Provider`, false);
+      notify(kind === "image" ? "故事板图批量任务已建立，可在画布中多轮探索" : "镜头视频批量任务已建立；通过预演与预检后按精确意图提交", false);
       return result;
     },
     advanceStoryboardBatchJob: async (storyboardId, jobId) => {
@@ -192,7 +192,23 @@ export function CinematicWorkspacePanel({ embedded = false, floating = false, on
       return result;
     },
     runGenerationUnit: async (unitId) => {
-      const result = await api.runGenerationUnit(projectId, production.productionId, unitId);
+      const preflight = await api.preflightGenerationUnit(projectId, production.productionId, unitId);
+      if (!preflight.ready) throw new Error("正式视频预检未通过");
+      const unit = units.find((entry) => entry.generationUnit.generationUnitId === unitId)?.generationUnit;
+      if (!unit) throw new Error("找不到当前生成单元");
+      const result = await api.runGenerationUnit(projectId, production.productionId, unitId, {
+        formalGenerationIntent: {
+          version: "formal_generation_intent_v1",
+          generationUnitId: unitId,
+          generationUnitRevision: unit.revision,
+          compilationId: preflight.compilationId,
+          payloadHash: preflight.envelope.payloadHash,
+          executionNodeId: unit.executionNodeId,
+          maxNewSubmissions: 1,
+          createdAt: new Date().toISOString()
+        },
+        idempotencyKey: `${unitId}:${preflight.compilationId}:formal-video:v1`
+      });
       notify("正式生成状态：" + result.status, result.status === "blocked");
     },
     addEvaluation: async (value) => {

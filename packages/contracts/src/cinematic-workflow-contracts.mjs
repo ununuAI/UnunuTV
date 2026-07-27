@@ -1,6 +1,6 @@
 export const CINEMATIC_WORKFLOW_CONTRACT_VERSION = "1.0.0";
 export const CINEMATIC_WORKFLOW_SKILL_ID = "ununu-cinematic-production";
-export const CINEMATIC_WORKFLOW_SKILL_VERSION = "2.2.0";
+export const CINEMATIC_WORKFLOW_SKILL_VERSION = "3.0.0";
 export const CINEMATIC_WORKFLOW_PHASES = Object.freeze([
   "script_analysis",
   "block_planning",
@@ -21,8 +21,7 @@ export const CINEMATIC_WORKFLOW_DELIVERY_MODES = Object.freeze([
   "manual_stepwise"
 ]);
 export const CINEMATIC_WORKFLOW_PAID_BOUNDARIES = Object.freeze([
-  "preflight_then_auto_dispatch",
-  "preflight_then_owner_approval"
+  "previs_accept_then_single_formal_intent"
 ]);
 export const CINEMATIC_WORKFLOW_BILLING_MODES = Object.freeze([
   "provider_account",
@@ -83,6 +82,28 @@ export function validateCinematicWorkflowManifest(value) {
   } else {
     requiredText(value.providerPolicy.providerCalls, "providerPolicy.providerCalls", issues);
     requiredBoolean(value.providerPolicy.noProviderOnStart, "providerPolicy.noProviderOnStart", issues);
+  }
+  if (!isRecord(value.canvasPolicy)) {
+    issues.push(issue("canvasPolicy", "canvasPolicy must be an object", "invalid_type"));
+  } else {
+    requiredBoolean(value.canvasPolicy.allProductionCapabilitiesVisible, "canvasPolicy.allProductionCapabilitiesVisible", issues);
+    requiredBoolean(value.canvasPolicy.compiledPromptsPersisted, "canvasPolicy.compiledPromptsPersisted", issues);
+    requiredBoolean(value.canvasPolicy.referenceEdgesRequired, "canvasPolicy.referenceEdgesRequired", issues);
+  }
+  if (!isRecord(value.agentPolicy)) {
+    issues.push(issue("agentPolicy", "agentPolicy must be an object", "invalid_type"));
+  } else {
+    requiredBoolean(value.agentPolicy.executorOnly, "agentPolicy.executorOnly", issues);
+    requiredBoolean(value.agentPolicy.nextActionOnly, "agentPolicy.nextActionOnly", issues);
+    requiredBoolean(value.agentPolicy.officialSkillCliApiOnly, "agentPolicy.officialSkillCliApiOnly", issues);
+    requiredBoolean(value.agentPolicy.browserProductionMutationAllowed, "agentPolicy.browserProductionMutationAllowed", issues);
+    requiredBoolean(value.agentPolicy.adHocTerminalProductionMutationAllowed, "agentPolicy.adHocTerminalProductionMutationAllowed", issues);
+    if (value.agentPolicy.browserProductionMutationAllowed !== false) {
+      issues.push(issue("agentPolicy.browserProductionMutationAllowed", "browser production mutation must be disabled", "policy_violation"));
+    }
+    if (value.agentPolicy.adHocTerminalProductionMutationAllowed !== false) {
+      issues.push(issue("agentPolicy.adHocTerminalProductionMutationAllowed", "ad-hoc terminal production mutation must be disabled", "policy_violation"));
+    }
   }
   if (!isRecord(value.skillContext)) {
     issues.push(issue("skillContext", "skillContext must be an object", "invalid_type"));

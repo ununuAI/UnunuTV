@@ -56,7 +56,8 @@ export function projectGenerationUnitPreflightToNode({ generationUnit, preflight
     lastFrameMediaId: generationUnit?.generationParameters?.lastFrameMediaId || null,
     preflight: envelope.preflight || null,
     providerCalled: generationUnit?.providerCalled === true,
-    paidApprovalRequired: true
+    paidApprovalRequired: false,
+    formalGenerationIntentRequired: true
   };
 }
 

@@ -170,7 +170,7 @@ export function createCinematicWorkflowUseCases(ports, {
       workflowManifest: persistedManifest,
       agentContext: context,
       providerCallsIssued: false,
-      nextGate: "preflight_then_auto_dispatch",
+      nextGate: "previs_accept_then_single_formal_intent",
       nextAction: status.nextAction,
       seriesId,
       episode,

@@ -1,11 +1,12 @@
 # UnunuTV
 
-UnunuTV is a single-user, local-first **platform production OS** for cinematic
-and multi-episode short-drama work. Operate it visually, through CLI/API, or
-via the thin `ununu-video` Skill remote control.
+UnunuTV is a single-user, local-first **AI-video low-poly previs and shot-control
+console** for cinematic and multi-episode short-drama work. Operate it through
+the single `ununu-cinematic-production` Skill and inspect every persisted stage
+on the production canvas.
 
 ```text
-local Skill (ununu-video) / Codex
+ununu-cinematic-production / Codex
         │
         ▼
 CLI / HTTP  →  Orchestrator + Workers  →  contracts / Knowledge Port / Series
@@ -19,9 +20,10 @@ CLI / HTTP  →  Orchestrator + Workers  →  contracts / Knowledge Port / Serie
 
 ## Platform OS (v1)
 
-- **Single entry**: `skills/ununu-video` → `workflow cinematic-start|status|advance|owner-decide`
+- **Single entry**: `skills/ununu-cinematic-production` → `workflow cinematic-start|status|advance|owner-decide`
 - **Single next step**: every status returns machine-readable `nextAction`
-- **Single formal video path**: GenerationUnit compile → preflight → run (no storyboard batch masquerading as formal)
+- **Single formal video path**: accepted low-poly previs → GenerationUnit compile/preflight → exact formal-generation intent → idempotent run
+- **Canvas-visible law**: every source, contract, request, candidate, render and delivery binds a visible node
 - **Real knowledge**: Knowledge Port over `统一知识库` cap-*/kn-*; fake IDs fail closed
 - **Multi-episode**: Series + SharedAssetLibrary + ContinuityLedger; Ep2+ bind accepted assets; freeze blocks silent reface
 
@@ -152,8 +154,10 @@ Credentials can be saved from the local Settings panel into
 `~/.unutv/secrets/`. The directory uses mode `0700`, each credential file uses
 mode `0600`, and plaintext values are never returned by the API or written into
 a project database. Environment variables remain supported and take
-precedence. Formal cinematic work dispatches through the configured Provider
-account after preflight; there is no separate spend/paid-approval gate.
+precedence. Image generation may iterate freely as a canvas-visible exploration
+surface. Formal video dispatches through the configured Provider account only
+after accepted low-cost proof, exact preflight and an auditable one-submission
+generation intent. This is a production-safety gate, not a second billing UI.
 
 ```bash
 OPENROUTER_API_KEY="..." npm run dev

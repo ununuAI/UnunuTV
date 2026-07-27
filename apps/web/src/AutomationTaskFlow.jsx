@@ -28,7 +28,7 @@ export function AutomationTaskFlow({ activities = [], onClose, onRetry, presenta
   const live = tasks.length > 0;
   return <section className={`automation-task-popover is-${presentation}`} data-mode={live ? "live" : "plan"}>
     <header><div><strong>{live ? "电影工作流实时生产流" : "电影工作流生产计划"}</strong><small>{live ? `运行 ${runId || ""} · ${workflowManifest ? `${workflowManifest.skillId} ${workflowManifest.skillVersion}` : "后端真实任务事件"}` : "启动前查看完整 13 阶段 DAG；启动后切换为实时活动"}</small></div><button aria-label="关闭任务流" className="canvas-work-window-close" onClick={onClose} type="button"><X size={18} /></button></header>
-    {workflowManifest ? <div className="automation-workflow-contract"><span>目标时长 {workflowManifest.targetDurationSeconds} 秒</span><span>Provider {providerCallsIssued ? "已调用" : "未调用"}</span><span>执行策略 {nextGate === "preflight_then_auto_dispatch" ? "预检通过后自动执行" : nextGate || "等待启动"}</span></div> : null}
+    {workflowManifest ? <div className="automation-workflow-contract"><span>目标时长 {workflowManifest.targetDurationSeconds} 秒</span><span>Provider {providerCallsIssued ? "已调用" : "未调用"}</span><span>执行策略 {nextGate === "previs_accept_then_single_formal_intent" ? "预演接受后按精确意图单次提交" : nextGate || "等待启动"}</span></div> : null}
     <div className="automation-flow-summary">
       <span><Activity size={12} /><b>{flow.current ? automationStageLabel(flow.current.stage) : "等待启动"}</b><small>当前工作</small></span>
       <span><b>{flow.runningAgents}</b><small>并行 Agent</small></span>

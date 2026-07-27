@@ -41,6 +41,7 @@ export {
 } from "./image-generation-template-policy.mjs";
 
 export * from "./cinematic-contracts.mjs";
+export * from "./formal-generation-intent-contracts.mjs";
 export * from "./cinematic-continuity-policy.mjs";
 export * from "./cinematic-cross-modal-control-policy.mjs";
 export * from "./cinematic-generation-control-policy.mjs";

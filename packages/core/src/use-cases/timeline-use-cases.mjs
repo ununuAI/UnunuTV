@@ -37,15 +37,26 @@ export function createTimelineUseCases(ports) {
   const commitResourceCommand = bind(ports, "commitTimelineResourceCommand");
   const undoResourceCommand = bind(ports, "undoTimelineResourceCommand");
   const redoResourceCommand = bind(ports, "redoTimelineResourceCommand");
+  const trackCache = new Map();
+  const trackCacheKey = (projectId, timelineId) => `${projectId}\u0000${timelineId}`;
+  const cacheTracks = (projectId, timelineId, tracks) => trackCache.set(trackCacheKey(projectId, timelineId), tracks.map((track) => ({ id: track.id, name: track.name, order: track.order, locked: track.locked })));
+  const invalidateTracks = (projectId, timelineId) => trackCache.delete(trackCacheKey(projectId, timelineId));
+  async function getCachedTracks(projectId, timelineId) {
+    const key = trackCacheKey(projectId, timelineId);
+    if (!trackCache.has(key)) cacheTracks(projectId, timelineId, (await getRecord(projectId, timelineId)).tracks);
+    return trackCache.get(key);
+  }
 
   async function createTimeline(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const timestamp = nowIso();
-    return createRecord(projectId, {
+    const timeline = await createRecord(projectId, {
       id: createId("timeline"), title: optionalText(input.title, "主时间线"), frameRate: requireNumber(input.frameRate, "frameRate", 30),
       width: requireNumber(input.width, "width", 1920), height: requireNumber(input.height, "height", 1080), colorSpace: optionalText(input.colorSpace, "Rec.709"),
       tracks: defaultTracks(timestamp), createdAt: timestamp, updatedAt: timestamp
     });
+    cacheTracks(projectId, timeline.id, timeline.tracks);
+    return timeline;
   }
 
   async function listTimelines(input = {}) { return listRecords(requireText(input.projectId, "projectId")); }
@@ -59,9 +70,8 @@ export function createTimelineUseCases(ports) {
   async function addTimelineClip(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const timelineId = requireText(input.timelineId, "timelineId");
-    const timeline = await getRecord(projectId, timelineId);
     const track = Math.max(0, Math.round(requireNumber(input.track, "track", 0)));
-    assertTrackUnlocked(timeline, track);
+    assertTrackUnlocked({ tracks: await getCachedTracks(projectId, timelineId) }, track);
     return addClipRecord(projectId, {
       id: createId("clip"), timelineId, nodeId: input.nodeId ? requireText(input.nodeId, "nodeId") : null,
       mediaId: input.mediaId ? requireText(input.mediaId, "mediaId") : null, track, startMs: Math.max(0, Math.round(requireNumber(input.startMs, "startMs", 0))),
@@ -165,7 +175,9 @@ export function createTimelineUseCases(ports) {
     const tracks = [...timeline.tracks.filter((item) => item.order < order), track, ...shifted.map((item) => ({ ...item, order: item.order + 1, updatedAt: timestamp }))];
     const after = trackBundle(timeline, tracks);
     after[0].clipTracks = timeline.clips.map((clip) => ({ id: clip.id, track: clip.track >= order ? clip.track + 1 : clip.track }));
-    return resourceCommand(input, "add_track", "track_order", trackBundle(timeline, timeline.tracks), after);
+    const receipt = await resourceCommand(input, "add_track", "track_order", trackBundle(timeline, timeline.tracks), after);
+    invalidateTracks(projectId, timelineId);
+    return receipt;
   }
 
   async function updateTimelineTrack(input = {}) {
@@ -188,7 +200,9 @@ export function createTimelineUseCases(ports) {
       ...(patch.payload !== undefined ? { payload: { ...current.payload, ...requireObject(patch.payload, "patch.payload") } } : {}),
       updatedAt: nowIso()
     };
-    return resourceCommand(input, "update_track", "track", [current], [next]);
+    const receipt = await resourceCommand(input, "update_track", "track", [current], [next]);
+    invalidateTracks(projectId, timelineId);
+    return receipt;
   }
 
   async function removeTimelineTrack(input = {}) {
@@ -202,7 +216,9 @@ export function createTimelineUseCases(ports) {
     const tracks = timeline.tracks.filter((track) => track.id !== current.id).map((track) => track.order > current.order ? { ...track, order: track.order - 1, updatedAt: nowIso() } : track);
     const after = trackBundle(timeline, tracks);
     after[0].clipTracks = timeline.clips.map((clip) => ({ id: clip.id, track: clip.track > current.order ? clip.track - 1 : clip.track }));
-    return resourceCommand(input, "remove_track", "track_order", trackBundle(timeline, timeline.tracks), after);
+    const receipt = await resourceCommand(input, "remove_track", "track_order", trackBundle(timeline, timeline.tracks), after);
+    invalidateTracks(projectId, timelineId);
+    return receipt;
   }
 
   async function reorderTimelineTracks(input = {}) {
@@ -218,7 +234,9 @@ export function createTimelineUseCases(ports) {
     const orderByOldOrder = new Map(after.map((track) => [byId.get(track.id).order, track.order]));
     const afterBundle = trackBundle(timeline, after);
     afterBundle[0].clipTracks = remapClipTracks(timeline, orderByOldOrder);
-    return resourceCommand(input, "reorder_tracks", "track_order", trackBundle(timeline, before), afterBundle);
+    const receipt = await resourceCommand(input, "reorder_tracks", "track_order", trackBundle(timeline, before), afterBundle);
+    invalidateTracks(projectId, timelineId);
+    return receipt;
   }
 
   async function timelineAndResource(input, collection, idField, label) {
@@ -341,16 +359,20 @@ export function createTimelineUseCases(ports) {
   }
 
   async function undoTimelineResourceEdit(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
     const timelineId = requireText(input.timelineId, "timelineId");
-    const command = await undoResourceCommand(requireText(input.projectId, "projectId"), timelineId, nowIso());
+    const command = await undoResourceCommand(projectId, timelineId, nowIso());
     if (!command) throw new UnuTvError("timeline_resource_undo_empty", "There is no timeline resource command to undo", 409);
+    invalidateTracks(projectId, timelineId);
     return assertCommandReceipt({ commandId: command.id, timelineId, commandType: "undo", affectedResourceIds: [...new Set([...command.before, ...command.after].map((item) => item.id))], status: "undone", createdAt: nowIso() });
   }
 
   async function redoTimelineResourceEdit(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
     const timelineId = requireText(input.timelineId, "timelineId");
-    const command = await redoResourceCommand(requireText(input.projectId, "projectId"), timelineId, nowIso());
+    const command = await redoResourceCommand(projectId, timelineId, nowIso());
     if (!command) throw new UnuTvError("timeline_resource_redo_empty", "There is no timeline resource command to redo", 409);
+    invalidateTracks(projectId, timelineId);
     return assertCommandReceipt({ commandId: command.id, timelineId, commandType: "redo", affectedResourceIds: [...new Set([...command.before, ...command.after].map((item) => item.id))], status: "redone", createdAt: nowIso() });
   }
 

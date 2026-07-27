@@ -10,17 +10,21 @@ StoryProductionPacket
 → VisualBible + CinematicShotSpec script planning
 → Owner review of every current Shot revision
 → optional risk-routed AssetAuthority / Director / storyboard / keyframe
+→ accepted low-poly timed previs and visible camera/actor routes
 → GenerationUnit
 → optional VisualAnchorPolicy
 → ProfessionalContribution
 → CinematicPromptEnvelopeV2
 → model capability preflight
+→ revision-bound formal-generation intent
 → UnunuTV run
 → CinematicEvaluationRecord
 → evidence-backed knowledge feedback
 ```
 
-顶层 `ununu-cinematic-production` 负责创作、专家路由、镜头与 Prompt；`ununu-unutv-operator` 只负责实体 ID、API/CLI、SQLite、Provider、轮询、素材落盘和验证。
+唯一 `ununu-cinematic-production` Skill 负责创作、低模预演、专家路由、镜头、
+Prompt 和官方 API/CLI 执行。所有持久化阶段与产物必须绑定可见画布节点；浏览器只做
+UI Bug 的复现与只读验收。
 
 ## 长期不变量
 
@@ -49,4 +53,8 @@ StoryProductionPacket
 
 `production` 的 GenerationUnit compile/preflight 必须同时看到当前 Story 与所有 linked Shot 的最新 Owner ACCEPT。缺失时分别返回 `story_owner_acceptance_required`、`shot_script_owner_acceptance_required`；同 revision 后写 REJECT 会使旧 compilation 变成 `owner_story_shot_reviews` stale。手工 Prompt、专家会签、高分和 Provider capability 均不得覆盖。
 
-同一门禁还必须在 AssetAuthority 图片生成、Storyboard 图片/视频批量派发之前执行。电影工业主路径使用 `billingMode:"provider_account"`，不读取项目预算、预算预留或 UI 付费批准；导入既有媒体可用于审计与修订，但不会因此获得 Story/Shot 接受或生产权威。
+同一语义门禁还必须在 AssetAuthority、Storyboard 和正式视频派发前执行。图片生成
+不设成本闸门，可多轮探索，但必须结构化编译、画布可见和版本化评审。电影工业正式
+视频路径使用 `billingMode:"provider_account"`，在接受低模预演、精确预检和一次性
+正式生成意图后提交；不读取项目预算，也不弹第二次计费确认。导入既有媒体可用于审计
+与修订，但不会因此获得 Story/Shot 接受或生产权威。

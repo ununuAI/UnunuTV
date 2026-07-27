@@ -383,7 +383,21 @@ test("cinematic production API completes contracts through compile and preflight
   });
   const refreshedPreflight = await send(`${productionRoot}/generation-units/${unitId}/preflight`, "POST", { recompile: true }).then((response) => response.json());
   assert.equal(refreshedPreflight.ready, true, JSON.stringify(refreshedPreflight));
-  const formalRun = await send(`${productionRoot}/generation-units/${unitId}/runs`, "POST", { billingMode: "legacy_budget", amount: 2, currency: "CNY", idempotencyKey: "cinematic-api-u01-v1"
+  const formalRun = await send(`${productionRoot}/generation-units/${unitId}/runs`, "POST", {
+    billingMode: "legacy_budget",
+    amount: 2,
+    currency: "CNY",
+    idempotencyKey: "cinematic-api-u01-v1",
+    formalGenerationIntent: {
+      version: "formal_generation_intent_v1",
+      generationUnitId: unitId,
+      generationUnitRevision: unitPayload.generationUnit.revision,
+      compilationId: refreshedPreflight.compilationId,
+      payloadHash: refreshedPreflight.envelope.payloadHash,
+      executionNodeId: executionNode.id,
+      maxNewSubmissions: 1,
+      createdAt: new Date().toISOString()
+    }
   }).then((response) => response.json());
   assert.equal(formalRun.run.status, "succeeded", JSON.stringify(formalRun));
   assert.equal(formalRun.reservation.status, "consumed");

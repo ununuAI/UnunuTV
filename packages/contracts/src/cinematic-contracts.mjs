@@ -382,6 +382,9 @@ export function validateGenerationUnit(value) {
     issues.push(issue("visualAnchorPolicy", "DUPLICATE_HANDOFF is reserved for continuous_segment", "strategy_conflict"));
   }
   if (value.continuitySource !== undefined) requiredRecord(value.continuitySource, "continuitySource", issues);
+  if (value.canvasGraphPolicy !== undefined && value.canvasGraphPolicy !== "required") {
+    issues.push(issue("canvasGraphPolicy", "canvasGraphPolicy must equal required when present", "invalid_enum"));
+  }
   if (isRecord(value.continuitySource)) {
     enumValue(value.continuitySource.boundaryType, CINEMATIC_CONTINUITY_BOUNDARY_TYPES, "continuitySource.boundaryType", issues);
     if (value.continuitySource.boundaryType !== "initial") requiredText(value.continuitySource.sourceEvaluationId, "continuitySource.sourceEvaluationId", issues);
