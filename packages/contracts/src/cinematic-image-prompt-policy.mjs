@@ -10,7 +10,7 @@ import {
 } from "./cinematic-prompt-coverage-policy.mjs";
 import { scopeAuthorityBoardConstraints } from "./authority-board-constraint-scope-policy.mjs";
 
-export const CINEMATIC_IMAGE_PROMPT_COMPILER_VERSION = "2.7.0";
+export const CINEMATIC_IMAGE_PROMPT_COMPILER_VERSION = "2.8.0";
 export const DEFAULT_CHARACTER_IDENTITY_BOARD_ID = "identity-master";
 export const DEFAULT_SCENE_SPACE_BOARD_ID = "space-master";
 
@@ -390,8 +390,9 @@ export function compileStoryboardPrompt({ storyboard, shots, visualBible, genera
     const body = [
       section("参考", renderKeyframeReferences(referenceBindings)),
       section("单帧任务", [
-        "只生成一个明确时刻的一张满幅叙事关键帧，不生成整段动作过程。",
-        "不得把动作前后多个时刻同时画进一张图；不得输出拼贴、连环画、多宫格、接触表、六视图、角色设定板、文字、箭头、编号、水印或界面。",
+        "只生成一个明确时刻的一张满幅叙事关键帧：单一摄影机、单一曝光、单一连续空间，不生成整段动作过程。",
+        "画面从左到右、从上到下必须属于同一个时刻；不得使用任何内部边框、横向或纵向分割、重复人物或时间跳切。",
+        "不得把动作前后多个时刻同时画进一张图；不得输出拼贴、蒙太奇拼图、分屏、连环画、多宫格、接触表、六视图、角色设定板、文字、箭头、编号、水印或界面。",
         "导演台参考只锁定空间站位、视线轴、摄影机方位与前后景层级；代理人物、网格和线框不得进入最终画面。"
       ]),
       section("视觉风格", visualStyle),

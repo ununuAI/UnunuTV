@@ -138,11 +138,26 @@ test("cinematic storyboard persists shot lineage and only exports selected image
     storyboardShotId: storyboard.shots[0].storyboardShotId, currentImageMediaId: media.id,
     videoMediaId: media.id, videoVersionId: "storyboard-video-v1", videoChecksum: "video-checksum-v1"
   });
-  const receipt = await runtime.app.importStoryboardToTimeline({ projectId: project.id, productionId: production.productionId, storyboardId: storyboard.storyboardId });
+  const receipt = await runtime.app.importStoryboardToTimeline({
+    projectId: project.id,
+    productionId: production.productionId,
+    storyboardId: storyboard.storyboardId,
+    frameRate: 24,
+    width: 720,
+    height: 1280
+  });
   assert.equal(receipt.status, "completed");
   assert.equal(receipt.added, 1);
   assert.equal(receipt.skipped, 0);
   const importedTimeline = await runtime.app.getTimeline({ projectId: project.id, timelineId: receipt.timelineId });
+  assert.deepEqual(
+    { frameRate: importedTimeline.frameRate, width: importedTimeline.width, height: importedTimeline.height },
+    { frameRate: 24, width: 720, height: 1280 }
+  );
+  assert.deepEqual(
+    (await runtime.app.listTimelines({ projectId: project.id })).map(({ frameRate, width, height }) => ({ frameRate, width, height })),
+    [{ frameRate: 24, width: 720, height: 1280 }]
+  );
   assert.equal(importedTimeline.clips.length, 1);
   assert.equal(importedTimeline.clips[0].payload.storyboardShotId, storyboard.shots[0].storyboardShotId);
   const repeated = await runtime.app.importStoryboardToTimeline({ projectId: project.id, productionId: production.productionId, storyboardId: storyboard.storyboardId, timelineId: receipt.timelineId });

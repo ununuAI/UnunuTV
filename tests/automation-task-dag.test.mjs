@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { createLocalRuntime } from "../packages/local-runtime/src/index.mjs";
 
-test("full-auto starts a versioned 13-role cinematic task DAG with dependency gates", async (context) => {
+test("full-auto starts a versioned 14-role cinematic task DAG with dependency gates", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-automation-dag-"));
   context.after(async () => rm(dataRoot, { recursive: true, force: true }));
   const runtime = createLocalRuntime({ dataRoot });
@@ -14,10 +14,12 @@ test("full-auto starts a versioned 13-role cinematic task DAG with dependency ga
   const { session } = await runtime.app.startAutomation({ projectId: project.id });
   const profiles = await runtime.app.listAgentProfiles({ projectId: project.id });
   const tasks = await runtime.app.listAutomationTasks({ projectId: project.id, automationRunId: session.automationRunId });
-  assert.equal(profiles.length, 13);
-  assert.equal(tasks.length, 13);
+  assert.equal(profiles.length, 14);
+  assert.equal(tasks.length, 14);
   assert.deepEqual(tasks.slice(0, 4).map((task) => task.taskKey), ["script_analysis", "block_planning", "visual_bible", "asset_design"]);
   assert.equal(tasks.find((task) => task.taskKey === "video_generation").paidTaskType, "video");
+  assert.equal(tasks.find((task) => task.taskKey === "image_generation").dependencies[0], "previs_design");
+  assert.equal(tasks.find((task) => task.taskKey === "prompt_compile").dependencies[0], "image_generation");
   assert.equal(tasks.find((task) => task.taskKey === "delivery_qc").dependencies[0], "candidate_render");
 
   const operationContext = { actorType: "automation", actorId: "director", automationRunId: session.automationRunId, leaseId: session.leaseId, idempotencyKey: "claim-1" };

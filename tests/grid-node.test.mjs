@@ -60,10 +60,24 @@ test("grid cell roles, layout and locally composed image survive a full runtime 
     assert.deepEqual(reopened.edges.filter((edge) => edge.toNodeId === grid.id).map((edge) => edge.role).sort(), ["grid-cell:0", "grid-cell:3"]);
     assert.deepEqual(reopened.nodes.find((node) => node.id === grid.id).payload, { gridLayout: "2x2", aspectRatio: "4:3" });
 
+    await runtime.app.updateNode({
+      projectId: project.id,
+      nodeId: grid.id,
+      payload: {
+        ...reopened.nodes.find((node) => node.id === grid.id).payload,
+        productionId: "production-1",
+        stage: "continuity_qa",
+        resourceType: "episode_qa_board",
+        resourceId: "episode-1"
+      }
+    });
     const result = await runtime.app.composeGridNode({ projectId: project.id, nodeId: grid.id, title: "情绪版合成" });
     assert.equal(result.composition.filledCount, 2);
     assert.equal(result.node.kind, "image");
     assert.equal(result.node.payload.currentMediaId, result.media.id);
+    assert.equal(result.node.payload.productionId, "production-1");
+    assert.equal(result.node.payload.stage, "continuity_qa");
+    assert.equal(result.node.payload.resourceType, "episode_qa_board_output");
     assert.equal(result.edge.role, "generated");
     assert.equal(result.sourceNode.payload.lastComposedMediaId, result.media.id);
     assert.ok(existsSync(runtime.media.open(project.id, result.media.id).filePath));

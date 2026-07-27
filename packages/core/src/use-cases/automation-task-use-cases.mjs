@@ -84,7 +84,9 @@ export function createAutomationTaskUseCases(ports, dependencies = {}) {
       completedAt: null
     };
     assertAutomationTask(next);
-    const saved = await updateTask(projectId, next);
+    const saved = typeof ports.projects.claimAutomationTaskRecord === "function"
+      ? await ports.projects.claimAutomationTaskRecord(projectId, next)
+      : await updateTask(projectId, next);
     await appendActivity(projectId, saved, {
       kind: "status", message: optionalText(input.message, "Agent 已领取任务"), progress: 0,
       idempotencyKey: `${saved.id}:attempt:${saved.attempt}:claimed`, createdAt: timestamp,

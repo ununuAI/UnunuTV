@@ -428,6 +428,30 @@ async function pollVideo(input, configs, fetchImpl) {
   return { ...previousResult, status: "succeeded", pollResponse: payload, artifacts: [{ ...artifact, title: `${input.node.title}.mp4` }] };
 }
 
+async function cancelVideo(input, configs, fetchImpl) {
+  const task = input.run.result?.task;
+  if (!task?.taskId) throw new UnuTvError("provider_task_missing", "Run has no Provider task id to cancel", 409);
+  if (task.provider !== "ark") {
+    throw new UnuTvError("provider_cancel_unsupported", `Provider task cancellation is not implemented for ${task.provider}`, 409);
+  }
+  const config = configs.ark;
+  if (!config?.apiKey) throw new UnuTvError("provider_not_configured", "Credential is not configured for ark", 409);
+  const response = await fetchImpl(`${config.baseUrl}/contents/generations/tasks/${encodeURIComponent(task.taskId)}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", accept: "application/json" }
+  });
+  if (!response.ok) throw await responseError(response, "Ark video task cancellation failed");
+  let cancelResponse = {};
+  try { cancelResponse = await response.json(); } catch { /* Ark may return an empty body */ }
+  return {
+    ...input.run.result,
+    status: "canceled",
+    cancelResponse,
+    canceledAt: new Date().toISOString(),
+    cancelReason: input.reason || "owner_canceled"
+  };
+}
+
 export function createProviderRouter(options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
   const configured = () => {
@@ -464,6 +488,9 @@ export function createProviderRouter(options = {}) {
     },
     poll(input) {
       return pollVideo(input, configured(), fetchImpl);
+    },
+    cancel(input) {
+      return cancelVideo(input, configured(), fetchImpl);
     }
   };
 }

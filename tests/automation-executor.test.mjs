@@ -6,7 +6,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { createLocalRuntime } from "@ununu/unutv-local-runtime";
-import { CINEMATIC_SHOT_REVISION_REVIEW_TYPE, CINEMATIC_STORY_REVISION_REVIEW_TYPE, cinematicRevisionReviewTargetId } from "@ununu/unutv-contracts";
+import {
+  CINEMATIC_SHOT_REVISION_REVIEW_TYPE,
+  CINEMATIC_STORY_REVISION_REVIEW_TYPE,
+  cinematicRevisionReviewTargetId
+} from "@ununu/unutv-contracts";
 import { cinematicPerformance } from "./fixtures/cinematic-performance.mjs";
 
 const run = promisify(execFile);
@@ -67,9 +71,9 @@ test("the backend executor advances safe stages and pauses truthfully before mis
   assert.equal(tasks.find((task) => task.taskKey === "visual_bible").status, "reused");
   assert.equal(tasks.find((task) => task.taskKey === "asset_design").status, "reused");
   assert.equal(tasks.find((task) => task.taskKey === "shot_design").status, "succeeded");
-  const blocked = tasks.find((task) => task.taskKey === "prompt_compile");
+  const blocked = tasks.find((task) => task.taskKey === "previs_design");
   assert.equal(blocked.status, "blocked");
-  assert.ok(["generation_units_required", "video_execution_node_required"].includes(blocked.error.code), blocked.error.code);
+  assert.equal(blocked.error.code, "sequence_previs_owner_acceptance_required");
   assert.equal((await runtime.app.listAutomationCheckpoints({ projectId: project.id, automationRunId: started.run.id })).at(-1).reason, "automation_task_blocked");
   assert.equal((await runtime.app.listRuns({ projectId: project.id })).length, 0, "executor must not issue a Provider call while blocked");
   assert.equal((await runtime.app.listStoryboards({ projectId: project.id, productionId: production.productionId })).length, 1);
@@ -104,7 +108,7 @@ test("approved automatic sound generation persists one Provider run, polls safel
   const started = await runtime.app.startAutomation({ projectId: project.id, configuration: { mode: "script_to_master", execute: true, productionId: production.productionId, sourceNodeId: script.id } });
   let control = started.session;
   const operation = (idempotencyKey) => ({ actorType: "automation", actorId: "director", automationRunId: started.run.id, leaseId: control.leaseId, idempotencyKey });
-  for (const taskKey of ["script_analysis", "block_planning", "visual_bible", "asset_design", "shot_design", "prompt_compile", "image_generation", "video_generation"]) {
+  for (const taskKey of ["script_analysis", "block_planning", "visual_bible", "asset_design", "shot_design", "previs_design", "image_generation", "prompt_compile", "video_generation"]) {
     const claimed = await runtime.app.claimAutomationTask({ projectId: project.id, automationRunId: started.run.id, taskKey, operationContext: operation(`${taskKey}:claim`) });
     await runtime.app.completeAutomationTask({ projectId: project.id, automationRunId: started.run.id, taskId: claimed.id, output: { artifactRefs: [] }, operationContext: { ...operation(`${taskKey}:complete`), taskLeaseId: claimed.workerLeaseId } });
   }
@@ -137,7 +141,7 @@ test("approved automatic sound generation persists one Provider run, polls safel
   assert.deepEqual([submits, polls], [1, 1], "completed sound work never resubmits");
 });
 
-test("the 13-stage executor completes an imported-media production without Provider calls or duplicate renders", async (context) => {
+test("the 14-stage executor completes an imported-media production without Provider calls or duplicate renders", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-automation-complete-"));
   const runtime = createLocalRuntime({ dataRoot, recoverRenders: false, runAutomationExecutor: false });
   context.after(() => runtime.close());
@@ -158,6 +162,7 @@ test("the 13-stage executor completes an imported-media production without Provi
   const { project, canvas } = await runtime.app.createProject({ title: "全自动完整闭环" });
   const script = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "script", title: "结构化剧本" });
   const videoNode = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "video", title: "已批准视频" });
+  const qaNode = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "image", title: "审片三帧证据" });
   const audioNode = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "audio", title: "已批准环境音" });
   await runtime.app.createScriptRow({
     projectId: project.id,
@@ -292,9 +297,11 @@ test("the 13-stage executor completes an imported-media production without Provi
     videoVersionId: "accepted-shot-v1",
     videoChecksum: acceptedVideo.sha256
   });
-  await runtime.app.addEvaluation({ projectId: project.id, productionId: production.productionId, evaluation: {
+  const acceptedEvaluation = await runtime.app.addEvaluation({ projectId: project.id, productionId: production.productionId, evaluation: {
+    generationUnitId: unit.generationUnit.generationUnitId,
     sourceKind: "imported_media",
     sourceNodeId: videoNode.id,
+    evidenceNodeId: qaNode.id,
     mediaId: acceptedVideo.id,
     checksum: acceptedVideo.sha256,
     duration: 0.8,
@@ -310,8 +317,41 @@ test("the 13-stage executor completes an imported-media production without Provi
     failureResponsibilityLayer: "none",
     repairSuggestions: [],
     knowledgeFeedbackCandidates: [],
+    visibleEntityChecks: [],
+    vetoFindings: [],
+    takeObservation: {
+      observedStartState: { blocking: "角色位于车站大厅入口" },
+      observedEndState: { blocking: "角色抵达标记点并停稳" },
+      completedBeats: ["角色抵达标记点"],
+      incompleteBeats: [],
+      unexpectedCompletedBeats: [],
+      continuityBreaks: [],
+      acceptedDeviations: [],
+      confidence: "high",
+      uncertainties: []
+    },
+    canonReconciliation: {
+      status: "accepted",
+      acceptedObservedFacts: ["角色抵达标记点并停稳"],
+      rejectedObservedFacts: [],
+      promotedCompletedBeats: ["角色抵达标记点"],
+      carryForwardState: { blocking: "角色抵达标记点并停稳" },
+      nextUnitLocks: [],
+      rationale: "完整播放通过，实际出口状态与计划一致。"
+    },
+    retakeDisposition: {
+      type: "KEEP",
+      primaryFailureLayer: "none",
+      changedVariables: [],
+      reason: "候选完整可用",
+      nextAction: "进入时间线"
+    },
     revision: 1
   } });
+  const projectedQaNode = await runtime.projects.getNode(project.id, qaNode.id);
+  assert.equal(projectedQaNode.payload.cinematicEvaluationId, acceptedEvaluation.evaluationId);
+  assert.equal(projectedQaNode.payload.evaluationDecision, "ACCEPT");
+  assert.equal(projectedQaNode.payload.evaluatedMediaId, acceptedVideo.id);
   const timeline = await runtime.app.createTimeline({ projectId: project.id, title: "全自动主时间线", frameRate: 24, width: 64, height: 64 });
   const started = await runtime.app.startAutomation({
     projectId: project.id,
@@ -332,12 +372,122 @@ test("the 13-stage executor completes an imported-media production without Provi
       terminal = result;
       break;
     }
-    assert.notEqual(result.status, "blocked", result.error?.message);
+    if (result.status === "blocked" && result.error?.code === "sequence_previs_owner_acceptance_required") {
+      for (const mediaId of result.error.details.frameMediaIds) {
+        await runtime.app.reviewTarget({
+          projectId: project.id,
+          targetType: "media",
+          targetId: mediaId,
+          state: "accepted",
+          note: "测试完整播放并接受低模预演帧",
+          operationContext: {
+            actorType: "owner_gate",
+            actorId: "test-owner-gate",
+            automationRunId: started.run.id
+          }
+        });
+      }
+      await runtime.app.reviewSequencePrevis({
+        projectId: project.id,
+        productionId: production.productionId,
+        sequencePrevisId: result.error.details.sequencePrevisId,
+        revision: result.error.details.revision,
+        state: "accepted",
+        note: "测试接受完整连续预演"
+      });
+      const currentTask = (await runtime.app.listAutomationTasks({
+        projectId: project.id,
+        automationRunId: started.run.id
+      })).find((task) => task.taskKey === "previs_design");
+      if (currentTask.status === "blocked") {
+        await runtime.app.retryAutomationTask({
+          projectId: project.id,
+          automationRunId: started.run.id,
+          taskId: currentTask.id
+        });
+      }
+      continue;
+    }
+    if (result.status === "blocked" && result.error?.code === "sequence_previs_frame_pixel_acceptance_required") {
+      for (const target of result.error.details.targets || []) {
+        await runtime.app.reviewTarget({
+          projectId: project.id,
+          targetType: "media",
+          targetId: target.mediaId,
+          state: "accepted",
+          note: "测试逐像素接受当前低模预演帧",
+          operationContext: {
+            actorType: "owner_gate",
+            actorId: "test-owner-gate",
+            automationRunId: started.run.id
+          }
+        });
+      }
+      await runtime.app.retryAutomationTask({
+        projectId: project.id,
+        automationRunId: started.run.id,
+        taskId: result.task.id
+      });
+      continue;
+    }
+    if (result.status === "blocked" && result.error?.code === "shot_script_owner_acceptance_required") {
+      const currentShots = await runtime.app.listShots({
+        projectId: project.id,
+        productionId: production.productionId
+      });
+      for (const currentShot of currentShots) {
+        await runtime.app.reviewTarget({
+          projectId: project.id,
+          targetType: CINEMATIC_SHOT_REVISION_REVIEW_TYPE,
+          targetId: cinematicRevisionReviewTargetId("shot", currentShot.shotId, currentShot.revision),
+          state: "accepted",
+          note: "测试接受结构化运镜投影后的当前镜头版本",
+          operationContext: {
+            actorType: "owner_gate",
+            actorId: "test-owner-gate",
+            automationRunId: started.run.id
+          }
+        });
+      }
+      await runtime.app.retryAutomationTask({
+        projectId: project.id,
+        automationRunId: started.run.id,
+        taskId: result.task.id
+      });
+      continue;
+    }
+    if (result.status === "blocked" && result.error?.code === "automation_generation_unit_preflight_failed") {
+      const currentShots = await runtime.app.listShots({
+        projectId: project.id,
+        productionId: production.productionId
+      });
+      for (const currentShot of currentShots) {
+        await runtime.app.reviewTarget({
+          projectId: project.id,
+          targetType: CINEMATIC_SHOT_REVISION_REVIEW_TYPE,
+          targetId: cinematicRevisionReviewTargetId("shot", currentShot.shotId, currentShot.revision),
+          state: "accepted",
+          note: "测试接受已绑定低模预演的当前镜头版本",
+          operationContext: {
+            actorType: "owner_gate",
+            actorId: "test-owner-gate",
+            automationRunId: started.run.id
+          }
+        });
+      }
+      await runtime.app.retryAutomationTask({
+        projectId: project.id,
+        automationRunId: started.run.id,
+        taskId: result.task.id
+      });
+      continue;
+    }
+    assert.notEqual(result.status, "blocked", JSON.stringify(result.error || result));
     if (result.status === "waiting") await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  assert.ok(terminal, "expected all 13 automation stages to complete");
+  assert.ok(terminal, "expected all 14 automation stages to complete");
   const tasks = await runtime.app.listAutomationTasks({ projectId: project.id, automationRunId: started.run.id });
-  assert.equal(tasks.length, 13);
+  assert.equal(tasks.length, 14);
   assert.equal(tasks.every((task) => ["succeeded", "reused"].includes(task.status)), true);
   assert.equal((await runtime.app.listRuns({ projectId: project.id })).filter((run) => run.provider !== "local_import").length, 0, "imported media must not trigger a Provider run");
   assert.equal((await runtime.app.listRenderJobs({ projectId: project.id, timelineId: timeline.id })).length, 1);

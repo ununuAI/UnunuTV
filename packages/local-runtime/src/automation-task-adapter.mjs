@@ -65,6 +65,46 @@ export function attachAutomationTaskMethods(prototype, emitEvent) {
     emitEvent(database, "automation.task_changed", task.id, { automationRunId: task.automationRunId, status: task.status, stage: task.stage });
     return taskRow(database.prepare("SELECT * FROM automation_tasks WHERE id=?").get(task.id));
   };
+  prototype.claimAutomationTaskRecord = function claimAutomationTaskRecord(projectId, task) {
+    const database = this.database(projectId);
+    const changed = database.prepare(`
+      UPDATE automation_tasks
+      SET status=?, budget_reservation_id=?, worker_lease_id=?, heartbeat_at=?, lease_expires_at=?,
+          input_json=?, output_json=?, error_json=?, attempt=?, updated_at=?, started_at=?, completed_at=?
+      WHERE id=? AND automation_run_id=? AND status IN ('queued', 'failed')
+    `).run(
+      task.status,
+      task.budgetReservationId,
+      task.workerLeaseId,
+      task.heartbeatAt,
+      task.leaseExpiresAt,
+      JSON.stringify(task.input ?? {}),
+      task.output === null ? null : JSON.stringify(task.output),
+      task.error === null ? null : JSON.stringify(task.error),
+      task.attempt,
+      task.updatedAt,
+      task.startedAt,
+      task.completedAt,
+      task.id,
+      task.automationRunId
+    );
+    const current = taskRow(database.prepare("SELECT * FROM automation_tasks WHERE id=?").get(task.id));
+    if (!changed.changes) {
+      if (!current) throw new UnuTvError("automation_task_not_found", `Automation task not found: ${task.id}`, 404);
+      throw new UnuTvError(
+        "automation_task_already_claimed",
+        `Task ${task.id} is already ${current.status} under worker lease ${current.workerLeaseId ?? "none"}`,
+        409,
+        { taskId: task.id, status: current.status, workerLeaseId: current.workerLeaseId, leaseExpiresAt: current.leaseExpiresAt }
+      );
+    }
+    emitEvent(database, "automation.task_changed", task.id, {
+      automationRunId: task.automationRunId,
+      status: task.status,
+      stage: task.stage
+    });
+    return current;
+  };
   prototype.createAutomationTaskActivity = function createAutomationTaskActivity(projectId, activity) {
     const database = this.database(projectId);
     const existing = activityRow(database.prepare("SELECT * FROM automation_task_activities WHERE task_id=? AND idempotency_key=?").get(activity.taskId, activity.idempotencyKey));

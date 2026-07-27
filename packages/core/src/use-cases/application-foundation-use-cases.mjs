@@ -237,6 +237,44 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     }
   }
 
+  async function cancelRun(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const runId = requireText(input.runId, "runId");
+    const run = await ports.projects.getRun(projectId, runId);
+    if (!run) throw new UnuTvError("run_not_found", `Run not found: ${runId}`, 404);
+    if (run.status === "canceled") return run;
+    if (!["queued", "running"].includes(run.status)) {
+      throw new UnuTvError("run_cancel_unavailable", `Only a queued or running Provider run can be canceled: ${run.status}`, 409);
+    }
+    if (typeof ports.provider.cancel !== "function") {
+      throw new UnuTvError("provider_cancel_unsupported", `Provider cancellation is unavailable for ${run.provider}`, 409);
+    }
+    const node = await ports.projects.getNode(projectId, run.nodeId);
+    if (!node) throw new UnuTvError("node_not_found", `Node not found: ${run.nodeId}`, 404);
+    const result = await ports.provider.cancel({
+      projectId,
+      node,
+      run,
+      reason: optionalText(input.reason, "owner_canceled")
+    });
+    const canceled = await ports.projects.finishRun(projectId, run.id, "canceled", result);
+    if (node.payload?.providerRunId === run.id) {
+      await updateNode({
+        projectId,
+        nodeId: node.id,
+        expectedRevision: node.revision,
+        payload: {
+          ...node.payload,
+          generationStatus: "canceled",
+          generationPhase: "canceled",
+          generationMessage: "Provider 任务已取消",
+          providerRunId: run.id
+        }
+      });
+    }
+    return canceled;
+  }
+
   async function setWorkflowLayer(input = {}) {
     return ports.projects.setWorkflowLayer(requireText(input.projectId, "projectId"), {
       layer: requireEnum(input.layer, WORKFLOW_LAYERS, "layer"),
@@ -269,7 +307,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
   async function listRuns(input = {}) { return ports.projects.listRuns(requireText(input.projectId, "projectId")); }
 
   return {
-    addGroupMember, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
+    addGroupMember, cancelRun, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
     disconnectEdge, finishProviderResult, getDirectorStage, getPanorama, getProviderSettings, getWorkflow,
     listProjects, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode,
     saveDirectorStage, setPanorama, setWorkflowLayer, updateNode, updateProject, updateProviderSettings

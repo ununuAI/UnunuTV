@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { automationAgentLabel, automationFlowSummary, automationFlowTasks, automationFlowWaves, automationStageLabel, automationStatusLabel, automationTaskDuration } from "../apps/web/src/automation-flow-view-model.js";
 
-test("full-auto task flow is visible as a 13-step plan before a run starts", () => {
+test("full-auto task flow is visible as a 14-step plan before a run starts", () => {
   const tasks = automationFlowTasks([]);
-  assert.equal(tasks.length, 13);
+  assert.equal(tasks.length, 14);
   assert.equal(tasks[0].stage, "script_analysis");
   assert.equal(tasks[0].status, "planned");
   assert.deepEqual(tasks.find((task) => task.stage === "continuity_qa").dependencies, ["video_generation", "sound_design"]);

@@ -203,7 +203,18 @@ export function createProjectControlUseCases(ports) {
 
   async function resumeAutomation(input = {}) {
     let session = await current(input);
-    if (!["auto_paused", "auto_failed"].includes(session.state)) throw new UnuTvError("automation_not_resumable", "Only paused or failed automation can resume", 409, { state: session.state });
+    if (!["auto_paused", "auto_failed", "manual_editable"].includes(session.state)) {
+      throw new UnuTvError("automation_not_resumable", "Only paused, failed or explicitly taken-over automation can resume", 409, { state: session.state });
+    }
+    if (session.state === "manual_editable") {
+      const takenOverRun = await ports.projects.getAutomationRun(session.projectId, session.automationRunId);
+      if (takenOverRun?.status !== "taken_over") {
+        throw new UnuTvError("automation_not_resumable", "Manual mode can resume only the current explicitly taken-over automation", 409, { runStatus: takenOverRun?.status ?? null });
+      }
+      // Re-enter through auto_starting so the state machine records that
+      // owner edits are complete before the same run regains its lease.
+      session = await transition(session, "auto_starting", { endedAt: null });
+    }
     const restoredCheckpoint = session.checkpointId ? await ports.projects.getAutomationCheckpoint(session.projectId, session.checkpointId) : null;
     const timestamp = nowIso();
     const recoveredTasks = await recoverRunningTasks(session, { force: true, recoveryNumber: session.recoveryCount + 1 });
@@ -222,7 +233,7 @@ export function createProjectControlUseCases(ports) {
       }
     });
     const run = await ports.projects.getAutomationRun(session.projectId, session.automationRunId);
-    await ports.projects.updateAutomationRun(session.projectId, { ...run, status: "running", updatedAt: session.updatedAt });
+    await ports.projects.updateAutomationRun(session.projectId, { ...run, status: "running", updatedAt: session.updatedAt, completedAt: null });
     return { session, run: await ports.projects.getAutomationRun(session.projectId, session.automationRunId) };
   }
 

@@ -1,7 +1,7 @@
 /** Platform OS contracts: nextAction, series, shared assets, continuity ledger. */
 
 export const NEXT_ACTION_TYPES = Object.freeze([
-  "advance", "run_worker", "owner_gate", "repair", "wait_provider",
+  "author_episode", "advance", "run_worker", "owner_gate", "repair", "wait_provider",
   "promote_asset", "commit_ledger", "done", "failed"
 ]);
 

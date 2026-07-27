@@ -333,7 +333,7 @@ test("cinematic production API completes contracts through compile and preflight
     }]
   }).then((response) => response.json());
   const handoffCompilation = await send(`${productionRoot}/generation-units/${handoffUnit.generationUnit.generationUnitId}/compile`, "POST", {}).then((response) => response.json());
-  assert.equal(handoffCompilation.envelope.compilerVersion, "3.4.0");
+  assert.equal(handoffCompilation.envelope.compilerVersion, "3.5.0");
   assert.equal(handoffCompilation.envelope.generationControl.frameAnchorPolicy.firstFrameScope, "t0_boundary_only");
   assert.match(handoffCompilation.envelope.compiledContentPrompt, /以上一段 H1 为唯一入口直接续演新动作/u);
   assert.match(handoffCompilation.envelope.compiledContentPrompt, /首帧职责：只锁定 t0 的初始\/续接边界；t0\+1 起/u);

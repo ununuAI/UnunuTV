@@ -35,4 +35,9 @@ test("project control persists full-auto read-only, pause and owner takeover", a
   assert.equal((await runtime.app.updateNode({ projectId: project.id, nodeId: node.id, title: "用户接管" })).title, "用户接管");
   assert.equal((await runtime.app.listAutomationRuns({ projectId: project.id }))[0].status, "taken_over");
   assert.equal((await runtime.app.listAutomationCheckpoints({ projectId: project.id, automationRunId: started.run.id })).length, 2);
+
+  const resumed = await runtime.app.resumeAutomation({ projectId: project.id, automationRunId: started.run.id });
+  assert.equal(resumed.session.state, "auto_running");
+  assert.equal(resumed.run.status, "running");
+  assert.equal(resumed.run.completedAt, null);
 });

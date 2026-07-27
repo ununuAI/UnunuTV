@@ -277,7 +277,11 @@ function unitLockedText(storyPacket, shots) {
 
 function renderStyle(visualBible, shots) {
   const firstShot = shots[0] ?? {};
-  return terminateCinematicSentence([firstShot.cinematography?.format, visualBible.cinematography?.grammar, visualBible.cinematography?.lensPreference, visualBible.performance?.baseline]
+  const contentFormat = cleanCinematicText(firstShot.cinematography?.format)
+    .replace(/(?:16\s*:\s*9|9\s*:\s*16|1\s*:\s*1)/giu, "")
+    .replace(/\s{2,}/gu, " ")
+    .trim();
+  return terminateCinematicSentence([contentFormat, visualBible.cinematography?.grammar, visualBible.cinematography?.lensPreference, visualBible.performance?.baseline]
     .map(cleanCinematicText).filter(Boolean).join("，"));
 }
 

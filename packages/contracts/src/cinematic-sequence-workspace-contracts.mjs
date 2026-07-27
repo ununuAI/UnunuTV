@@ -4,7 +4,7 @@ export const CINEMATIC_CUT_TRANSITIONS = Object.freeze(["cut", "match_cut", "aud
 
 function record(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function text(value) { return typeof value === "string" ? value.trim() : ""; }
-function issue(path, message, code = "invalid_field") { return { code, message, path }; }
+function issue(path, message, code = "invalid_field", details = {}) { return { code, message, path, ...details }; }
 function output(issues) { return Object.freeze({ issues: Object.freeze(issues), ok: issues.length === 0 }); }
 function requiredText(value, path, issues) { if (!text(value)) issues.push(issue(path, `${path} is required`, "required")); }
 function requiredArray(value, path, issues, minimum = 0) {
@@ -135,7 +135,12 @@ function auditPrevisStructure(sequencePrevis, { mediaRecords = [], reviews = [] 
       const media = mediaById.get(shot.frameMediaId);
       if (!media || media.kind !== "image") errors.push(issue("shots", `${shot.shotId} 的预演帧不是项目内真实图像媒体。`, "sequence_previs_frame_media_invalid"));
       const review = latestTargetReview(reviews, "media", shot.frameMediaId);
-      if (review?.state !== "accepted") errors.push(issue("shots", `${shot.shotId} 的预演帧缺少最新像素 ACCEPT。`, "sequence_previs_frame_pixel_acceptance_required"));
+      if (review?.state !== "accepted") errors.push(issue(
+        "shots",
+        `${shot.shotId} 的预演帧缺少最新像素 ACCEPT。`,
+        "sequence_previs_frame_pixel_acceptance_required",
+        { targetType: "media", targetId: shot.frameMediaId, mediaId: shot.frameMediaId, shotId: shot.shotId }
+      ));
     }
     cursor = shot.endSeconds;
   }
@@ -174,7 +179,17 @@ export function auditSequencePrevisForGeneration({ generationUnit, mediaRecords 
   }
   const targetId = sequencePrevis ? cinematicSequencePrevisReviewTargetId(sequencePrevis.sequencePrevisId, sequencePrevis.revision) : "";
   const review = latestReview(reviews, targetId);
-  if (review?.state !== "accepted") errors.push(issue("review", "连续预演当前版本必须获得最新 Owner ACCEPT。", "sequence_previs_owner_acceptance_required"));
+  if (review?.state !== "accepted") errors.push(issue(
+    "review",
+    "连续预演当前版本必须获得最新 Owner ACCEPT。",
+    "sequence_previs_owner_acceptance_required",
+    {
+      targetType: CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE,
+      targetId,
+      revision: sequencePrevis?.revision ?? null,
+      sequencePrevisId: sequencePrevis?.sequencePrevisId ?? null
+    }
+  ));
   const contextValidation = validateVisualContextBundle(visualContextBundle);
   errors.push(...contextValidation.issues);
   if (visualContextBundle?.visualContextBundleId !== binding.visualContextBundleId) errors.push(issue("visualContextBundleId", "生成单元绑定的视觉上下文与实际编译上下文不一致。", "visual_context_bundle_mismatch"));

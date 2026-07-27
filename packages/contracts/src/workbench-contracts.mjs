@@ -11,7 +11,7 @@ export const CONTROL_SESSION_STATES = Object.freeze([
 
 export const AUTOMATION_WRITABLE_STATES = Object.freeze(["auto_starting", "auto_running"]);
 export const PROJECT_READ_ONLY_STATES = Object.freeze(CONTROL_SESSION_STATES.filter((state) => state !== "manual_editable"));
-export const OPERATION_ACTOR_TYPES = Object.freeze(["owner", "automation"]);
+export const OPERATION_ACTOR_TYPES = Object.freeze(["owner", "owner_gate", "automation"]);
 export const AUTOMATION_RUN_STATES = Object.freeze([
   "starting",
   "running",

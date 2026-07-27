@@ -311,16 +311,26 @@ export function createStoryboardUseCases(ports, dependencies = {}) {
     const storyboardId = requireText(input.storyboardId, "storyboardId");
     const storyboard = await requireStoryboard(projectId, productionId, storyboardId);
     const summaries = await listTimelines(projectId);
-    let timelineId = input.timelineId ? requireText(input.timelineId, "timelineId") : summaries[0]?.id;
+    const requestedFrameRate = Math.max(1, Math.round(Number(input.frameRate) || 30));
+    const requestedWidth = Math.max(16, Math.round(Number(input.width) || 1920));
+    const requestedHeight = Math.max(16, Math.round(Number(input.height) || 1080));
+    const matchingTimeline = summaries.find((entry) => (
+      Number(entry.frameRate) === requestedFrameRate
+      && Number(entry.width) === requestedWidth
+      && Number(entry.height) === requestedHeight
+    ));
+    let timelineId = input.timelineId
+      ? requireText(input.timelineId, "timelineId")
+      : matchingTimeline?.id;
     if (!timelineId) {
       const timestamp = nowIso();
       const created = await createTimeline(projectId, {
         id: createId("timeline"),
         title: optionalText(input.timelineTitle, "主时间线"),
-        frameRate: 30,
-        width: 1920,
-        height: 1080,
-        colorSpace: "Rec.709",
+        frameRate: requestedFrameRate,
+        width: requestedWidth,
+        height: requestedHeight,
+        colorSpace: optionalText(input.colorSpace, "Rec.709"),
         tracks: [
           { id: createId("track"), kind: "video", name: "主视频轨", order: 0, locked: false, visible: true, muted: false, solo: false, color: "#294e98", payload: {}, createdAt: timestamp, updatedAt: timestamp },
           { id: createId("track"), kind: "audio", name: "主音频轨", order: 1, locked: false, visible: true, muted: false, solo: false, color: "#9c27b0", payload: {}, createdAt: timestamp, updatedAt: timestamp },

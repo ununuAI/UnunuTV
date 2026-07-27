@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { parseJson, UnuTvError } from "@ununu/unutv-contracts";
 import { createLocalRuntime } from "@ununu/unutv-local-runtime";
 import { executeCinematicSequenceCommand } from "./cinematic-sequence-commands.mjs";
@@ -39,6 +40,13 @@ function numeric(flags, name, fallback) {
 
 function objectFlag(flags, name, fallback = {}) {
   return parseJson(flags[name], fallback);
+}
+
+function objectFileOrFlag(flags, fileName = "file", dataName = "data", fallback = {}) {
+  if (typeof flags[fileName] === "string" && flags[fileName].trim()) {
+    return parseJson(readFileSync(flags[fileName], "utf8"), fallback);
+  }
+  return objectFlag(flags, dataName, fallback);
 }
 
 function booleanFlag(flags, name, fallback = false) {
@@ -92,13 +100,14 @@ Usage:
   ununu-unutv prompt get|save --project ID --node ID [--data '{}']
   ununu-unutv grid compose --project ID --node ID [--title 标题]
   ununu-unutv image-edit save --project ID --node ID --file /absolute/path [--data '{}']
-  ununu-unutv run poll --project ID --run ID
+  ununu-unutv run poll|cancel --project ID --run ID [--reason TEXT]
   ununu-unutv edge connect --project ID --canvas ID --from ID --to ID [--role input]
   ununu-unutv edge delete --project ID --edge ID
   ununu-unutv group create --project ID --canvas ID [--title 标题]
   ununu-unutv group add --project ID --group ID --node ID
   ununu-unutv media import --project ID --file /absolute/path [--node ID --kind image|video|audio|world --generated]
   ununu-unutv media extract-frame --project ID --media ID --seconds 3.9 [--node ID --title 标题]
+  ununu-unutv media qa-sheet --project ID --media ID --node ID [--data '{"times":[0.5,6,11.5]}' --title 标题]
   ununu-unutv media publish --project ID --media ID [--provider ark --expires 86400]
   ununu-unutv media prepare|preparation --project ID --media ID [--force]
   ununu-unutv asset create|list ...
@@ -127,6 +136,9 @@ Usage:
     (compatibility alias to the same canonical workflow; never a direct Provider path)
   ununu-unutv workflow cinematic-start --project ID --production ID --source-node ID [--target-duration 30] [--series ID --episode N] [--data '{}']
   ununu-unutv workflow cinematic-status --project ID [--automation-run ID]
+  ununu-unutv workflow cinematic-author --project ID [--automation-run ID] --file /absolute/episode-package.json
+  ununu-unutv workflow canvas-reflow --project ID [--automation-run ID]
+  ununu-unutv workflow provider-reconcile --project ID [--automation-run ID]
   ununu-unutv workflow cinematic-advance --project ID [--automation-run ID]
   ununu-unutv workflow owner-decide --project ID --data '{"targetType":"...","targetId":"...","state":"accepted"}'
   ununu-unutv series create|list|get|create-episode|assets|promote-asset|ledger|ledger-commit [--series ID --project ID --data '{}']
@@ -209,6 +221,19 @@ async function execute(app, positionals, flags) {
     configuration: objectFlag(flags, "data")
   });
   if (area === "workflow" && action === "cinematic-status") return app.getCinematicWorkflowStatus({ projectId: required(flags, "project"), automationRunId: flags["automation-run"] || undefined });
+  if (area === "workflow" && action === "cinematic-author") return app.authorEpisode({
+    projectId: required(flags, "project"),
+    automationRunId: flags["automation-run"] || undefined,
+    package: objectFileOrFlag(flags)
+  });
+  if (area === "workflow" && action === "canvas-reflow") return app.reflowCinematicCanvas({
+    projectId: required(flags, "project"),
+    automationRunId: flags["automation-run"] || undefined
+  });
+  if (area === "workflow" && action === "provider-reconcile") return app.reconcileProviderSubmission({
+    projectId: required(flags, "project"),
+    automationRunId: flags["automation-run"] || undefined
+  });
   if (area === "workflow" && action === "cinematic-advance") return app.advanceCinematicWorkflow({ projectId: required(flags, "project"), automationRunId: flags["automation-run"] || undefined });
   if (area === "workflow" && action === "owner-decide") return app.ownerDecision({ projectId: required(flags, "project"), ...objectFlag(flags, "data") });
   if (area === "series" && action === "create") return app.createSeries(objectFlag(flags, "data"));
@@ -264,12 +289,14 @@ async function execute(app, positionals, flags) {
   if (area === "grid" && action === "compose") return app.composeGridNode({ projectId: required(flags, "project"), nodeId: required(flags, "node"), title: flags.title });
   if (area === "image-edit" && action === "save") return app.saveImageEditResult({ projectId: required(flags, "project"), nodeId: required(flags, "node"), filePath: required(flags, "file"), title: flags.title, document: objectFlag(flags, "data") });
   if (area === "run" && action === "poll") return app.pollRun({ projectId: required(flags, "project"), runId: required(flags, "run") });
+  if (area === "run" && action === "cancel") return app.cancelRun({ projectId: required(flags, "project"), runId: required(flags, "run"), reason: flags.reason });
   if (area === "edge" && action === "connect") return app.connectEdge({ projectId: required(flags, "project"), canvasId: required(flags, "canvas"), fromNodeId: required(flags, "from"), toNodeId: required(flags, "to"), role: flags.role });
   if (area === "edge" && action === "delete") return app.disconnectEdge({ projectId: required(flags, "project"), edgeId: required(flags, "edge") });
   if (area === "group" && action === "create") return app.createGroup({ projectId: required(flags, "project"), canvasId: required(flags, "canvas"), title: flags.title, x: numeric(flags, "x", 0), y: numeric(flags, "y", 0), width: numeric(flags, "width", 960), height: numeric(flags, "height", 640) });
   if (area === "group" && action === "add") return app.addGroupMember({ projectId: required(flags, "project"), groupId: required(flags, "group"), nodeId: required(flags, "node") });
   if (area === "media" && action === "import") return app.importMedia({ projectId: required(flags, "project"), filePath: required(flags, "file"), nodeId: flags.node, kind: flags.kind, generated: Boolean(flags.generated), title: flags.title });
   if (area === "media" && action === "extract-frame") return app.extractMediaFrame({ projectId: required(flags, "project"), mediaId: required(flags, "media"), seconds: numeric(flags, "seconds"), nodeId: flags.node, title: flags.title });
+  if (area === "media" && action === "qa-sheet") return app.createVideoQaContactSheet({ projectId: required(flags, "project"), mediaId: required(flags, "media"), nodeId: required(flags, "node"), title: flags.title, ...objectFlag(flags, "data") });
   if (area === "media" && action === "publish") return app.publishMedia({ projectId: required(flags, "project"), mediaId: required(flags, "media"), provider: flags.provider, expiresInSeconds: numeric(flags, "expires", 86400) });
   if (area === "media" && action === "prepare") return app.prepareMedia({ projectId: required(flags, "project"), mediaId: required(flags, "media"), force: booleanFlag(flags, "force") });
   if (area === "media" && action === "preparation") return app.getMediaPreparation({ projectId: required(flags, "project"), mediaId: required(flags, "media") });

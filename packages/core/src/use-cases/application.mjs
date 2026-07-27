@@ -40,13 +40,17 @@ export function createApplication(ports) {
   const { getNodePrompt, saveNodePrompt } = createNodePromptUseCases(ports);
   const foundation = createApplicationFoundationUseCases({ ports, saveNodePrompt });
   const {
-    addGroupMember, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
+    addGroupMember, cancelRun, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
     disconnectEdge, getDirectorStage, getPanorama, getProviderSettings, getWorkflow, listProjects, listReviews, listRuns,
     openCanvas, openProject, pollRun, restoreNode, runNode, saveDirectorStage, setPanorama, setWorkflowLayer,
     updateNode, updateProject, updateProviderSettings
   } = foundation;
   const { createScriptRow, deleteScriptRow, getScriptDocument, updateScriptRow } = createScriptUseCases(ports);
-  const { extractMediaFrame, getMediaPreparation, importDataMedia, importMedia, prepareMedia, publishMedia } = createMediaUseCases(ports);
+  const { createVideoQaContactSheet, extractMediaFrame, getMediaPreparation, importDataMedia, importMedia, prepareMedia, publishMedia } = createMediaUseCases(ports, {
+    createNode: (input) => createNode(input),
+    updateNode: (input) => updateNode(input),
+    connectEdge: (input) => connectEdge(input)
+  });
   const { addAssetVersion, createAsset, listAssets } = createAssetUseCases(ports);
   const budget = createBudgetUseCases(ports);
   const projectControl = createProjectControlUseCases(ports);
@@ -89,6 +93,12 @@ export function createApplication(ports) {
   const automationExecutor = createAutomationExecutorUseCases(ports, {
     agentContext, automationTasks, authorities: cinematicAssetAuthority, budget, cinematic: cinematicProduction, getScriptDocument,
     knowledge: ports.knowledge ?? null, createNode: (input) => createNode(input),
+    updateNode: (input) => updateNode(input),
+    connectEdge: (input) => connectEdge(input),
+    saveDirectorStage: (input) => saveDirectorStage(input),
+    getDirectorStage: (input) => getDirectorStage(input),
+    directorCinematic,
+    sequenceWorkspace,
     listAssets, pollRun: (input) => pollRun(input), projectControl, render: renderJobs, runNode: (input) => runNode(input), scriptPlanning, storyboards: storyboard, timeline
   });
   const cinematicWorkflow = createCinematicWorkflowUseCases(ports, {
@@ -104,7 +114,12 @@ export function createApplication(ports) {
     skillContext: ports.skillContext,
     createScriptRow,
     getScriptDocument,
-    scriptPlanning
+    updateScriptRow,
+    scriptPlanning,
+    createNode: (input) => createNode(input),
+    updateNode: (input) => updateNode(input),
+    connectEdge: (input) => connectEdge(input),
+    sequenceWorkspace
   });
   const cinematicWorkflowEntry = createCinematicWorkflowEntryUseCases({
     createProject: (input) => createProject(input),
@@ -119,6 +134,10 @@ export function createApplication(ports) {
       cinematic: cinematicProduction,
       projects: ports.projects,
       storyboards: storyboard,
+      sequenceWorkspace,
+      createNode: (value) => createNode(value),
+      updateNode: (value) => updateNode(value),
+      connectEdge: (value) => connectEdge(value),
       generationStrategies: input.generationStrategies || {},
       aspectRatio: input.aspectRatio,
       referenceBindings: input.referenceBindings || [],
@@ -253,6 +272,7 @@ export function createApplication(ports) {
     ...sequenceWorkspace,
     addAssetVersion,
     addGroupMember,
+    cancelRun,
     connectEdge,
     createCanvas,
     createAsset,
@@ -261,6 +281,7 @@ export function createApplication(ports) {
     restoreNode,
     createProject,
     createScriptRow,
+    createVideoQaContactSheet,
     deleteNode,
     deleteGroup,
     deleteScriptRow,

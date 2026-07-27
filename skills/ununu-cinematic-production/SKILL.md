@@ -22,6 +22,12 @@ is its agent contract.
 Treat UnuTV as an **AI-video low-poly previs and shot-control console**, not a
 simplified Blender, a Prompt form, or a generic node-graph wrapper.
 
+The Director Skill is the directing-language blueprint and quality floor, not
+the product ceiling. This Skill owns the complete industrial path around it:
+development, series canon, pre-production, reusable authority, production,
+post-production, delivery and cross-episode memory. Do not stop after writing
+assets, a shot list, Provider prompts or a previs.
+
 Use low-detail geometry to lock what AI video is bad at preserving:
 
 - scene topology, portals, zones, scale, collision and occlusion;
@@ -68,6 +74,25 @@ Before the first mutation in a task, read
 
 Every source, contract, stage, request, candidate and delivery artifact must
 bind a real node on the project's one visible canvas.
+
+Canvas projection must be collision-free. Expanded node rectangles require a
+visible gutter; no asset, Shot, Previs, Prompt, candidate, timeline or delivery
+node may overlap another production node. When current node dimensions or a new
+stage create a collision, status must return `canvas_nodes_overlap` and the
+Agent must execute `workflow canvas-reflow` before continuing.
+
+The Agent must repeat the collision audit after timeline, candidate-render,
+delivery-QC, or manifest nodes are added. A completed episode is not
+deliverable until the final `cinematic-status` reports no
+`canvas_nodes_overlap` blocker. Browser appearance alone is not proof of a
+collision-free canvas.
+
+The main timeline must inherit the workflow delivery frame rate, width, height
+and color space. An `ACCEPT + FIX_IN_POST` evaluation remains a hard render
+gate until a timeline marker records the evaluation ID, completed repair
+status, deterministic editorial action and full-playback verification. After
+that evidence is persisted, `cinematic-advance` may retry the blocked render
+stage without duplicating any Provider intent.
 
 Required examples:
 
@@ -157,21 +182,67 @@ facts or silently skipping a gate.
     render and contract simulation. Image generation may iterate freely because
     it is the low-cost exploration surface, but every candidate remains
     versioned and canvas-visible. Do not use paid video rerolls to discover a
-    blocking, camera or continuity mistake.
+    blocking, camera or continuity mistake. Every per-Shot storyboard image
+    must compile a single frozen keyframe even when the batch omitted an
+    explicit keyframe moment: derive it deterministically from the accepted
+    Shot turning point, ending state or story beat. The resulting pixels must
+    be one full-frame exposure in one continuous space; reject and regenerate
+    collages, split screens, montage grids, contact sheets or repeated-time
+    layouts before video Prompt compilation.
 11. **Record formal-generation intent**: bind the exact GenerationUnit
     revision, compilation/payload hash, accepted previs revision, output node,
     Provider/model and a maximum of one new submission. A changed source makes
     the intent stale.
 12. **Submit once**: use a stable idempotency key. Poll an unresolved request;
-    never submit a replacement while outcome is unknown.
+    never submit a replacement while outcome is unknown. When status returns
+    `paid_submission_outcome_unknown`, execute only the persisted
+    `workflow provider-reconcile` action. The Skill may abandon and requeue an
+    unconfirmed `provider_account` image intent because images are the declared
+    zero-cost exploration surface. It must never automatically abandon,
+    duplicate or replace an unknown video/audio submission. A recovered
+    synchronous Ununu image run that has lost its original worker and remains
+    unresolved for five minutes must become this explicit reconciliation
+    action instead of holding the episode for the Provider's full timeout.
 13. **Review actual time**: inspect the complete candidate, record actual
     phases, usable range, vetoes, entry/exit state and ACCEPT/PARTIAL/REJECT.
-    Candidate media is never implicit ACCEPT.
+    Candidate media is never implicit ACCEPT. Bind each evaluation to that
+    Shot's visible three-frame QA evidence node, but also play the complete
+    candidate from start to end; a contact sheet never substitutes for
+    full-timeline review.
 14. **Continue from accepted reality**: compile the next unit from the latest
     accepted actual exit state, not planned state or chat memory.
 15. **Edit, sound, render and deliver**: assemble only accepted ranges; bind
     render output to a visible node; run technical QC; create a traceable
     delivery manifest.
+
+The persisted runtime expresses that work as one authored episode gate plus
+exactly these 14 ordered stages:
+
+```text
+author_episode
+  → script_analysis
+  → block_planning
+  → visual_bible
+  → asset_design
+  → shot_design
+  → previs_design
+  → image_generation
+  → prompt_compile
+  → video_generation
+  → sound_design
+  → continuity_qa
+  → timeline_edit
+  → candidate_render
+  → delivery_qc
+```
+
+`author_episode` must atomically write one complete
+`EpisodeAuthoringPackageV1`: StoryPacket, VisualBible and all structured
+episode rows with exact total duration. `previs_design` must project real
+low-poly frames, actor paths, camera routes, POV state, cuts and per-shot
+visual context before it may unlock reference-image generation. Binding an
+accepted previs creates a new Shot revision; that exact revision requires a
+new Owner acceptance before paid video preflight.
 
 ## Director Stage minimum contract
 
@@ -258,6 +329,13 @@ Use `VisualTakeMemory` and `CinematicEvaluationRecord` for real observed
 screen state. Only the latest ACCEPT may update canon, supply a continuation
 frame or unlock editorial stages.
 
+Continuity QA is complete only when every active GenerationUnit has one latest
+evaluation for its current candidate, with real take observation and accepted
+canon reconciliation. One accepted Shot never unlocks the rest of an episode.
+For units whose execution gate requires a structured continuity audit, also
+persist `actualContinuityState`. Project the evaluation ID, decision, usable
+ranges, actual exit state and repair notes onto the visible QA evidence node.
+
 For multi-episode work:
 
 - create Series at episode one;
@@ -309,6 +387,8 @@ Report:
 - Prompt compilation/payload hash and exact reference manifest;
 - Provider run/idempotency status without exposing credentials;
 - actual candidate media/checksum, evaluation and accepted usable range;
+- full-playback receipt and visible QA evidence node for every active unit;
+- collision audit proving expanded canvas node rectangles have a visible gutter;
 - timeline, render, QC and delivery IDs;
 - blockers and the single next action.
 

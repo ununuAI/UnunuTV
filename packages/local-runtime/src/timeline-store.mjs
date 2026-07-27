@@ -25,9 +25,12 @@ export function insertTimeline(database, timeline) {
 
 export function selectTimelines(database) {
   return database.prepare(`
-    SELECT t.id, t.title, t.created_at AS createdAt, t.updated_at AS updatedAt,
+    SELECT t.id, t.title, s.frame_rate AS frameRate, s.width, s.height, s.color_space AS colorSpace,
+      t.created_at AS createdAt, t.updated_at AS updatedAt,
       COUNT(c.id) AS clipCount
-    FROM timelines t LEFT JOIN timeline_clips c ON c.timeline_id=t.id
+    FROM timelines t
+    LEFT JOIN timeline_settings s ON s.timeline_id=t.id
+    LEFT JOIN timeline_clips c ON c.timeline_id=t.id
     GROUP BY t.id ORDER BY t.created_at
   `).all();
 }

@@ -194,6 +194,44 @@ test("Ark video adapter publishes tunnel references, polls, and materializes out
   assert.ok(existsSync(path.join(dataRoot, "projects", project.id, completed.result.artifacts[0].relativePath)));
 });
 
+test("Ark video adapter cancels a queued Provider task through the persisted Run boundary", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-ark-cancel-"));
+  let deletedTaskId = null;
+  const fetchImpl = async (url, options = {}) => {
+    if (url.endsWith("/contents/generations/tasks") && options.method === "POST") {
+      return Response.json({ id: "ark-task-cancel-1", status: "queued" });
+    }
+    if (url.endsWith("/contents/generations/tasks/ark-task-cancel-1") && options.method === "DELETE") {
+      deletedTaskId = "ark-task-cancel-1";
+      return Response.json({});
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const runtime = createLocalRuntime({
+    dataRoot,
+    env: { ARK_API_KEY: "test-key" },
+    fetchImpl,
+    publisher: { publicBaseUrl: "https://tunnel.example.test", signingSecret: "test-signing-secret" }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "video",
+    payload: { provider: "ark", prompt: "取消测试" }
+  });
+  const started = await runtime.app.runNode({ projectId: project.id, nodeId: video.id, request: { duration: 5 } });
+  const canceled = await runtime.app.cancelRun({
+    projectId: project.id,
+    runId: started.id,
+    reason: "duplicate_formal_intent_cleanup"
+  });
+  assert.equal(deletedTaskId, "ark-task-cancel-1");
+  assert.equal(canceled.status, "canceled");
+  assert.equal(canceled.result.cancelReason, "duplicate_formal_intent_cleanup");
+});
+
 test("Ark video adapter blocks mixed frame and ordinary references before submission", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-ark-frame-conflict-"));
   let submissionCount = 0;

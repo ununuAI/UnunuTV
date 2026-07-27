@@ -11,6 +11,7 @@ function output(artifactRefs = [], details = {}) { return { artifactRefs, ...det
 
 export function createAutomationExecutorUseCases(ports, dependencies) {
   const locks = new Set();
+  const ownedWorkerLeases = new Map();
 
   async function context(projectId, automationRunId) {
     const session = await ports.projects.getProjectControlSession(projectId);
@@ -106,6 +107,20 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
     }
     let tasks = await dependencies.automationTasks.listAutomationTasks({ projectId, automationRunId });
     let task = tasks.find((entry) => entry.status === "running");
+    if (task) {
+      const ownedLease = ownedWorkerLeases.get(`${automationRunId}:${task.id}`);
+      if (!ownedLease || ownedLease !== task.workerLeaseId) {
+        const leaseExpiresAt = Date.parse(task.leaseExpiresAt ?? "");
+        return {
+          status: Number.isFinite(leaseExpiresAt) && leaseExpiresAt <= Date.now()
+            ? "waiting_for_task_lease_recovery"
+            : "busy",
+          taskId: task.id,
+          workerLeaseId: task.workerLeaseId ?? null,
+          leaseExpiresAt: task.leaseExpiresAt ?? null
+        };
+      }
+    }
     if (!task) task = tasks.find((entry) => ["queued", "failed"].includes(entry.status) && taskDependenciesReady(entry, tasks));
     if (!task) {
       if (tasks.every((entry) => ["succeeded", "reused"].includes(entry.status))) {
@@ -116,7 +131,10 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
       return { status: tasks.some((entry) => entry.status === "blocked") ? "blocked" : "waiting", tasks };
     }
     let operationContext = { actorType: "automation", actorId: task.agentProfileId, automationRunId, leaseId: resolved.session.leaseId, taskLeaseId: task.workerLeaseId, idempotencyKey: task.idempotencyKey };
-    if (task.status !== "running") task = await dependencies.automationTasks.claimAutomationTask({ projectId, automationRunId, taskId: task.id, taskInput: task.input, operationContext });
+    if (task.status !== "running") {
+      task = await dependencies.automationTasks.claimAutomationTask({ projectId, automationRunId, taskId: task.id, taskInput: task.input, operationContext });
+      ownedWorkerLeases.set(`${automationRunId}:${task.id}`, task.workerLeaseId);
+    }
     operationContext = { ...operationContext, taskLeaseId: task.workerLeaseId };
     task = await dependencies.automationTasks.heartbeatAutomationTask({ projectId, automationRunId, taskId: task.id, operationContext });
     try {
@@ -135,9 +153,31 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
         }
       }
       const result = await handleStage(projectId, task, resolved, operationContext);
-      if (result.waiting) return { status: "waiting", task, output: result.output };
+      if (result.waiting) {
+        if (input.releaseWaitingLease === true) {
+          task = await ports.projects.updateAutomationTask(projectId, {
+            ...task,
+            status: "queued",
+            output: result.output ?? task.output,
+            error: null,
+            workerLeaseId: null,
+            heartbeatAt: null,
+            leaseExpiresAt: null,
+            updatedAt: nowIso(),
+            completedAt: null
+          });
+          ownedWorkerLeases.delete(`${automationRunId}:${task.id}`);
+        }
+        return {
+          status: "waiting",
+          task,
+          output: result.output,
+          leaseReleased: input.releaseWaitingLease === true
+        };
+      }
       if (task.stage === "sound_design" && task.budgetReservationId && result.reused !== true) await settleTaskBudget(projectId, task, "consume");
       const completed = await dependencies.automationTasks.completeAutomationTask({ projectId, automationRunId, taskId: task.id, output: result.output, reused: result.reused, operationContext });
+      ownedWorkerLeases.delete(`${automationRunId}:${task.id}`);
       return { status: "advanced", task: completed };
     } catch (error) {
       if (task.stage === "sound_design" && error.code !== "paid_submission_outcome_unknown") {
@@ -145,6 +185,7 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
         if (settled?.status === "released") task = await ports.projects.updateAutomationTask(projectId, { ...task, budgetReservationId: null, updatedAt: nowIso() });
       }
       const blocked = await pauseBlocked(projectId, task, error, resolved.session);
+      ownedWorkerLeases.delete(`${automationRunId}:${task.id}`);
       return { status: "blocked", task: blocked, error: blocked.error };
     }
   }
@@ -162,7 +203,9 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
     const automationRunId = requireText(input.automationRunId, "automationRunId");
     const taskId = requireText(input.taskId, "taskId");
     const session = await ports.projects.getProjectControlSession(projectId);
-    if (!session || session.automationRunId !== automationRunId || !["auto_paused", "auto_failed"].includes(session.state)) throw new UnuTvError("automation_retry_unavailable", "Retry is only available for the paused current automation", 409);
+    if (!session || session.automationRunId !== automationRunId || !["auto_running", "auto_paused", "auto_failed"].includes(session.state)) {
+      throw new UnuTvError("automation_retry_unavailable", "Retry is only available for the current running, paused or failed automation", 409);
+    }
     const tasks = await ports.projects.listAutomationTasks(projectId, automationRunId);
     const task = tasks.find((entry) => entry.id === taskId);
     if (!task || task.status !== "blocked") throw new UnuTvError("automation_task_not_blocked", "Only a blocked task can retry", 409);
@@ -188,8 +231,14 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
       error: null, budgetReservationId: task.error?.code === "paid_submission_outcome_unknown" ? null : task.budgetReservationId,
       workerLeaseId: null, heartbeatAt: null, leaseExpiresAt: null, updatedAt: nowIso(), startedAt: null, completedAt: null
     });
+    ownedWorkerLeases.delete(`${automationRunId}:${task.id}`);
     await appendActivity(projectId, queued, "status", "用户已处理门禁，任务重新排队", { code: "owner_retry" });
-    const resumed = await dependencies.projectControl.resumeAutomation({ projectId, automationRunId });
+    const resumed = session.state === "auto_running"
+      ? {
+          session: await ports.projects.getProjectControlSession(projectId),
+          run: await ports.projects.getAutomationRun(projectId, automationRunId)
+        }
+      : await dependencies.projectControl.resumeAutomation({ projectId, automationRunId });
     return { task: queued, ...resumed };
   }
 

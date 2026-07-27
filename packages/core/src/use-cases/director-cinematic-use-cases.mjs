@@ -5,6 +5,7 @@ import {
   requireText,
   validateDirectorStageShotBindingV1
 } from "@ununu/unutv-contracts";
+import { deriveCameraTrajectoryPlan } from "../cinematic-camera-trajectory-projection.mjs";
 
 function assertBinding(binding) {
   const validation = validateDirectorStageShotBindingV1(binding);
@@ -63,10 +64,28 @@ export function createDirectorCinematicUseCases(ports, cinematic, storyboards) {
     assertBinding(binding);
 
     let shot = await cinematic.getShot({ projectId, productionId, shotId });
+    const routeId = camera.routeIds?.[0] || `camera-route-${shotId}`;
+    const route = capturedStage.stage.routes.find((entry) => entry.id === routeId);
+    const cleanForShot = capturedStage.stage.captures.filter((entry) => (
+      entry.shotId === shotId
+      && entry.clean === true
+    ));
+    const captureAtPhase = (phase) => cleanForShot.find((entry) => entry.phase === phase);
+    const cleanCaptures = {
+      startCaptureId: captureAtPhase("start")?.id,
+      midCaptureId: captureAtPhase("mid")?.id,
+      endCaptureId: captureAtPhase("end")?.id
+    };
+    const projectedCameraTrajectoryPlan = route
+      && Object.values(cleanCaptures).every(Boolean)
+      ? deriveCameraTrajectoryPlan({ shot, camera, route, cleanCaptures })
+      : shot.cameraTrajectoryPlan;
     const alreadyBound = shot.directorStageBinding?.captureId === capture.id
       && shot.directorStageBinding?.mediaId === capture.mediaId
       && shot.directorStageBinding?.stageRevision === capture.stageRevision;
-    if (!alreadyBound) {
+    const trajectoryAlreadyBound = JSON.stringify(shot.cameraTrajectoryPlan ?? null)
+      === JSON.stringify(projectedCameraTrajectoryPlan ?? null);
+    if (!alreadyBound || !trajectoryAlreadyBound) {
       shot = await cinematic.updateShot({
         projectId,
         productionId,
@@ -76,6 +95,7 @@ export function createDirectorCinematicUseCases(ports, cinematic, storyboards) {
           directorStageBinding: binding,
           blocking: { ...shot.blocking, directorStageBinding: binding },
           cinematography: { ...shot.cinematography, directorStageCamera: camera },
+          ...(projectedCameraTrajectoryPlan ? { cameraTrajectoryPlan: projectedCameraTrajectoryPlan } : {}),
           acceptanceCriteria: unique([...(shot.acceptanceCriteria ?? []), `空间、站位与机位须匹配导演台 ${directorNodeId} / v${capture.stageRevision} / ${camera.label}`])
         }
       });
@@ -86,7 +106,8 @@ export function createDirectorCinematicUseCases(ports, cinematic, storyboards) {
       const storyboardShot = storyboard.shots.find((entry) => entry.shotId === shotId);
       if (!storyboardShot) continue;
       if (storyboardShot.cinematicPlan?.directorStageBinding?.captureId === capture.id
-        && storyboardShot.cinematicPlan?.directorStageBinding?.mediaId === capture.mediaId) {
+        && storyboardShot.cinematicPlan?.directorStageBinding?.mediaId === capture.mediaId
+        && Number(storyboardShot.shotRevision) === Number(shot.revision)) {
         updatedStoryboards.push(storyboard);
         continue;
       }
@@ -97,6 +118,7 @@ export function createDirectorCinematicUseCases(ports, cinematic, storyboards) {
         storyboardShotId: storyboardShot.storyboardShotId,
         expectedRevision: storyboard.revision,
         patch: {
+          shotRevision: shot.revision,
           cinematicPlan: {
             ...storyboardShot.cinematicPlan,
             blocking: shot.blocking,

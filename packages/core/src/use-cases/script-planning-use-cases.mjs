@@ -35,11 +35,35 @@ export function createScriptPlanningUseCases(ports, dependencies) {
     const shots = [];
     for (const proposed of compiled.shots) {
       const current = shotMap.get(proposed.shotId);
+      const preservedDirectorBinding = current?.directorStageBinding ?? null;
+      const preservedAcceptanceCriteria = (current?.acceptanceCriteria ?? []).filter((criterion) => (
+        typeof criterion === "string" && criterion.includes("空间、站位与机位须匹配导演台")
+      ));
       shots.push(await dependencies.cinematic.saveShot({
         projectId,
         productionId,
         expectedRevision: current?.revision ?? 0,
-        shot: { ...proposed, revision: (current?.revision ?? 0) + 1 }
+        shot: {
+          ...proposed,
+          ...(preservedDirectorBinding ? {
+            directorStageBinding: preservedDirectorBinding,
+            blocking: {
+              ...proposed.blocking,
+              directorStageBinding: current?.blocking?.directorStageBinding ?? preservedDirectorBinding
+            },
+            cinematography: {
+              ...proposed.cinematography,
+              ...(current?.cinematography?.directorStageCamera
+                ? { directorStageCamera: current.cinematography.directorStageCamera }
+                : {})
+            }
+          } : {}),
+          acceptanceCriteria: [...new Set([
+            ...(proposed.acceptanceCriteria ?? []),
+            ...preservedAcceptanceCriteria
+          ])],
+          revision: (current?.revision ?? 0) + 1
+        }
       }));
     }
     const breakdown = await ports.projects.saveCinematicScriptBreakdown(projectId, compiled.breakdown, existing?.revision ?? 0);

@@ -61,6 +61,10 @@ export function assertProjectMutationAllowed(session, inputContext) {
     && context.automationRunId === session?.automationRunId
     && context.leaseId === session?.leaseId;
   if (automationAllowed) return context;
+  const ownerGateAllowed = context.actorType === "owner_gate"
+    && ["auto_paused", "auto_failed"].includes(state)
+    && context.automationRunId === session?.automationRunId;
+  if (ownerGateAllowed) return context;
   throw new UnuTvError(
     "PROJECT_READ_ONLY_AUTOMATION_ACTIVE",
     "全自动模式运行期间项目为只读；请先暂停并接管。",

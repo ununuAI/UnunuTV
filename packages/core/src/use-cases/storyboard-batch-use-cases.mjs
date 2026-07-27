@@ -8,6 +8,8 @@ import {
   requireObject,
   requireText
 } from "@ununu/unutv-contracts";
+
+const UNUNU_SYNCHRONOUS_IMAGE_RECOVERY_GRACE_MS = 300_000;
 import { storyboardBatchStatus } from "../storyboard-production-policy.mjs";
 import { projectStoryboardImageCandidate } from "../storyboard-image-candidate-node-policy.mjs";
 import { planStoryboardVideoProviderInput } from "../storyboard-video-reference-input-policy.mjs";
@@ -210,6 +212,14 @@ async function compileBatchPrompt(projectId, job, storyboard, shot, visualInput)
     ...(visualInput.mode ? { mode: visualInput.mode } : {}),
     ...(visualInput.firstFrameMediaId ? { firstFrameMediaId: visualInput.firstFrameMediaId } : {})
   };
+  const keyframeMoment = job.kind === "image"
+    ? (
+        job.configuration.keyframeMoment
+        || shot.cinematicPlan?.performance?.turningPoint
+        || shot.cinematicPlan?.endingState
+        || shot.storyBeat
+      )
+    : null;
   return dependencies.compileStoryboardPrompt({
     projectId,
     productionId: job.productionId,
@@ -223,8 +233,8 @@ async function compileBatchPrompt(projectId, job, storyboard, shot, visualInput)
         actionPhase: shot.cinematicPlan?.actionChain,
         composition: shot.cinematicPlan?.cinematography,
         performance: shot.cinematicPlan?.performance,
-        ...(job.configuration.keyframeMoment ? {
-          keyframeMoment: job.configuration.keyframeMoment,
+        ...(keyframeMoment ? {
+          keyframeMoment,
           spatialState: job.configuration.spatialState,
           subjectState: job.configuration.subjectState,
           cameraState: job.configuration.cameraState,
@@ -246,7 +256,9 @@ async function compileBatchPrompt(projectId, job, storyboard, shot, visualInput)
 async function advancePaidStoryboardItem(input, job, item, storyboard) {
   const { projectId } = input;
   const budgetless = job.configuration?.billingMode !== "legacy_budget";
-  if (!job.provider || !job.model || !job.configuration.executionNodeId) throw new UnuTvError("storyboard_provider_dispatch_unavailable", "Provider、模型或执行节点不完整；未发起调用", 409, { provider: job.provider, model: job.model });
+  const itemExecutionNodeId = job.configuration.executionNodeIdByStoryboardShotId?.[item.storyboardShotId]
+    || job.configuration.executionNodeId;
+  if (!job.provider || !job.model || !itemExecutionNodeId) throw new UnuTvError("storyboard_provider_dispatch_unavailable", "Provider、模型或执行节点不完整；未发起调用", 409, { provider: job.provider, model: job.model, storyboardShotId: item.storyboardShotId });
   if (!budgetless && (!dependencies.budget || typeof dependencies.budget.reserveBudget !== "function")) throw new UnuTvError("storyboard_budget_port_unavailable", "预算端口不可用；未发起 Provider 调用", 409);
   const shot = storyboard.shots.find((entry) => entry.storyboardShotId === item.storyboardShotId);
   if (!shot) throw new UnuTvError("storyboard_shot_not_found", `Storyboard shot not found: ${item.storyboardShotId}`, 404);
@@ -280,12 +292,33 @@ async function advancePaidStoryboardItem(input, job, item, storyboard) {
     working = await saveWorkingItem(projectId, working, currentItem);
     currentItem = working.items.find((entry) => entry.id === currentItem.id);
   }
-  const node = await ports.projects.getNode(projectId, job.configuration.executionNodeId);
+  const node = await ports.projects.getNode(projectId, itemExecutionNodeId);
   const allowedKinds = job.kind === "image" ? ["image", "imageEdit"] : ["video", "videoShot", "video-clip"];
   if (!node || !allowedKinds.includes(node.kind)) throw new UnuTvError("storyboard_execution_node_invalid", `故事板 ${job.kind} 批次需要匹配的执行节点`, 409);
   let run = currentItem.providerRunId ? await ports.projects.getRun(projectId, currentItem.providerRunId) : null;
   let initialDispatch = false;
   if (!run) {
+    if (currentItem.providerRunId) {
+      const reservationAgeMs = Date.now() - Date.parse(currentItem.updatedAt ?? "");
+      if (Number.isFinite(reservationAgeMs) && reservationAgeMs <= 1_800_000) {
+        return {
+          working,
+          item: {
+            ...currentItem,
+            status: "running",
+            error: null,
+            updatedAt: nowIso(),
+            completedAt: null
+          }
+        };
+      }
+      throw new UnuTvError(
+        "paid_submission_outcome_unknown",
+        "Provider run identity was reserved but the run record did not materialize; explicit reconciliation is required",
+        409,
+        { runId: currentItem.providerRunId, idempotencyKey: currentItem.idempotencyKey }
+      );
+    }
     const compilation = await compileBatchPrompt(projectId, job, storyboard, shot, visualInput);
     const request = {
       ...requireObject(job.configuration.request, "configuration.request", {}),
@@ -305,10 +338,18 @@ async function advancePaidStoryboardItem(input, job, item, storyboard) {
       ...(job.kind === "video" ? { duration: shot.durationSeconds ?? job.configuration.duration ?? 5, generateAudio: job.configuration.generateAudio !== false } : {}),
       ...(visualInput.firstFrameMediaId ? { firstFrameMediaId: visualInput.firstFrameMediaId } : {})
     };
-    run = await ports.projects.createRun(projectId, { id: createId("run"), nodeId: node.id, status: "queued", provider: job.provider, request, createdAt: nowIso() });
-    currentItem = { ...currentItem, providerRunId: run.id, updatedAt: nowIso() };
+    const reservedRunId = createId("run");
+    currentItem = { ...currentItem, providerRunId: reservedRunId, updatedAt: nowIso() };
     working = await saveWorkingItem(projectId, working, currentItem);
     currentItem = working.items.find((entry) => entry.id === currentItem.id);
+    run = await ports.projects.createRun(projectId, {
+      id: reservedRunId,
+      nodeId: node.id,
+      status: "running",
+      provider: job.provider,
+      request,
+      createdAt: nowIso()
+    });
     initialDispatch = true;
   }
   if (run.status === "queued" && !initialDispatch) {
@@ -329,6 +370,26 @@ async function advancePaidStoryboardItem(input, job, item, storyboard) {
       if (error.code !== "paid_submission_outcome_unknown") await settleItemBudget(projectId, currentItem, "release");
       throw error;
     }
+  } else if (run.status === "running" && run.provider === "ununu") {
+    const runningAgeMs = Date.now() - Date.parse(run.updatedAt ?? run.createdAt ?? "");
+    if (!Number.isFinite(runningAgeMs) || runningAgeMs <= UNUNU_SYNCHRONOUS_IMAGE_RECOVERY_GRACE_MS) {
+      return {
+        working,
+        item: {
+          ...currentItem,
+          status: "running",
+          error: null,
+          updatedAt: nowIso(),
+          completedAt: null
+        }
+      };
+    }
+    throw new UnuTvError(
+      "paid_submission_outcome_unknown",
+      "Recovered Ununu Image synchronous submission exceeded the five-minute recovery window; trace the deterministic request before retrying",
+      409,
+      { runId: run.id, idempotencyKey: currentItem.idempotencyKey }
+    );
   } else if (run.status === "running") {
     try {
       run = await materializeStoryboardProviderResult(projectId, node, run, await ports.provider.poll({ projectId, node, run }));

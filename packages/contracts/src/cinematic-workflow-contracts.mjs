@@ -1,14 +1,15 @@
 export const CINEMATIC_WORKFLOW_CONTRACT_VERSION = "1.0.0";
 export const CINEMATIC_WORKFLOW_SKILL_ID = "ununu-cinematic-production";
-export const CINEMATIC_WORKFLOW_SKILL_VERSION = "3.0.0";
+export const CINEMATIC_WORKFLOW_SKILL_VERSION = "4.0.0";
 export const CINEMATIC_WORKFLOW_PHASES = Object.freeze([
   "script_analysis",
   "block_planning",
   "visual_bible",
   "asset_design",
   "shot_design",
-  "prompt_compile",
+  "previs_design",
   "image_generation",
+  "prompt_compile",
   "video_generation",
   "sound_design",
   "continuity_qa",

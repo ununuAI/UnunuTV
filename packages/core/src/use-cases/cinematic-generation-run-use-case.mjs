@@ -241,9 +241,23 @@ export function createCinematicGenerationRunUseCase({
       cinematicPromptCompilationId: compilation.compilationId
     });
     const existingRuns = await listProviderRuns(projectId);
+    const sameCompiledIntent = (entry) => (
+      entry.nodeId === nodeId
+      && entry.request?.cinematicPromptCompilationId === compilation.compilationId
+      && entry.request?.cinematicPayloadHash === compilation.envelope.payloadHash
+      && entry.request?.formalGenerationIntent?.generationUnitId === generationUnitId
+      && entry.request?.formalGenerationIntent?.generationUnitRevision === unitRecord.generationUnit.revision
+      && ["queued", "running", "succeeded"].includes(entry.status)
+    );
     let run = existingRuns.find((entry) => entry.nodeId === nodeId
       && entry.request?.idempotencyKey === idempotencyKey
-      && entry.request?.cinematicPromptCompilationId === compilation.compilationId) ?? null;
+      && entry.request?.cinematicPromptCompilationId === compilation.compilationId)
+      // Defensive paid-boundary guard: even an older client that derived a
+      // different lease-attempt key must reuse the single unresolved formal
+      // intent for this exact GenerationUnit revision and payload.
+      ?? (budgetless ? existingRuns.filter(sameCompiledIntent) : [])
+        .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))[0]
+      ?? null;
     const reused = Boolean(run);
     if (!run) {
       run = await runNode({ projectId, nodeId, provider, request, generationUnitId, generationUnitAuthorization: FORMAL_GENERATION_UNIT_RUN });

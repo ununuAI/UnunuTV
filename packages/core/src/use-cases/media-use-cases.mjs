@@ -1,7 +1,7 @@
 import { UnuTvError, assertMediaPreparationV1, createId, nowIso, optionalText, requireEnum, requireNumber, requireText } from "@ununu/unutv-contracts";
 import { inferMediaKind } from "../media-policy.mjs";
 
-export function createMediaUseCases(ports) {
+export function createMediaUseCases(ports, actions = {}) {
   async function importMedia(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const filePath = requireText(input.filePath, "filePath");
@@ -52,6 +52,139 @@ export function createMediaUseCases(ports) {
     });
   }
 
+  async function createVideoQaContactSheet(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const mediaId = requireText(input.mediaId, "mediaId");
+    const nodeId = requireText(input.nodeId, "nodeId");
+    const times = Array.isArray(input.times) ? input.times.map(Number) : [0.5, 6, 11.5];
+    if (times.length !== 3 || times.some((seconds) => !Number.isFinite(seconds) || seconds < 0)) {
+      throw new UnuTvError("invalid_qa_frame_times", "QA contact sheet requires exactly three non-negative frame times", 400);
+    }
+    if (typeof actions.createNode !== "function" || typeof actions.updateNode !== "function" || typeof actions.connectEdge !== "function") {
+      throw new TypeError("Video QA contact sheet requires canvas mutation actions");
+    }
+    const sourceMedia = await ports.projects.getMedia(projectId, mediaId);
+    if (!sourceMedia || sourceMedia.kind !== "video") throw new UnuTvError("video_media_required", "QA contact sheet requires video media", 400);
+    const sourceNode = await ports.projects.getNode(projectId, nodeId);
+    if (!sourceNode) throw new UnuTvError("node_not_found", `Node not found: ${nodeId}`, 404);
+    const canvas = await ports.projects.openCanvas(projectId, sourceNode.canvasId);
+    const existing = canvas.nodes.find((node) => (
+      node.payload?.resourceType === "cinematic_qa_contact_sheet"
+      && node.payload?.sourceVideoMediaId === mediaId
+      && node.payload?.sourceVideoChecksum === sourceMedia.sha256
+      && JSON.stringify(node.payload?.frameTimes || []) === JSON.stringify(times)
+    ));
+    const existingQaEdge = existing
+      ? canvas.edges.find((edge) => edge.fromNodeId === sourceNode.id && edge.toNodeId === existing.id && edge.role === "cinematic_qa:contact_sheet")
+      : null;
+    if (existing?.payload?.currentMediaId
+      && existing.payload?.qaEvidence?.format === "cinematic_video_start_mid_end_v1"
+      && existingQaEdge) {
+      const lineagePayload = {
+        ...existing.payload,
+        productionId: sourceNode.payload?.productionId ?? existing.payload?.productionId ?? null,
+        stage: "continuity_qa",
+        generationUnitId: sourceNode.payload?.generationUnitId ?? existing.payload?.generationUnitId ?? null
+      };
+      const lineageNode = (
+        lineagePayload.productionId === existing.payload?.productionId
+        && lineagePayload.stage === existing.payload?.stage
+        && lineagePayload.generationUnitId === existing.payload?.generationUnitId
+      ) ? existing : await actions.updateNode({
+        projectId,
+        nodeId: existing.id,
+        expectedRevision: existing.revision,
+        payload: lineagePayload
+      });
+      return {
+        reused: true,
+        node: lineageNode,
+        media: await ports.projects.getMedia(projectId, lineageNode.payload.currentMediaId),
+        frameMediaIds: lineageNode.payload.frameMediaIds || [],
+        edge: existingQaEdge
+      };
+    }
+    const videoNodes = canvas.nodes
+      .filter((node) => ["video", "videoShot", "video-clip"].includes(node.kind))
+      .sort((left, right) => left.y - right.y || left.x - right.x || left.id.localeCompare(right.id));
+    const videoIndex = Math.max(0, videoNodes.findIndex((node) => node.id === sourceNode.id));
+    const qaNode = existing || await actions.createNode({
+      projectId,
+      canvasId: sourceNode.canvasId,
+      kind: "image",
+      title: optionalText(input.title, `${sourceNode.title || "镜头"} · 起中落 QA`),
+      x: 80 + (videoIndex % 4) * 610,
+      y: 9300 + Math.floor(videoIndex / 4) * 470,
+      size: { width: 520, height: 308 },
+      payload: {
+        productionId: sourceNode.payload?.productionId ?? null,
+        stage: "continuity_qa",
+        resourceType: "cinematic_qa_contact_sheet",
+        resourceId: sourceNode.payload?.generationUnitId || sourceNode.payload?.resourceId || mediaId,
+        generationUnitId: sourceNode.payload?.generationUnitId ?? null,
+        sourceNodeId: sourceNode.id,
+        sourceVideoMediaId: mediaId,
+        sourceVideoChecksum: sourceMedia.sha256,
+        frameTimes: times,
+        generationStatus: "extracting"
+      }
+    });
+    const frames = [];
+    for (const seconds of times) {
+      frames.push(await ports.media.extractFrame({
+        projectId,
+        mediaId,
+        seconds,
+        nodeId: qaNode.id,
+        title: `${qaNode.title} · ${seconds.toFixed(2)}s`
+      }));
+    }
+    const artifact = await ports.grid.compose({
+      projectId,
+      cells: frames.map((frame) => frame.id),
+      rows: 1,
+      cols: 3,
+      aspectRatio: 27 / 16
+    });
+    const contactSheet = await ports.media.importBytes({
+      projectId,
+      nodeId: qaNode.id,
+      kind: artifact.kind,
+      mimeType: artifact.mimeType,
+      bytes: artifact.bytes,
+      title: `${qaNode.title}.png`
+    });
+    const liveQaNode = await ports.projects.getNode(projectId, qaNode.id);
+    const savedNode = await actions.updateNode({
+      projectId,
+      nodeId: qaNode.id,
+      expectedRevision: liveQaNode.revision,
+      payload: {
+        ...liveQaNode.payload,
+        currentMediaId: contactSheet.id,
+        mediaIds: [...frames.map((frame) => frame.id), contactSheet.id],
+        frameMediaIds: frames.map((frame) => frame.id),
+        generationStatus: "succeeded",
+        generatedWidth: artifact.width,
+        generatedHeight: artifact.height,
+        qaEvidence: {
+          format: "cinematic_video_start_mid_end_v1",
+          sourceVideoMediaId: mediaId,
+          sourceVideoChecksum: sourceMedia.sha256,
+          frameTimes: times
+        }
+      }
+    });
+    const edge = await actions.connectEdge({
+      projectId,
+      canvasId: sourceNode.canvasId,
+      fromNodeId: sourceNode.id,
+      toNodeId: savedNode.id,
+      role: "cinematic_qa:contact_sheet"
+    });
+    return { reused: false, node: savedNode, media: contactSheet, frameMediaIds: frames.map((frame) => frame.id), edge };
+  }
+
   async function getMediaPreparation(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const mediaId = requireText(input.mediaId, "mediaId");
@@ -84,5 +217,5 @@ export function createMediaUseCases(ports) {
     }
   }
 
-  return { extractMediaFrame, getMediaPreparation, importDataMedia, importMedia, prepareMedia, publishMedia };
+  return { createVideoQaContactSheet, extractMediaFrame, getMediaPreparation, importDataMedia, importMedia, prepareMedia, publishMedia };
 }

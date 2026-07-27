@@ -27,7 +27,7 @@ import { cinematicPromptByteLength as byteLength, fitCinematicPromptByteBudget a
 
 export { CINEMATIC_CONTROLLED_LEXICON };
 
-export const CINEMATIC_PROMPT_COMPILER_VERSION = "3.4.0";
+export const CINEMATIC_PROMPT_COMPILER_VERSION = "3.5.0";
 
 // Reject anonymous labels such as `主体1`, but do not treat camera-distance
 // phrases such as `距主体2.5米` or `距主体 2 米` as synthetic identities.
@@ -85,7 +85,7 @@ export function lintCinematicPrompt({ compiledContentPrompt, generationParameter
   if (gates.requireSequencePrevis) {
     const audit = gateEvidence.sequenceWorkspaceAudit && typeof gateEvidence.sequenceWorkspaceAudit === "object" ? gateEvidence.sequenceWorkspaceAudit : null;
     if (!audit) errors.push({ code: "sequence_previs_audit_required", message: "正式生成前必须审计连续预演、切镜决策与本镜视觉上下文。" });
-    else for (const entry of Array.isArray(audit.errors) ? audit.errors : []) errors.push({ code: entry.code || "sequence_previs_audit_failed", message: entry.message || "连续预演审计未通过。", sequencePrevis: true });
+    else for (const entry of Array.isArray(audit.errors) ? audit.errors : []) errors.push({ ...entry, code: entry.code || "sequence_previs_audit_failed", message: entry.message || "连续预演审计未通过。", sequencePrevis: true });
   }
   if (gates.requireOwnerStoryReview || gates.requireOwnerShotReviews) {
     const ownerReview = gateEvidence.ownerStoryShotReview && typeof gateEvidence.ownerStoryShotReview === "object"

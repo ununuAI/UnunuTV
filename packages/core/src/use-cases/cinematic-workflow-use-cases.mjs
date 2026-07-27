@@ -1,8 +1,26 @@
 import { createId, requireObject, requireText, UnuTvError } from "@ununu/unutv-contracts";
 import { assertCinematicProductionWorkflow, buildCinematicWorkflowManifest } from "../cinematic-workflow-policy.mjs";
+import {
+  buildCinematicCanvasLayout,
+  cinematicProductionNodes,
+  findCinematicCanvasOverlaps
+} from "../cinematic-canvas-layout.mjs";
 import { deriveNextActionFromTasks } from "../orchestration/next-action.mjs";
-import { ensureGenerationUnitsForProduction } from "../workers/unit-design-worker.mjs";
 import { autoSignoffGenerationUnit } from "../workers/expert-signoff-worker.mjs";
+
+export function findReusableProviderRunForFailedIntent(runs = [], failedRunId = null) {
+  const failed = runs.find((run) => run.id === failedRunId);
+  if (!failed) return null;
+  const request = failed.request || {};
+  return runs
+    .filter((run) => run.id !== failed.id)
+    .filter((run) => ["queued", "running", "succeeded"].includes(run.status))
+    .filter((run) => run.nodeId === failed.nodeId)
+    .filter((run) => run.request?.generationUnitId === request.generationUnitId)
+    .filter((run) => run.request?.cinematicPromptCompilationId === request.cinematicPromptCompilationId)
+    .filter((run) => run.request?.cinematicPayloadHash === request.cinematicPayloadHash)
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))[0] ?? null;
+}
 
 export function createCinematicWorkflowUseCases(ports, {
   cinematic,
@@ -17,8 +35,74 @@ export function createCinematicWorkflowUseCases(ports, {
   storyboards = null,
   createScriptRow = null,
   getScriptDocument = null,
-  scriptPlanning = null
+  updateScriptRow = null,
+  scriptPlanning = null,
+  createNode = null,
+  updateNode = null,
+  connectEdge = null,
+  sequenceWorkspace = null
 }) {
+  function meaningfulStory(story) {
+    return Boolean(
+      story
+      && story.status !== "needs_story_authoring"
+      && story.storyPacket?.status !== "needs_story_authoring"
+      && story.characters?.length
+      && story.causalEventChain?.length
+    );
+  }
+
+  function equalJson(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  async function ensureProjectionNode({
+    projectId,
+    canvas,
+    kind,
+    title,
+    x,
+    y,
+    resourceType,
+    resourceId,
+    payload
+  }) {
+    const current = canvas.nodes.find((node) => (
+      node.payload?.resourceType === resourceType
+      && node.payload?.resourceId === resourceId
+    ));
+    if (current) {
+      return updateNode({
+        projectId,
+        nodeId: current.id,
+        title,
+        x,
+        y,
+        payload: { ...current.payload, ...payload, resourceType, resourceId },
+        expectedRevision: current.revision
+      });
+    }
+    return createNode({
+      projectId,
+      canvasId: canvas.id,
+      kind,
+      title,
+      x,
+      y,
+      payload: { ...payload, resourceType, resourceId }
+    });
+  }
+
+  async function ensureProjectionEdge({ projectId, canvas, fromNodeId, toNodeId, role }) {
+    const current = canvas.edges.find((edge) => (
+      edge.fromNodeId === fromNodeId
+      && edge.toNodeId === toNodeId
+      && edge.role === role
+    ));
+    if (current) return current;
+    return connectEdge({ projectId, canvasId: canvas.id, fromNodeId, toNodeId, role });
+  }
+
   async function startCinematicWorkflow(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const configuration = requireObject(input.configuration, "configuration", {});
@@ -230,6 +314,74 @@ export function createCinematicWorkflowUseCases(ports, {
       catch { assetReuse = null; }
     }
 
+    const authoringGaps = [];
+    try {
+      const [story, bible, document] = await Promise.all([
+        cinematic.getStoryPacket({ projectId, productionId }),
+        cinematic.getVisualBible({ projectId, productionId }),
+        getScriptDocument?.({ projectId, nodeId: run.configuration.sourceNodeId })
+      ]);
+      if (!meaningfulStory(story)) authoringGaps.push("story_packet");
+      if (!bible) authoringGaps.push("visual_bible");
+      if (!document?.rows?.length) authoringGaps.push("structured_script_rows");
+    } catch {
+      authoringGaps.push("authoring_state_unreadable");
+    }
+
+    let layoutOverlaps = [];
+    try {
+      const project = await ports.projects.open(projectId);
+      const canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+      layoutOverlaps = findCinematicCanvasOverlaps(cinematicProductionNodes(canvas, productionId));
+    } catch {
+      layoutOverlaps = [];
+    }
+
+    const generationIntegrityIssues = [];
+    const videoTask = tasks.find((task) => task.stage === "video_generation");
+    if (videoTask && ["succeeded", "reused"].includes(videoTask.status)) {
+      try {
+        const [units, providerRuns] = await Promise.all([
+          cinematic.listGenerationUnits({ projectId, productionId }),
+          ports.projects.listRuns(projectId)
+        ]);
+        for (const entry of units) {
+          const generationUnitId = entry.generationUnit.generationUnitId;
+          const matchingRuns = providerRuns.filter((candidate) => candidate.request?.generationUnitId === generationUnitId);
+          const successful = matchingRuns.find((candidate) => (
+            candidate.status === "succeeded"
+            && candidate.result?.artifacts?.some((artifact) => artifact.kind === "video" && artifact.id)
+          ));
+          const artifact = successful?.result?.artifacts?.find((candidate) => candidate.kind === "video" && candidate.id);
+          let materialized = false;
+          if (artifact?.id) {
+            try { materialized = Boolean(ports.media?.open?.(projectId, artifact.id)); }
+            catch { materialized = false; }
+          }
+          if (!successful || !artifact || !materialized) {
+            generationIntegrityIssues.push({
+              generationUnitId,
+              generationUnitRevision: entry.generationUnit.revision,
+              executionNodeId: entry.generationUnit.executionNodeId,
+              failedRunIds: matchingRuns.filter((candidate) => candidate.status === "blocked" || candidate.status === "failed").map((candidate) => candidate.id),
+              successfulRunId: successful?.id ?? null,
+              videoMediaId: artifact?.id ?? null
+            });
+          }
+        }
+      } catch {
+        generationIntegrityIssues.push({
+          generationUnitId: null,
+          generationUnitRevision: null,
+          executionNodeId: null,
+          failedRunIds: [],
+          successfulRunId: null,
+          videoMediaId: null,
+          code: "generation_integrity_unreadable"
+        });
+      }
+    }
+
     const nextAction = deriveNextActionFromTasks({
       projectId,
       automationRunId: run.id,
@@ -238,7 +390,10 @@ export function createCinematicWorkflowUseCases(ports, {
       seriesId,
       episodeNumber: run.configuration.episodeNumber ?? run.configuration.workflowManifest?.episodeNumber ?? null,
       promptAuthority,
-      assetReuse
+      assetReuse,
+      authoringGaps,
+      layoutOverlaps,
+      generationIntegrityIssues
     });
 
     return {
@@ -252,18 +407,727 @@ export function createCinematicWorkflowUseCases(ports, {
     };
   }
 
+  async function reflowCinematicCanvas(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const status = await getCinematicWorkflowStatus({ projectId, automationRunId: input.automationRunId });
+    if (!status.run) throw new UnuTvError("cinematic_workflow_not_found", "No cinematic workflow run found", 404);
+    if (status.nextAction?.blocker?.code !== "canvas_nodes_overlap") {
+      throw new UnuTvError(
+        "cinematic_next_action_mismatch",
+        `Canvas reflow is not the current Skill action; current action is ${status.nextAction?.type || "none"}`,
+        409,
+        { nextAction: status.nextAction }
+      );
+    }
+    const project = await ports.projects.open(projectId);
+    let canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+    const productionId = status.run.configuration.productionId;
+    const nodes = cinematicProductionNodes(canvas, productionId);
+    const layout = buildCinematicCanvasLayout(nodes);
+    const moved = [];
+    for (const placement of layout) {
+      const node = canvas.nodes.find((entry) => entry.id === placement.nodeId);
+      if (!node || (node.x === placement.x && node.y === placement.y)) continue;
+      const updated = await updateNode({
+        projectId,
+        nodeId: node.id,
+        x: placement.x,
+        y: placement.y,
+        expectedRevision: node.revision
+      });
+      moved.push({ nodeId: updated.id, x: updated.x, y: updated.y, revision: updated.revision });
+      canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+    }
+    const residualOverlaps = findCinematicCanvasOverlaps(cinematicProductionNodes(canvas, productionId));
+    if (residualOverlaps.length) {
+      throw new UnuTvError("canvas_reflow_incomplete", "Collision-free canvas reflow left residual overlaps", 500, { residualOverlaps });
+    }
+    const next = await getCinematicWorkflowStatus({ projectId, automationRunId: status.run.id });
+    return {
+      format: "CinematicCanvasReflowReceiptV1",
+      projectId,
+      productionId,
+      canvasId: project.rootCanvasId,
+      moved,
+      overlapCount: 0,
+      nextAction: next.nextAction
+    };
+  }
+
+  async function reconcileProviderSubmission(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const status = await getCinematicWorkflowStatus({ projectId, automationRunId: input.automationRunId });
+    if (!status.run) throw new UnuTvError("cinematic_workflow_not_found", "No cinematic workflow run found", 404);
+    if (status.nextAction?.blocker?.code !== "paid_submission_outcome_unknown") {
+      throw new UnuTvError(
+        "cinematic_next_action_mismatch",
+        `Provider reconciliation is not the current Skill action; current action is ${status.nextAction?.type || "none"}`,
+        409,
+        { nextAction: status.nextAction }
+      );
+    }
+    const productionId = status.run.configuration.productionId;
+    const jobId = requireText(status.nextAction.blocker.details?.jobId, "nextAction.blocker.details.jobId");
+    const itemId = requireText(status.nextAction.blocker.details?.itemId, "nextAction.blocker.details.itemId");
+    const job = await storyboards.getStoryboardBatchJob({ projectId, productionId, jobId });
+    const item = job.items.find((entry) => entry.id === itemId);
+    if (!item) throw new UnuTvError("storyboard_batch_item_not_found", `Storyboard batch item not found: ${itemId}`, 404);
+    if (job.kind !== "image" || job.configuration?.billingMode !== "provider_account") {
+      throw new UnuTvError(
+        "provider_submission_manual_reconciliation_required",
+        "Unknown paid video/audio outcomes require explicit provider-side tracing; the cinematic Skill will not abandon or duplicate them automatically",
+        409,
+        { jobId, itemId, runId: item.providerRunId, kind: job.kind, billingMode: job.configuration?.billingMode ?? null }
+      );
+    }
+    const retriedItem = await storyboards.retryStoryboardBatchItem({
+      projectId,
+      productionId,
+      jobId,
+      itemId,
+      abandonUnknownSubmission: true,
+      operationContext: {
+        actorType: "automation",
+        actorId: "cinematic-provider-reconciliation",
+        automationRunId: status.run.id,
+        idempotencyKey: status.nextAction.idempotencyKey
+      }
+    });
+    const blockedTask = status.tasks.find((task) => task.id === status.nextAction.blocker.taskId)
+      ?? status.tasks.find((task) => task.status === "blocked");
+    if (blockedTask && automationExecutor?.retryAutomationTask) {
+      await automationExecutor.retryAutomationTask({
+        projectId,
+        automationRunId: status.run.id,
+        taskId: blockedTask.id,
+        note: "Abandoned an unconfirmed zero-cost image intent and re-queued it with a new deterministic provider intent"
+      });
+    }
+    const next = await getCinematicWorkflowStatus({ projectId, automationRunId: status.run.id });
+    return {
+      format: "ProviderReconciliationReceiptV1",
+      projectId,
+      productionId,
+      jobId,
+      itemId,
+      previousRunId: item.providerRunId ?? null,
+      strategy: "abandon_unknown_zero_cost_image",
+      job: retriedItem,
+      nextAction: next.nextAction
+    };
+  }
+
+  async function authorEpisode(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const status = await getCinematicWorkflowStatus({
+      projectId,
+      automationRunId: input.automationRunId
+    });
+    if (!status.run) throw new UnuTvError("cinematic_workflow_not_found", "No cinematic workflow run found", 404);
+    if (status.nextAction?.type !== "author_episode") {
+      throw new UnuTvError(
+        "cinematic_next_action_mismatch",
+        `Episode authoring is not the current Skill action; current action is ${status.nextAction?.type || "none"}`,
+        409,
+        { nextAction: status.nextAction }
+      );
+    }
+    if (!createNode || !updateNode || !connectEdge || !createScriptRow || !getScriptDocument || !updateScriptRow) {
+      throw new UnuTvError("episode_authoring_ports_required", "Episode authoring requires canvas and structured-script ports", 500);
+    }
+    const productionId = status.run.configuration.productionId;
+    const sourceNodeId = status.run.configuration.sourceNodeId;
+    const authoringPackage = requireObject(input.package ?? input.authoringPackage, "package");
+    if (authoringPackage.format !== "EpisodeAuthoringPackageV1") {
+      throw new UnuTvError("episode_authoring_package_invalid", "package.format must be EpisodeAuthoringPackageV1", 400);
+    }
+    const storyPacket = requireObject(authoringPackage.storyPacket, "package.storyPacket");
+    const visualBible = requireObject(authoringPackage.visualBible, "package.visualBible");
+    const packageId = requireText(authoringPackage.packageId, "package.packageId");
+    const scriptRows = Array.isArray(authoringPackage.scriptRows) ? authoringPackage.scriptRows : [];
+    if (!scriptRows.length) throw new UnuTvError("script_rows_required", "package.scriptRows must contain the complete structured episode", 400);
+    const duration = scriptRows.reduce((sum, row) => sum + (Number(row?.payload?.durationSeconds ?? row?.durationSeconds) || 0), 0);
+    const targetDuration = Number(status.workflowManifest?.targetDurationSeconds) || 0;
+    if (!duration || Math.abs(duration - targetDuration) > 1) {
+      throw new UnuTvError(
+        "episode_duration_mismatch",
+        `Structured rows total ${duration}s but workflow target is ${targetDuration}s`,
+        409,
+        { durationSeconds: duration, targetDurationSeconds: targetDuration }
+      );
+    }
+
+    const [existingStory, existingBible, sourceNode, currentDocument, project] = await Promise.all([
+      cinematic.getStoryPacket({ projectId, productionId }),
+      cinematic.getVisualBible({ projectId, productionId }),
+      ports.projects.getNode(projectId, sourceNodeId),
+      getScriptDocument({ projectId, nodeId: sourceNodeId }),
+      ports.projects.open(projectId)
+    ]);
+    if (!sourceNode || !project?.rootCanvasId) throw new UnuTvError("episode_canvas_source_required", "Episode source and root canvas are required", 409);
+
+    let savedStory = existingStory;
+    if (!existingStory || !equalJson(
+      { ...existingStory, storyPacketId: undefined, revision: undefined, updatedAt: undefined },
+      { ...storyPacket, storyPacketId: undefined, revision: undefined, updatedAt: undefined }
+    )) {
+      savedStory = await cinematic.saveStoryPacket({
+        projectId,
+        productionId,
+        expectedRevision: existingStory?.revision ?? 0,
+        storyPacket: {
+          ...storyPacket,
+          ...(existingStory?.storyPacketId ? { storyPacketId: existingStory.storyPacketId } : {}),
+          revision: (existingStory?.revision ?? 0) + 1
+        }
+      });
+    }
+
+    let savedBible = existingBible;
+    if (!existingBible || !equalJson(
+      { ...existingBible, visualBibleId: undefined, revision: undefined, updatedAt: undefined },
+      { ...visualBible, visualBibleId: undefined, revision: undefined, updatedAt: undefined }
+    )) {
+      savedBible = await cinematic.saveVisualBible({
+        projectId,
+        productionId,
+        expectedRevision: existingBible?.revision ?? 0,
+        visualBible: {
+          ...visualBible,
+          ...(existingBible?.visualBibleId ? { visualBibleId: existingBible.visualBibleId } : {}),
+          revision: (existingBible?.revision ?? 0) + 1
+        }
+      });
+    }
+
+    let structuredRowsChanged = false;
+    if (currentDocument.rows.length) {
+      const orderedCurrentRows = currentDocument.rows
+        .slice()
+        .sort((left, right) => left.orderIndex - right.orderIndex);
+      const currentRows = orderedCurrentRows.map((row) => row.payload);
+      const proposedRows = scriptRows.map((row) => row.payload ?? row);
+      if (!equalJson(currentRows, proposedRows)) {
+        const samePackage = sourceNode.payload?.authoringPackageId === packageId;
+        const sameStructure = orderedCurrentRows.length === scriptRows.length
+          && orderedCurrentRows.every((row, index) => (
+            Number(row.shotNumber) === Number(scriptRows[index]?.shotNumber ?? index + 1)
+          ));
+        if (!samePackage || !sameStructure) {
+          throw new UnuTvError(
+            "structured_script_conflict",
+            "Only a revision of the same authoring package with the same shot structure can replace existing rows without an explicit scoped reset",
+            409,
+            {
+              existingPackageId: sourceNode.payload?.authoringPackageId ?? null,
+              proposedPackageId: packageId,
+              currentRowCount: currentRows.length,
+              proposedRowCount: proposedRows.length
+            }
+          );
+        }
+        for (const [index, row] of orderedCurrentRows.entries()) {
+          await updateScriptRow({
+            projectId,
+            nodeId: sourceNodeId,
+            rowId: row.id,
+            orderIndex: index,
+            shotNumber: scriptRows[index]?.shotNumber ?? index + 1,
+            payload: proposedRows[index],
+            replacePayload: true
+          });
+        }
+        structuredRowsChanged = true;
+      }
+    } else {
+      for (const [index, row] of scriptRows.entries()) {
+        await createScriptRow({
+          projectId,
+          nodeId: sourceNodeId,
+          orderIndex: index,
+          shotNumber: row.shotNumber ?? index + 1,
+          payload: row.payload ?? row
+        });
+      }
+      structuredRowsChanged = true;
+    }
+
+    let revisedShots = [];
+    if (structuredRowsChanged && scriptPlanning?.planCinematicFromScript) {
+      const revisedPlan = await scriptPlanning.planCinematicFromScript({
+        projectId,
+        productionId,
+        sourceNodeId,
+        createStoryboard: true
+      });
+      revisedShots = revisedPlan.shots ?? [];
+      let liveCanvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+      for (const shot of revisedShots) {
+        const shotNode = liveCanvas.nodes.find((node) => (
+          node.payload?.resourceType === "cinematic_shot"
+          && node.payload?.resourceId === shot.shotId
+        ));
+        if (!shotNode) continue;
+        await updateNode({
+          projectId,
+          nodeId: shotNode.id,
+          title: `S${String(shot.order).padStart(2, "0")} · ${shot.narrativeJob}`,
+          payload: {
+            ...shotNode.payload,
+            revision: shot.revision,
+            durationSeconds: shot.durationSeconds,
+            shot,
+            stage: "shot_design",
+            stageStatus: "revised"
+          },
+          expectedRevision: shotNode.revision
+        });
+        liveCanvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+      }
+    }
+
+    const sourceProjection = await updateNode({
+      projectId,
+      nodeId: sourceNodeId,
+      title: authoringPackage.title || sourceNode.title,
+      payload: {
+        ...sourceNode.payload,
+        ...(authoringPackage.sourceDocument || {}),
+        authoringPackageId: packageId,
+        productionId,
+        structuredRowCount: scriptRows.length,
+        structuredDurationSeconds: duration,
+        stage: "script",
+        stageStatus: "authored"
+      },
+      expectedRevision: sourceNode.revision
+    });
+    let canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+    const storyNode = await ensureProjectionNode({
+      projectId,
+      canvas,
+      kind: "story",
+      title: "EP01 故事锁与因果链",
+      x: sourceProjection.x + 560,
+      y: sourceProjection.y,
+      resourceType: "story_packet",
+      resourceId: savedStory.storyPacketId,
+      payload: {
+        productionId,
+        revision: savedStory.revision,
+        packageId,
+        storyPacket: savedStory,
+        stage: "script_analysis",
+        stageStatus: "ready"
+      }
+    });
+    canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+    const bibleNode = await ensureProjectionNode({
+      projectId,
+      canvas,
+      kind: "cinematic",
+      title: "EP01 视觉与声音圣经",
+      x: sourceProjection.x + 1248,
+      y: sourceProjection.y,
+      resourceType: "visual_bible",
+      resourceId: savedBible.visualBibleId,
+      payload: {
+        productionId,
+        revision: savedBible.revision,
+        packageId,
+        visualBible: savedBible,
+        stage: "visual_bible",
+        stageStatus: "ready"
+      }
+    });
+    canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+    await ensureProjectionEdge({
+      projectId,
+      canvas,
+      fromNodeId: sourceNodeId,
+      toNodeId: storyNode.id,
+      role: "cinematic_stage:story_packet"
+    });
+    canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+    await ensureProjectionEdge({
+      projectId,
+      canvas,
+      fromNodeId: storyNode.id,
+      toNodeId: bibleNode.id,
+      role: "cinematic_stage:visual_bible"
+    });
+
+    let next = await getCinematicWorkflowStatus({ projectId, automationRunId: status.run.id });
+    const blockedAuthoringTask = next.tasks.find((task) => task.status === "blocked" && (
+      ["story_packet_required", "visual_bible_required"].includes(task.error?.code)
+      || next.nextAction?.blocker?.code === "shot_performance_contract_required"
+    ));
+    if (blockedAuthoringTask && automationExecutor?.retryAutomationTask) {
+      const staleStoryboardBatchJobId = blockedAuthoringTask.error?.details?.jobId ?? null;
+      if (staleStoryboardBatchJobId && storyboards?.cancelStoryboardBatchJob) {
+        await storyboards.cancelStoryboardBatchJob({
+          projectId,
+          productionId,
+          jobId: staleStoryboardBatchJobId
+        });
+      }
+      await automationExecutor.retryAutomationTask({
+        projectId,
+        automationRunId: status.run.id,
+        taskId: blockedAuthoringTask.id,
+        note: "EpisodeAuthoringPackageV1 atomically resolved the authoring or performance-contract gate"
+      });
+      next = await getCinematicWorkflowStatus({ projectId, automationRunId: status.run.id });
+    }
+    return {
+      format: "EpisodeAuthoringReceiptV1",
+      packageId,
+      productionId,
+      sourceNodeId,
+      storyPacketId: savedStory.storyPacketId,
+      storyRevision: savedStory.revision,
+      visualBibleId: savedBible.visualBibleId,
+      visualBibleRevision: savedBible.revision,
+      structuredRowCount: scriptRows.length,
+      durationSeconds: duration,
+      canvasNodeIds: [sourceNodeId, storyNode.id, bibleNode.id],
+      revisedShotIds: revisedShots.map((shot) => shot.shotId),
+      nextAction: next.nextAction
+    };
+  }
+
   /**
    * Platform advance: fill structural gaps then run automation executor once.
    */
   async function advanceCinematicWorkflow(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
-    const statusBefore = await getCinematicWorkflowStatus(input);
+    let statusBefore = await getCinematicWorkflowStatus(input);
     if (!statusBefore.run) throw new UnuTvError("cinematic_workflow_not_found", "No cinematic workflow run found", 404);
+    const controlLeaseExpiresAt = Date.parse(statusBefore.session?.leaseExpiresAt ?? "");
+    if (
+      statusBefore.session?.state === "auto_running"
+      && Number.isFinite(controlLeaseExpiresAt)
+      && controlLeaseExpiresAt <= Date.now()
+      && projectControl.recoverAutomation
+    ) {
+      await projectControl.recoverAutomation({
+        projectId,
+        automationRunId: statusBefore.run.id
+      });
+      statusBefore = await getCinematicWorkflowStatus(input);
+    }
     const automationRunId = statusBefore.run.id;
     const productionId = statusBefore.run.configuration.productionId;
     const workerResults = [];
     const configuration = statusBefore.run.configuration || {};
     const sourceNodeId = configuration.sourceNodeId || statusBefore.workflowManifest?.sourceNodeId;
+
+    if (statusBefore.nextAction?.blocker?.code === "cinematic_video_artifact_missing") {
+      const { ensureGenerationUnitsForProduction } = await import("../workers/unit-design-worker.mjs");
+      const repairedUnits = await ensureGenerationUnitsForProduction({
+        projectId,
+        productionId,
+        cinematic,
+        projects: ports.projects,
+        generationStrategies: configuration.generationStrategies
+          || configuration.workflowManifest?.generationStrategies
+          || {},
+        storyboards,
+        sequenceWorkspace,
+        media: ports.media,
+        createNode,
+        updateNode,
+        connectEdge,
+        referenceBindings: configuration.referenceBindings || [],
+        referenceMediaIds: configuration.referenceMediaIds || [],
+        visualAnchorPolicy: configuration.visualAnchorPolicy || null,
+        generationMode: configuration.generationMode || null,
+        aspectRatio: configuration.aspectRatio || configuration.workflowManifest?.aspectRatio || "16:9",
+        preserveExistingUnitContracts: false
+      });
+      const rewindStages = new Set([
+        "prompt_compile",
+        "video_generation",
+        "sound_design",
+        "continuity_qa",
+        "timeline_edit",
+        "candidate_render",
+        "delivery_qc"
+      ]);
+      for (const task of statusBefore.tasks.filter((candidate) => rewindStages.has(candidate.stage))) {
+        await ports.projects.updateAutomationTask(projectId, {
+          ...task,
+          status: "queued",
+          output: {},
+          error: null,
+          budgetReservationId: null,
+          workerLeaseId: null,
+          heartbeatAt: null,
+          leaseExpiresAt: null,
+          startedAt: null,
+          completedAt: null,
+          updatedAt: new Date().toISOString()
+        });
+      }
+      if (statusBefore.session?.state !== "auto_running") {
+        await projectControl.resumeAutomation({ projectId, automationRunId });
+      }
+      workerResults.push({
+        worker: "provider-artifact-integrity",
+        ok: true,
+        repairedGenerationUnitIds: [
+          ...(repairedUnits.updated || []).map((entry) => entry.generationUnit.generationUnitId),
+          ...(repairedUnits.created || []).map((entry) => entry.generationUnit.generationUnitId)
+        ],
+        rewindFrom: "prompt_compile"
+      });
+      statusBefore = await getCinematicWorkflowStatus({ projectId, automationRunId });
+    }
+
+    if (
+      statusBefore.nextAction?.blocker?.code === "provider_request_failed"
+      && /input image may contain real person/iu.test(statusBefore.nextAction?.blocker?.message || "")
+    ) {
+      const { ensureGenerationUnitsForProduction } = await import("../workers/unit-design-worker.mjs");
+      const repairedUnits = await ensureGenerationUnitsForProduction({
+        projectId,
+        productionId,
+        cinematic,
+        projects: ports.projects,
+        generationStrategies: configuration.generationStrategies
+          || configuration.workflowManifest?.generationStrategies
+          || {},
+        storyboards,
+        sequenceWorkspace,
+        media: ports.media,
+        createNode,
+        updateNode,
+        connectEdge,
+        referenceBindings: configuration.referenceBindings || [],
+        referenceMediaIds: configuration.referenceMediaIds || [],
+        visualAnchorPolicy: configuration.visualAnchorPolicy || null,
+        generationMode: configuration.generationMode || null,
+        aspectRatio: configuration.aspectRatio || configuration.workflowManifest?.aspectRatio || "16:9",
+        preserveExistingUnitContracts: false
+      });
+      const rewindStages = new Set([
+        "prompt_compile",
+        "video_generation",
+        "sound_design",
+        "continuity_qa",
+        "timeline_edit",
+        "candidate_render",
+        "delivery_qc"
+      ]);
+      for (const task of statusBefore.tasks.filter((candidate) => rewindStages.has(candidate.stage))) {
+        await ports.projects.updateAutomationTask(projectId, {
+          ...task,
+          status: "queued",
+          output: {},
+          error: null,
+          budgetReservationId: null,
+          workerLeaseId: null,
+          heartbeatAt: null,
+          leaseExpiresAt: null,
+          startedAt: null,
+          completedAt: null,
+          updatedAt: new Date().toISOString()
+        });
+      }
+      if (statusBefore.session?.state !== "auto_running") {
+        await projectControl.resumeAutomation({ projectId, automationRunId });
+      }
+      workerResults.push({
+        worker: "seedance-reference-safety",
+        ok: true,
+        strategy: "accepted_clean_previs_plus_virtual_person_assets",
+        repairedGenerationUnitIds: [
+          ...(repairedUnits.updated || []).map((entry) => entry.generationUnit.generationUnitId),
+          ...(repairedUnits.created || []).map((entry) => entry.generationUnit.generationUnitId)
+        ],
+        rewindFrom: "prompt_compile"
+      });
+      statusBefore = await getCinematicWorkflowStatus({ projectId, automationRunId });
+    }
+
+    if (
+      statusBefore.nextAction?.blocker?.code === "provider_request_failed"
+      && /image format is not supported/iu.test(statusBefore.nextAction?.blocker?.message || "")
+    ) {
+      const sharp = (await import("sharp")).default;
+      const project = await ports.projects.open(projectId);
+      let canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+      const units = await cinematic.listGenerationUnits({ projectId, productionId });
+      const rasterized = [];
+      for (const entry of units) {
+        const binding = entry.referenceBindings?.find((candidate) => (
+          candidate.providerEligible !== false
+          && candidate.role === "director_keyframe"
+        ));
+        if (!binding) continue;
+        const sourceNode = binding.sourceNodeId
+          ? await ports.projects.getNode(projectId, binding.sourceNodeId)
+          : canvas.nodes.find((node) => (
+            node.payload?.currentMediaId === binding.mediaId
+            || node.payload?.mediaIds?.includes?.(binding.mediaId)
+          ));
+        if (!sourceNode) {
+          throw new UnuTvError(
+            "canvas_reference_node_required",
+            `${binding.mediaId} 缺少可见低模预演源节点，不能生成 Provider PNG。`,
+            409,
+            { mediaId: binding.mediaId }
+          );
+        }
+        const existingProviderMediaId = sourceNode.payload?.providerReferenceMediaId;
+        const existingProviderMedia = existingProviderMediaId
+          ? ports.media.open(projectId, existingProviderMediaId)
+          : null;
+        let providerMedia = existingProviderMedia;
+        if (!providerMedia || providerMedia.mimeType !== "image/png") {
+          const sourceMedia = ports.media.open(projectId, binding.mediaId);
+          if (!sourceMedia) throw new UnuTvError("media_not_found", `低模预演媒体不存在：${binding.mediaId}`, 404);
+          const pngBytes = await sharp(sourceMedia.filePath, { density: 144 })
+            .resize({ width: 540, height: 960, fit: "fill" })
+            .png({ compressionLevel: 9 })
+            .toBuffer();
+          providerMedia = await ports.media.importBytes({
+            projectId,
+            nodeId: sourceNode.id,
+            kind: "image",
+            mimeType: "image/png",
+            bytes: pngBytes,
+            title: `${sourceNode.title}-provider.png`
+          });
+        }
+        const currentNode = await ports.projects.getNode(projectId, sourceNode.id);
+        const mediaIds = [...new Set([
+          ...(Array.isArray(currentNode.payload?.mediaIds) ? currentNode.payload.mediaIds : []),
+          binding.mediaId,
+          providerMedia.id
+        ])];
+        await updateNode({
+          projectId,
+          nodeId: currentNode.id,
+          expectedRevision: currentNode.revision,
+          payload: {
+            ...currentNode.payload,
+            mediaIds,
+            providerReferenceMediaId: providerMedia.id,
+            providerReferenceMimeType: providerMedia.mimeType,
+            providerReferenceChecksum: providerMedia.sha256,
+            providerReferenceDerivedFromMediaId: binding.mediaId,
+            providerEligible: true
+          }
+        });
+        rasterized.push({
+          generationUnitId: entry.generationUnit.generationUnitId,
+          sourceMediaId: binding.mediaId,
+          providerMediaId: providerMedia.id,
+          checksum: providerMedia.sha256,
+          sourceNodeId: sourceNode.id
+        });
+        canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
+      }
+      if (!rasterized.length) {
+        throw new UnuTvError(
+          "provider_reference_rasterization_required",
+          "没有找到可栅格化的低模预演 Provider 参考。",
+          409
+        );
+      }
+      const rewindStages = new Set([
+        "prompt_compile",
+        "video_generation",
+        "sound_design",
+        "continuity_qa",
+        "timeline_edit",
+        "candidate_render",
+        "delivery_qc"
+      ]);
+      for (const task of statusBefore.tasks.filter((candidate) => rewindStages.has(candidate.stage))) {
+        await ports.projects.updateAutomationTask(projectId, {
+          ...task,
+          status: "queued",
+          output: {},
+          error: null,
+          budgetReservationId: null,
+          workerLeaseId: null,
+          heartbeatAt: null,
+          leaseExpiresAt: null,
+          startedAt: null,
+          completedAt: null,
+          updatedAt: new Date().toISOString()
+        });
+      }
+      if (statusBefore.session?.state !== "auto_running") {
+        await projectControl.resumeAutomation({ projectId, automationRunId });
+      }
+      workerResults.push({
+        worker: "provider-reference-rasterization",
+        ok: true,
+        format: "image/png",
+        rasterized
+      });
+      statusBefore = await getCinematicWorkflowStatus({ projectId, automationRunId });
+    }
+
+    if (statusBefore.nextAction?.blocker?.code === "provider_request_failed" && automationExecutor?.retryAutomationTask) {
+      const providerRuns = await ports.projects.listRuns(projectId);
+      const reusableRun = findReusableProviderRunForFailedIntent(
+        providerRuns,
+        statusBefore.nextAction?.blocker?.details?.runId
+      );
+      const blockedTask = statusBefore.tasks.find((task) => (
+        task.id === statusBefore.nextAction.blocker.taskId
+        && task.status === "blocked"
+      ));
+      if (reusableRun && blockedTask) {
+        await automationExecutor.retryAutomationTask({
+          projectId,
+          automationRunId,
+          taskId: blockedTask.id,
+          note: `Reuse existing unresolved Provider run ${reusableRun.id}; do not submit another paid intent`
+        });
+        workerResults.push({
+          worker: "provider-pending-intent-dedup",
+          ok: true,
+          failedRunId: statusBefore.nextAction.blocker.details.runId,
+          reusedRunId: reusableRun.id
+        });
+        statusBefore = await getCinematicWorkflowStatus({ projectId, automationRunId });
+      }
+    }
+
+    const runtimeRepairableBlockers = new Set([
+      "revision_conflict",
+      "ERR_SQLITE_ERROR",
+      "invalid_cinematic_contract",
+      "automation_generation_unit_preflight_failed",
+      "sequence_previs_frame_pixel_acceptance_required",
+      "sequence_previs_owner_acceptance_required",
+      "shot_script_owner_acceptance_required",
+      "continuity_evaluation_required",
+      "latest_cinematic_evaluation_rejected",
+      "structured_continuity_evaluation_required",
+      "structured_continuity_state_required",
+      "timeline_post_repairs_required",
+      "timeline_aspect_ratio_mismatch"
+    ]);
+    if (runtimeRepairableBlockers.has(statusBefore.nextAction?.blocker?.code) && automationExecutor?.retryAutomationTask) {
+      const conflictedTask = statusBefore.tasks.find((task) => (
+        task.id === statusBefore.nextAction.blocker.taskId
+        || (task.status === "blocked" && runtimeRepairableBlockers.has(task.error?.code))
+      ));
+      if (conflictedTask) {
+        await automationExecutor.retryAutomationTask({
+          projectId,
+          automationRunId,
+          taskId: conflictedTask.id,
+          note: "Retry the current stage after the persisted contract/evidence repair; no Provider intent is duplicated"
+        });
+      }
+    }
 
     // Full pipeline / one-shot: bootstrap missing upstream contracts before stage execution.
     if ((configuration.oneShot || configuration.fullDelivery) && configuration.brief && sourceNodeId) {
@@ -305,32 +1169,6 @@ export function createCinematicWorkflowUseCases(ports, {
       }
     }
 
-    // Ensure generation units exist before prompt_compile can succeed
-    try {
-      const units = await cinematic.listGenerationUnits({ projectId, productionId });
-      const shots = await cinematic.listShots({ projectId, productionId });
-      if (shots.length && !units.length) {
-        const designed = await ensureGenerationUnitsForProduction({
-          projectId,
-          productionId,
-          cinematic,
-          projects: ports.projects,
-          generationStrategies: statusBefore.run.configuration.generationStrategies
-            || statusBefore.workflowManifest?.generationStrategies
-            || {},
-          referenceBindings: statusBefore.run.configuration.referenceBindings || [],
-          referenceMediaIds: statusBefore.run.configuration.referenceMediaIds || [],
-          visualAnchorPolicy: statusBefore.run.configuration.visualAnchorPolicy || null,
-          generationMode: statusBefore.run.configuration.generationMode || null,
-          storyboards,
-          aspectRatio: statusBefore.workflowManifest?.contentType === "short_drama" ? "9:16" : "16:9"
-        });
-        workerResults.push({ worker: "unit_design", ok: true, created: designed.created.length });
-      }
-    } catch (error) {
-      workerResults.push({ worker: "unit_design", ok: false, error: { code: error.code, message: error.message } });
-    }
-
     // Auto knowledge-grounded signoff when knowledge port is present and units exist
     if (knowledge) {
       try {
@@ -362,7 +1200,11 @@ export function createCinematicWorkflowUseCases(ports, {
 
     let advanceResult = null;
     if (automationExecutor?.advanceAutomation) {
-      advanceResult = await automationExecutor.advanceAutomation({ projectId, automationRunId });
+      advanceResult = await automationExecutor.advanceAutomation({
+        projectId,
+        automationRunId,
+        releaseWaitingLease: true
+      });
     }
     const status = await getCinematicWorkflowStatus({ projectId, automationRunId });
     return {
@@ -384,28 +1226,126 @@ export function createCinematicWorkflowUseCases(ports, {
     if (typeof reviewTarget !== "function") {
       throw new UnuTvError("review_port_unavailable", "Owner decision requires reviewTarget use-case", 500);
     }
-    const review = await reviewTarget({
-      projectId,
-      targetType,
-      targetId,
-      state,
-      note: input.note || ""
-    });
-    const status = await getCinematicWorkflowStatus({ projectId, automationRunId: input.automationRunId });
-    if (status.session && ["auto_paused", "auto_failed"].includes(status.session.state) && projectControl.resumeAutomation) {
-      try {
-        await projectControl.resumeAutomation({ projectId, automationRunId: status.run?.id });
-      } catch {
-        // ignore resume failures
+    const statusBefore = await getCinematicWorkflowStatus({ projectId, automationRunId: input.automationRunId });
+    const sequencePrevisId = input.sequencePrevisId
+      || statusBefore.nextAction?.blocker?.details?.sequencePrevisId
+      || null;
+    const sequencePrevisRevision = input.revision
+      || statusBefore.nextAction?.blocker?.details?.revision
+      || null;
+    const review = targetType === "cinematic_sequence_previs_revision" && sequencePrevisId && sequenceWorkspace
+      ? (await sequenceWorkspace.reviewSequencePrevis({
+        projectId,
+        productionId: statusBefore.run.configuration.productionId,
+        sequencePrevisId,
+        revision: sequencePrevisRevision,
+        state,
+        note: input.note || ""
+      })).review
+      : await reviewTarget({
+        projectId,
+        targetType,
+        targetId,
+        state,
+        note: input.note || "",
+        operationContext: statusBefore.session?.automationRunId
+          ? {
+            actorType: "owner_gate",
+            actorId: "cinematic-owner-gate",
+            automationRunId: statusBefore.run.id,
+            idempotencyKey: `owner-decision:${targetType}:${targetId}:${state}`
+          }
+          : undefined
+      });
+    const currentBlocker = statusBefore.nextAction?.blocker;
+    const listedTargets = Array.isArray(currentBlocker?.details?.targets)
+      ? currentBlocker.details.targets
+      : [];
+    const matchingListedTarget = listedTargets.find((entry) => (
+      entry?.targetId === targetId
+      || entry?.mediaId === targetId
+      || entry?.generationUnitId === targetId
+    )) ?? null;
+    const resolvesCurrentBlocker = currentBlocker?.targetType === targetType && (
+      currentBlocker?.targetId === targetId
+      || Boolean(matchingListedTarget)
+    );
+    let rejectedStoryboardTarget = matchingListedTarget;
+    if (
+      state === "rejected"
+      && targetType === "media"
+      && !rejectedStoryboardTarget
+      && storyboards?.listStoryboards
+    ) {
+      const boards = await storyboards.listStoryboards({
+        projectId,
+        productionId: statusBefore.run.configuration.productionId
+      });
+      for (const board of boards) {
+        const shot = board.shots.find((entry) => entry.imageMediaId === targetId);
+        if (!shot) continue;
+        rejectedStoryboardTarget = {
+          storyboardId: board.storyboardId,
+          storyboardShotId: shot.storyboardShotId,
+          shotId: shot.shotId,
+          mediaId: targetId
+        };
+        break;
       }
     }
-    return { review, nextAction: (await getCinematicWorkflowStatus({ projectId, automationRunId: status.run?.id })).nextAction };
+    if (
+      state === "rejected"
+      && targetType === "media"
+      && rejectedStoryboardTarget?.storyboardId
+      && rejectedStoryboardTarget?.storyboardShotId
+      && storyboards?.setStoryboardShotMedia
+    ) {
+      await storyboards.setStoryboardShotMedia({
+        projectId,
+        productionId: statusBefore.run.configuration.productionId,
+        storyboardId: rejectedStoryboardTarget.storyboardId,
+        storyboardShotId: rejectedStoryboardTarget.storyboardShotId,
+        imageMediaId: null
+      });
+    }
+    let status = await getCinematicWorkflowStatus({ projectId, automationRunId: statusBefore.run?.id });
+    const blockedTask = status.tasks.find((task) => task.status === "blocked");
+    if (resolvesCurrentBlocker && blockedTask && ["auto_running", "auto_paused", "auto_failed"].includes(status.session?.state) && automationExecutor?.retryAutomationTask) {
+      try {
+        const staleStoryboardBatchJobId = blockedTask.error?.details?.jobId ?? null;
+        if (staleStoryboardBatchJobId && storyboards?.cancelStoryboardBatchJob) {
+          await storyboards.cancelStoryboardBatchJob({
+            projectId,
+            productionId: status.run.configuration.productionId,
+            jobId: staleStoryboardBatchJobId
+          });
+        }
+        await automationExecutor.retryAutomationTask({
+          projectId,
+          automationRunId: status.run.id,
+          taskId: blockedTask.id,
+          note: input.note || (state === "accepted"
+            ? "Owner gate accepted through cinematic workflow"
+            : "Owner rejected the storyboard frame; clear only that frame and regenerate it through the cinematic workflow")
+        });
+      } catch (error) {
+        if (!["automation_task_not_blocked", "automation_retry_unavailable"].includes(error.code)) throw error;
+      }
+      status = await getCinematicWorkflowStatus({ projectId, automationRunId: status.run.id });
+    } else if (resolvesCurrentBlocker && status.session && ["auto_paused", "auto_failed"].includes(status.session.state) && projectControl.resumeAutomation) {
+      try { await projectControl.resumeAutomation({ projectId, automationRunId: status.run?.id }); }
+      catch { /* keep the persisted gate if resume is not yet valid */ }
+    }
+    return { review, nextAction: status.nextAction };
   }
 
   return {
     startCinematicWorkflow,
     getCinematicWorkflowStatus,
     advanceCinematicWorkflow,
+    authorEpisode,
+    reflowCinematicCanvas,
+    reconcileProviderSubmission,
     ownerDecision
   };
 }

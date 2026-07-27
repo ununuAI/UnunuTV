@@ -114,6 +114,32 @@ test("approved storyboard dispatch reserves budget once, persists async run iden
   assert.deepEqual([submits, polls], [1, 1], "completed items never resubmit paid work");
 });
 
+test("image storyboard dispatch derives a single frozen keyframe when the batch omits one", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-storyboard-keyframe-fallback-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let capturedPrompt = "";
+  const provider = {
+    async run({ request }) {
+      capturedPrompt = request.prompt;
+      return { status: "succeeded", artifacts: [{ kind: "image", mimeType: "image/png", bytes: Buffer.from("single-frame"), title: "storyboard.png" }] };
+    },
+    async poll() { throw new Error("not used"); }
+  };
+  const runtime = createLocalRuntime({ dataRoot, provider, recoverRenders: false, recoverAutomation: false, runAutomationExecutor: false });
+  context.after(() => runtime.close());
+  const { board, execution, production, project } = await setupProduction(runtime);
+  await runtime.app.saveBudgetGrant({ projectId: project.id, totalLimit: 5, perTaskLimit: 2, currency: "CNY", allowedProviders: ["fake"], allowedModels: ["fake-image-v1"], allowedTaskTypes: ["image"] });
+  let job = await runtime.app.createStoryboardBatchJob({
+    projectId: project.id, productionId: production.productionId, storyboardId: board.storyboardId, kind: "image", provider: "fake", model: "fake-image-v1",
+    configuration: { billingMode: "legacy_budget", executionNodeId: execution.id, amount: 1, currency: "CNY" }
+  });
+  job = await runtime.app.advanceStoryboardBatchJob({ projectId: project.id, productionId: production.productionId, jobId: job.id });
+  assert.equal(job.status, "succeeded");
+  assert.match(capturedPrompt, /唯一冻结时刻/u);
+  assert.match(capturedPrompt, /单一摄影机、单一曝光、单一连续空间/u);
+  assert.doesNotMatch(capturedPrompt, /推门 → 停步/u);
+});
+
 test("storyboard dispatch cannot start without provider, model, or execution node", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-storyboard-provider-gates-"));
   context.after(async () => rm(dataRoot, { recursive: true, force: true }));

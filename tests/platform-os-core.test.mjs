@@ -199,7 +199,8 @@ test("workflow status exposes nextAction even when blocked early", async (contex
   // advance until blocked or progressed
   const once = await runtime.app.advanceCinematicWorkflow({ projectId: project.id });
   assert.ok(once.nextAction);
-  assert.ok(["advance", "repair", "owner_gate", "run_worker", "failed", "done", "wait_provider"].includes(once.nextAction.type));
+  assert.equal(once.nextAction.type, "author_episode");
+  assert.match(once.nextAction.command.cli, /cinematic-author/);
 });
 
 test("platform OS: freeze blocks silent identity overwrite; variant needs parentEntryId", async (context) => {

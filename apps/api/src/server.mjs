@@ -268,8 +268,14 @@ async function dispatch(request, response, runtime, webRoot) {
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/runs/:runId/poll"))) {
     return json(response, 200, await runtime.app.pollRun(params));
   }
+  if ((params = route(method, pathname, "DELETE", "/api/projects/:projectId/runs/:runId"))) {
+    return json(response, 200, await runtime.app.cancelRun({ ...params, ...(await body(request)) }));
+  }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/runs"))) {
     return json(response, 200, { runs: await runtime.app.listRuns(params) });
+  }
+  if ((params = route(method, pathname, "POST", "/api/projects/:projectId/media/:mediaId/qa-sheet"))) {
+    return json(response, 201, await runtime.app.createVideoQaContactSheet({ ...params, ...(await body(request)) }));
   }
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/edges"))) {
     return json(response, 201, await runtime.app.connectEdge({ ...params, ...(await body(request)) }));

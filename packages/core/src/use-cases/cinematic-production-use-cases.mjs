@@ -328,7 +328,11 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
           role: "director_stage_blocking",
           controls: ["空间站位", "人物前后层级", "摄影机机位", "画面轴线", "视场与构图"],
           doesNotControl: ["人物身份", "最终美术风格", "最终灯光", "最终表演节奏"],
-          providerEligible: shot.cameraTrajectoryPlan?.overlayPolicy !== "editor_only",
+          // Director Stage captures are control evidence, not final-pixel
+          // references. Their geometry/camera facts are compiled into text and
+          // remain connected on canvas, while proxy pixels never consume a
+          // Seedance reference slot or leak into the final look.
+          providerEligible: false,
           required: true, semanticControl: { temporalRole: "static_state", preserve: ["空间站位", "人物前后层级", "摄影机机位", "画面轴线", "视场与构图"], replace: [], complete: [], ignore: ["代理人物造型", "最终美术风格", "最终灯光", "最终表演节奏"], styleOnly: [] },
           authorityRevision: `director-stage-v${binding.stageRevision}`,
           directorNodeId: binding.directorNodeId,

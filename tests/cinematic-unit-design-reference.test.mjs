@@ -17,7 +17,12 @@ test("unit design carries selected semantic storyboard references without freezi
     cinematography: { shotSize: "中远景", movementPath: "沿入口到桌席的Z轴缓慢推进" },
     lighting: { source: "血月从窗格侧逆光" },
     performance: { visibleEvidence: "先抬眼，再转移重心，停稳" },
-    sound: { ambience: "木楼环境声" }
+    sound: { ambience: "木楼环境声" },
+    acceptanceCriteria: [
+      "主角身份稳定且没有额外人物",
+      "入口到桌席的空间路径清楚",
+      "停稳动作由重心转移产生"
+    ]
   };
   const binding = {
     assetId: "asset-scene",
@@ -47,11 +52,136 @@ test("unit design carries selected semantic storyboard references without freezi
   const input = saved[0];
   assert.equal(input.generationUnit.generationParameters.mode, "image_reference");
   assert.equal(input.generationUnit.generationParameters.duration, 12);
-  assert.equal(input.generationUnit.generationParameters.resolution, "1080p");
+  assert.equal(input.generationUnit.generationParameters.resolution, "720p");
   assert.deepEqual(input.generationUnit.generationParameters.referenceMediaIds, ["media-scene"]);
   assert.equal(input.referenceBindings[0].mediaId, "media-scene");
+  assert.deepEqual(input.referenceBindings[0].semanticControl.replace, []);
+  assert.deepEqual(input.referenceBindings[0].semanticControl.ignore, ["动作时序", "表演节奏", "摄影机运动"]);
   assert.equal(input.generationUnit.controlIntent.dynamicControl.cameraTrajectory, "沿入口到桌席的Z轴缓慢推进");
   assert.notEqual(input.generationUnit.controlIntent.dynamicControl.cameraTrajectory, "固定机位");
+  assert.equal(input.generationUnit.executionGates.requireContinuityStateAudit, true);
+  assert.deepEqual(
+    input.generationUnit.reviewRequirements.map(({ category, requirement, blocking }) => ({ category, requirement, blocking })),
+    [
+      { category: "identity", requirement: "主角身份稳定且没有额外人物", blocking: true },
+      { category: "spatial_topology", requirement: "入口到桌席的空间路径清楚", blocking: true },
+      { category: "action_origin", requirement: "停稳动作由重心转移产生", blocking: true }
+    ]
+  );
+});
+
+test("prompt reconciliation preserves authored contracts but synchronizes a replaced Provider reference", async () => {
+  const updates = [];
+  const shot = {
+    shotId: "shot-01",
+    order: 1,
+    durationSeconds: 8,
+    narrativeJob: "保持空间关系并完成一次推进",
+    openingState: "演员位于门内",
+    endingState: "演员停在木箱旁",
+    cinematography: { movementPath: "低位缓推" }
+  };
+  const oldBinding = {
+    assetId: "previs-old",
+    versionId: "previs-old-v1",
+    mediaId: "media-previs-svg",
+    displayName: "旧 SVG 预演帧",
+    role: "director_keyframe",
+    controls: ["场景拓扑"],
+    doesNotControl: ["最终人物外观"],
+    required: true,
+    authorityRevision: "previs-r1",
+    providerIndex: 1
+  };
+  const newBinding = {
+    ...oldBinding,
+    versionId: "previs-png-v1",
+    mediaId: "media-previs-png",
+    displayName: "Provider PNG 预演帧"
+  };
+  const currentUnit = {
+    generationUnitId: "unit-01",
+    revision: 4,
+    strategy: "single_shot",
+    shotLinks: [{ shotId: shot.shotId, order: 1, role: "artistic_shot" }],
+    visualAnchorPolicy: "SHOT_FRAME_SET",
+    requiredCapabilities: ["multi_reference"],
+    executionNodeId: "video-node",
+    controlIntent: { dynamicControl: { cameraTrajectory: "作者已确认的复杂弧线推进" } },
+    generationParameters: {
+      provider: "ark",
+      model: "doubao-seedance-2-0-mini-260615",
+      mode: "image_reference",
+      duration: 8,
+      aspectRatio: "9:16",
+      resolution: "720p",
+      count: 1,
+      generateAudio: true,
+      referenceMediaIds: [oldBinding.mediaId]
+    }
+  };
+  await ensureGenerationUnitsForProduction({
+    projectId: "project-1",
+    productionId: "production-1",
+    cinematic: {
+      listShots: async () => [shot],
+      listGenerationUnits: async () => [{ generationUnit: currentUnit, referenceBindings: [oldBinding] }],
+      saveGenerationUnit: async () => null,
+      updateGenerationUnit: async (input) => {
+        updates.push(input);
+        return {
+          generationUnit: {
+            ...currentUnit,
+            ...input.patch,
+            generationParameters: { ...currentUnit.generationParameters, ...input.patch.generationParameters },
+            revision: currentUnit.revision + 1
+          },
+          referenceBindings: input.referenceBindings
+        };
+      }
+    },
+    projects: {
+      open: async () => ({ rootCanvasId: "canvas-1" }),
+      openCanvas: async () => ({ nodes: [{ id: "video-node", kind: "video" }], edges: [] })
+    },
+    storyboards: {
+      listStoryboards: async () => [{
+        storyboardId: "board-1",
+        revision: 3,
+        shots: [{
+          ...shot,
+          storyboardShotId: "board-shot-1",
+          title: "镜头 01",
+          revision: 5,
+          imageMediaId: newBinding.mediaId,
+          imageVersionId: newBinding.versionId,
+          imageChecksum: "png-sha",
+          videoReference: {
+            selected: true,
+            role: newBinding.role,
+            controls: newBinding.controls,
+            doesNotControl: newBinding.doesNotControl
+          }
+        }]
+      }]
+    },
+    generationStrategies: {
+      video_generation: {
+        provider: "ark",
+        model: "doubao-seedance-2-0-mini-260615",
+        resolution: "720p",
+        perShotExecutionNodes: false
+      }
+    },
+    aspectRatio: "9:16",
+    preserveExistingUnitContracts: true
+  });
+
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].patch.controlIntent, undefined);
+  assert.equal(updates[0].patch.generationParameters.mode, "image_reference");
+  assert.deepEqual(updates[0].patch.generationParameters.referenceMediaIds, [newBinding.mediaId]);
+  assert.deepEqual(updates[0].referenceBindings.map((binding) => binding.mediaId), [newBinding.mediaId]);
 });
 
 test("unit design refuses a declared visual-anchor policy without a real binding", async () => {

@@ -14,6 +14,7 @@ export const AGENT_PROFILES = Object.freeze([
   profile("script-analysis", "script_analyst", "剧本分析", "提取锁定事实、因果、人物和连续性", "StoryProductionPacket", ["ununu-cinematic-production"], ["story_packet"]),
   profile("block-planning", "block_planner", "分块规划", "建立场、节拍和可执行制作块", "ProfessionalContribution", ["ununu-cinematic-production"], ["professional_contribution"]),
   profile("visual-bible", "visual_director", "视觉圣经", "定义项目级摄影、灯光、色彩和材质规则", "VisualBible", ["ununu-cinematic-production"], ["visual_bible"]),
+  profile("previs-director", "previs_director", "低模预演导演", "锁定场景关系、人物站位、摄影机轨迹、起幅落幅与切镜", "SequencePrevisDocument", ["ununu-cinematic-production"], ["previs_design"]),
   profile("asset-design", "asset_designer", "资产设计", "建立角色、场景、道具与服化资产权威", "AssetAuthority", ["ununu-cinematic-production"], ["asset_authority"], ["image"]),
   profile("shot-design", "shot_designer", "分镜与镜头设计", "把节拍设计为正式电影镜头合同，并交付可审计的入口/出口空间状态、轴线与动作发起链", "CinematicShotSpec", ["ununu-cinematic-production"], ["cinematic_shot", "storyboard"]),
   profile("prompt-compile", "prompt_compiler", "Prompt 编译", "根据合同和参考职责确定性编译最终请求", "CinematicPromptEnvelopeV2", ["ununu-cinematic-production"], ["prompt_compilation"]),

@@ -37,6 +37,12 @@ export function createGridUseCases(ports, actions) {
       y: placement.y,
       size: { width: placement.width, height: placement.height },
       payload: {
+        productionId: sourceNode.payload?.productionId ?? null,
+        stage: sourceNode.payload?.stage ?? "continuity_qa",
+        resourceType: sourceNode.payload?.resourceType
+          ? `${sourceNode.payload.resourceType}_output`
+          : "grid_composition_output",
+        resourceId: sourceNode.payload?.resourceId ?? sourceNode.id,
         sourceGridNodeId: sourceNode.id,
         gridLayout: composition.gridLayout,
         aspectRatio: composition.aspectRatio,

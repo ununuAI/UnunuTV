@@ -390,6 +390,46 @@ test("generation unit run keeps an asynchronous Provider reservation pending and
   assert.deepEqual([budget.reservedAmount, budget.consumedAmount], [0, 2]);
 });
 
+test("provider-account recovery reuses an unresolved formal intent even when a legacy client changes the lease key", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-generation-unit-provider-account-recovery-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let runs = 0;
+  let polls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: {
+      async run() {
+        runs += 1;
+        return { status: "running", task: { taskId: "provider-task-provider-account" }, artifacts: [] };
+      },
+      async poll() {
+        polls += 1;
+        return { status: "running", task: { taskId: "provider-task-provider-account" }, artifacts: [] };
+      }
+    },
+    recoverRenders: false,
+    recoverAutomation: false,
+    runAutomationExecutor: false
+  });
+  context.after(() => runtime.close());
+  const state = await setup(runtime);
+  const base = {
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: state.unit.generationUnit.generationUnitId,
+    billingMode: "provider_account",
+    formalGenerationIntent: formalGenerationIntent(state)
+  };
+  const first = await runtime.app.runGenerationUnit({ ...base, idempotencyKey: "lease-attempt-1" });
+  const recovered = await runtime.app.runGenerationUnit({ ...base, idempotencyKey: "lease-attempt-2" });
+  assert.equal(first.pending, true);
+  assert.equal(recovered.pending, true);
+  assert.equal(recovered.reused, true);
+  assert.equal(recovered.run.id, first.run.id);
+  assert.deepEqual([runs, polls], [1, 1]);
+  assert.equal((await runtime.app.listRuns({ projectId: state.project.id })).length, 1);
+});
+
 test("first-last-frame compilation keeps frame bindings out of the ordinary reference image list", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-generation-unit-first-last-"));
   context.after(async () => rm(dataRoot, { recursive: true, force: true }));

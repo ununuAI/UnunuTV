@@ -84,6 +84,8 @@ export function compileCinematicScriptBreakdown({ document, projectId, productio
         requiredAssetIds: array(payload.requiredAssetIds),
         mustNotAppearYet: array(payload.mustNotAppearYet).length ? array(payload.mustNotAppearYet) : array(storyPacket.mustNotAppearYet),
         acceptanceCriteria: array(payload.acceptanceCriteria).length ? array(payload.acceptanceCriteria) : [`准确表达剧本节拍：${description}`],
+        virtualPersonAssetIds: array(payload.virtualPersonAssetIds),
+        generationStrategy: text(payload.generationStrategy, "designed_multi_shot"),
         sourceScript: { nodeId: document.nodeId, documentRevision: document.revision, rowId: row.id, rowVersion: row.version },
         revision: 1
       };

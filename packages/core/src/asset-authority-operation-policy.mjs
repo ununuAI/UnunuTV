@@ -89,8 +89,23 @@ export function deriveAssetAuthorityCandidates({ storyPacket, visualBible, shots
     const facts = recordText(character);
     if (/(不露脸|镜头外|持镜者|off.?camera)/iu.test(facts) || existing.has(`character:${displayName.toLocaleLowerCase()}`)) continue;
     const identityDescription = facts || `剧作登记人物：${displayName}`;
+    const virtualPersonAssetId = text(character.virtualPersonAssetId);
     candidates.push({
       ...common("character", displayName, risk.get("character") ?? "medium", identityDescription),
+      ...(virtualPersonAssetId ? {
+        status: "accepted",
+        externalProviderIdentity: {
+          provider: "ark",
+          capability: "virtual_person_asset",
+          assetId: virtualPersonAssetId,
+          source: "owner_locked_episode_authoring"
+        },
+        acceptanceCriteria: [
+          `${displayName} 必须使用 Owner 指定的 Seedance 虚拟人物资源`,
+          "虚拟人物资源只锁身份外观，不控制站位、动作时序、摄影机或剪辑"
+        ],
+        prohibitedChanges: ["不得替换、混用或自动生成另一张脸"]
+      } : {}),
       identityDescription,
       identityLocks: [displayName, ...words(storyPacket.lockedStoryFacts).filter((item) => item.includes(displayName))],
       wardrobeMakeupHair: characterLookFor(visualBible, displayName)

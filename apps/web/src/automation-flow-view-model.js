@@ -2,7 +2,7 @@ import { AUTOMATION_TASK_PLAN } from "@ununu/unutv-contracts";
 
 const STAGE_LABELS = Object.freeze({
   script_analysis: "剧本分析", block_planning: "分块规划", visual_bible: "视觉圣经", asset_design: "资产设计",
-  shot_design: "分镜与镜头设计", prompt_compile: "Prompt 编译", image_generation: "图片生成",
+  shot_design: "分镜与镜头设计", previs_design: "低模预演与镜头控制", prompt_compile: "Prompt 编译", image_generation: "图片生成",
   video_generation: "视频生成", sound_design: "声音、对白与音乐", continuity_qa: "连续性与电影工业 QA",
   timeline_edit: "剪辑与时间线装配", candidate_render: "候选母版渲染", delivery_qc: "技术 QC 与交付"
 });
@@ -13,6 +13,7 @@ const STAGE_ACTIVITY = Object.freeze({
   visual_bible: "正在建立摄影、灯光、色彩与材质规则",
   asset_design: "正在建立角色、场景、道具与服化资产权威",
   shot_design: "正在设计镜头、调度、表演与故事板",
+  previs_design: "正在锁定人物站位、起落幅、摄影机轨迹、轴线与切镜",
   prompt_compile: "正在编译确定性 Prompt 与参考职责",
   image_generation: "正在生成并核验批准资产图与故事板图",
   video_generation: "正在生成镜头视频并保存模型请求谱系",
@@ -25,7 +26,7 @@ const STAGE_ACTIVITY = Object.freeze({
 
 const AGENT_LABELS = Object.freeze({
   "script-analysis": "剧本分析 Agent", "block-planning": "分块规划 Agent", "visual-bible": "视觉圣经 Agent",
-  "asset-design": "资产设计 Agent", "shot-design": "分镜与镜头 Agent", "prompt-compile": "Prompt 编译 Agent",
+  "asset-design": "资产设计 Agent", "shot-design": "分镜与镜头 Agent", "previs-director": "低模预演 Agent", "prompt-compile": "Prompt 编译 Agent",
   "image-generation": "图片生成 Agent", "video-generation": "视频生成 Agent", sound: "声音 Agent",
   "continuity-qa": "连续性 QA Agent", edit: "剪辑 Agent", delivery: "技术交付 Agent"
 });

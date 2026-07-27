@@ -11,6 +11,15 @@ export async function handlePlatformOsRoutes({ body, json, method, pathname, req
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-workflow/advance"))) {
     return json(response, 200, await runtime.app.advanceCinematicWorkflow({ ...params, ...(await body(request)) }));
   }
+  if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-workflow/author"))) {
+    return json(response, 200, await runtime.app.authorEpisode({ ...params, ...(await body(request)) }));
+  }
+  if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-workflow/canvas-reflow"))) {
+    return json(response, 200, await runtime.app.reflowCinematicCanvas({ ...params, ...(await body(request)) }));
+  }
+  if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-workflow/provider-reconcile"))) {
+    return json(response, 200, await runtime.app.reconcileProviderSubmission({ ...params, ...(await body(request)) }));
+  }
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-workflow/owner-decision"))) {
     return json(response, 200, await runtime.app.ownerDecision({ ...params, ...(await body(request)) }));
   }

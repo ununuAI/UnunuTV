@@ -28,6 +28,30 @@ test("Seedance 2.0 Mini exposes the verified cost-saving 480p mode", () => {
   assert.equal(preflight.ok, true, JSON.stringify(preflight.errors));
 });
 
+test("Seedance 2.0 Mini blocks 1080p on reference-to-video before paid submission", () => {
+  const preflight = preflightVideoModelCapability({
+    generationParameters: {
+      provider: "ark",
+      model: ARK_SEEDANCE_2_MINI_MODEL_ID,
+      mode: "image_reference",
+      duration: 12,
+      aspectRatio: "9:16",
+      resolution: "1080p",
+      generateAudio: true,
+      referenceMediaIds: ["media-storyboard"]
+    },
+    generationUnit: {
+      strategy: "storyboard_action_sequence",
+      visualAnchorPolicy: "SHOT_FRAME_SET",
+      requiredCapabilities: ["multi_reference"]
+    },
+    promptBytes: 100,
+    referenceBindings: [{ mediaId: "media-storyboard" }]
+  });
+  assert.equal(preflight.ok, false);
+  assert.equal(preflight.errors.some((entry) => entry.code === "unsupported_resolution"), true);
+});
+
 test("action-phase anchors block paid readiness until reference media is bound", () => {
   const generationParameters = {
     provider: "ark",

@@ -92,7 +92,7 @@ function parameters(overrides = {}) {
     mode: "image_reference",
     duration: 15,
     aspectRatio: "16:9",
-    resolution: "1080p",
+    resolution: "720p",
     count: 1,
     generateAudio: true,
     referenceMediaIds: ["media-character"],

@@ -25,7 +25,14 @@ const PROFILES = [
     supportedCapabilities: ["first_frame", "first_last_frame", "multi_reference", "native_audio", "internal_cuts", "storyboard_reference", "prompt_time_slots", "virtual_person_asset"],
     supportedAspectRatios: ["16:9", "9:16", "1:1"],
     supportedResolutions: ["480p", "720p", "1080p"],
-    evidence: "official-volcengine-seedance-2-series-and-owner-confirmation-2026-07-20",
+    supportedResolutionsByMode: {
+      // Ark rejects 1080p for Seedance 2.0 Mini's reference-to-video
+      // (r2v) path even though the model family exposes 1080p elsewhere.
+      // Keep the mode-specific constraint in preflight so a paid request
+      // cannot discover this compatibility rule after submission.
+      image_reference: ["480p", "720p"]
+    },
+    evidence: "official-volcengine-seedance-2-series-owner-confirmation-and-live-r2v-provider-response-2026-07-28",
     evidenceUrls: [
       "https://www.volcengine.com/docs/82379/2291680",
       "https://www.volcengine.com/docs/82379/1520757"
@@ -126,7 +133,9 @@ export function preflightVideoModelCapability({ generationParameters, generation
   if (profile.supportedAspectRatios.length && !profile.supportedAspectRatios.includes(generationParameters.aspectRatio)) {
     errors.push({ code: "unsupported_aspect_ratio", message: `${profile.displayName} does not support aspect ratio ${generationParameters.aspectRatio}.` });
   }
-  if (profile.supportedResolutions.length && !profile.supportedResolutions.includes(generationParameters.resolution)) {
+  const supportedResolutions = profile.supportedResolutionsByMode?.[generationParameters.mode]
+    || profile.supportedResolutions;
+  if (supportedResolutions.length && !supportedResolutions.includes(generationParameters.resolution)) {
     errors.push({ code: "unsupported_resolution", message: `${profile.displayName} does not support resolution ${generationParameters.resolution}.` });
   }
   const requiredFrameMode = {

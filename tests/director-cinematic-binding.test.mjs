@@ -130,6 +130,13 @@ test("a Director capture becomes exact shot and storyboard control lineage", asy
     generationUnitId: unit.generationUnit.generationUnitId
   });
   const directorReference = compilation.envelope.referenceBindings.find((binding) => binding.role === "director_stage_blocking");
-  assert.equal(directorReference.promptAlias, "港口大全景机位");
-  assert.match(compilation.envelope.compiledContentPrompt, /（参考图1）=港口大全景机位/u);
+  assert.equal(directorReference, undefined, "Director proxy pixels must not consume a Seedance reference slot");
+  assert.deepEqual(compilation.envelope.sourceVersions.directorStageReferences, [{
+    directorNodeId: director.id,
+    captureId: capture.id,
+    stageRevision: 3,
+    shotId: shot.shotId,
+    mediaId: captureMedia.id
+  }]);
+  assert.doesNotMatch(compilation.envelope.compiledContentPrompt, /（参考图\d+）=港口大全景机位/u);
 });

@@ -38,7 +38,10 @@ export function createScriptUseCases(ports) {
     return ports.projects.updateScriptRow(projectId, input.rowId, {
       orderIndex: input.orderIndex === undefined ? current.orderIndex : requireNumber(input.orderIndex, "orderIndex"),
       shotNumber: input.shotNumber === undefined ? current.shotNumber : requireNumber(input.shotNumber, "shotNumber"),
-      payload: { ...current.payload, ...requireObject(input.payload, "payload", {}) }, updatedAt: nowIso()
+      payload: input.replacePayload === true
+        ? requireObject(input.payload, "payload", {})
+        : { ...current.payload, ...requireObject(input.payload, "payload", {}) },
+      updatedAt: nowIso()
     });
   }
 
