@@ -1,0 +1,891 @@
+"use client";
+
+import { ArrowUp, AtSign, ChevronDown, FileText, Image as ImageIcon, LoaderCircle, Maximize2, MessageCircleMore, Minimize2, Paperclip, SlidersHorizontal, Slash, Sparkles, Timer, Video, Volume2, WandSparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { AUDIO_VOICE_OPTIONS, audioVoiceLabel } from "./audio-voice-catalog";
+import type { CanvasNode, ModelExecutionSelection, ScriptAssetItem, VideoP0Actions } from "./prompt-types";
+import { ModelReferencePacket } from "./ModelReferencePacket";
+import { ModelRequestManifest } from "./ModelRequestManifest";
+import { ModelExecutionControls } from "./ModelExecutionControls";
+import { NodeReferenceControls, NodeReferenceRows } from "./NodeReferenceControls";
+import { PromptDocumentEditor, type PromptDocumentV1 } from "./PromptDocumentEditor";
+import { hydrateLegacyPromptReferences } from "./prompt-document-hydration.js";
+import { GROK_PROMPT_MAX_BYTES, GROK_VIDEO_MODEL_ID, SEEDANCE_VIDEO_MODEL_ID, clampVideoDuration, utf8ByteLength, videoDurationRange } from "./video-generation-capabilities.js";
+import { PROMPT_OUTPUT_MODES, promptOutputModeMeta } from "./prompt-output-mode-policy.js";
+
+function modelOptionsFor(node: CanvasNode) {
+  if (node.kind === "script") return ["GVLM 3.1", "CVLM 5.5", "GVLM 3.1 Flash"];
+  if (node.kind === "image" || node.kind === "subject" || node.kind === "material" || node.kind === "historyPick") return ["Z-image Turbo"];
+  if (node.kind === "video" || node.kind === "videoShot" || node.kind === "compose") return ["Motion 1.0"];
+  return [node.cost];
+}
+
+function specOptionsFor(node: CanvasNode) {
+  if (node.kind === "image" || node.kind === "subject" || node.kind === "material" || node.kind === "historyPick") return ["16:9", "1K"];
+  if (node.kind === "video" || node.kind === "videoShot" || node.kind === "compose") return ["16:9", "720p"];
+  return [];
+}
+
+function primaryModelLabel(node: CanvasNode) {
+  const [first] = modelOptionsFor(node);
+  if (node.cost === "输入" || node.cost === "文件" || node.cost === "检查") return node.cost;
+  if (node.cost.includes("·")) return node.cost.split("·")[0]?.trim() ?? node.cost;
+  if (node.cost.includes(" ")) return node.cost;
+  return first ?? node.cost;
+}
+
+function sourceChipLabel(node: CanvasNode) {
+  return node.title.slice(0, 2) || "@";
+}
+
+function isMediaPromptNode(node: CanvasNode) {
+  return node.kind === "image" || node.kind === "video" || node.kind === "videoShot" || node.kind === "compose";
+}
+
+function isVideoPromptNode(node: CanvasNode) {
+  return node.kind === "video" || node.kind === "videoShot" || node.kind === "compose";
+}
+
+type VideoReferenceMode = "text_to_video" | "image_reference" | "first_frame" | "first_last_frame";
+
+function normalizeVideoReferenceMode(mode: unknown): VideoReferenceMode {
+  if (mode === "text_to_video" || mode === "first_frame" || mode === "first_last_frame") return mode;
+  return "image_reference";
+}
+
+function videoReferenceModeLabel(mode: VideoReferenceMode) {
+  if (mode === "text_to_video") return "文生视频";
+  if (mode === "first_frame") return "首帧";
+  if (mode === "first_last_frame") return "首尾帧";
+  return "全能参考";
+}
+
+const IMAGE_TYPE_LABELS: Record<string, string> = {
+  freeform: "普通图片",
+  actor_casting_single: "演员白底单人候选",
+  actor_identity_board: "演员身份板（六视图＋整头特写）",
+  costume_single: "服装单张候选",
+  costume_design_sheet: "服装款式资源板",
+  hair_makeup_single: "妆造单张候选",
+  hair_makeup_design_sheet: "妆造资源板",
+  character_identity_board: "角色身份板（六视图＋整头特写）",
+  character_source_reference: "角色身份参考图",
+  multi_camera_nine_grid: "多机位九宫格",
+  multi_character_nine_grid: "多角色九宫格设定表",
+  story_progression_four_grid: "剧情推演四宫格",
+  character_face_three_view: "角色脸部三视图",
+  character_fullbody_three_view: "角色全身三视图",
+  character_six_view: "角色六视图",
+  character_design_sheet: "角色设定图",
+  scene_design_sheet: "场景设定图",
+  scene_authority_multiview: "场景权威多视角",
+  scene_multiview: "场景多视角图",
+  scene_multiview_contact_sheet: "场景多视角总览",
+  scene_spatial_map: "场景空间控制图",
+  scene_panorama_equirectangular: "720°完整环境全景",
+  panorama_equirectangular: "720°完整环境全景",
+  director_blocking_plate: "3D调度底图",
+  shot_anchor_frame_candidate: "真实机位锚帧候选",
+  shot_handoff_target_candidate: "重叠交接目标帧候选",
+  scene_cubemap_six_faces: "场景立方体六面图",
+  product_design_sheet: "产品 / 道具设定图",
+  color_palette: "材质与颜色分配板",
+  fu_card: "FU 规则卡",
+  fu_visual_card: "FU 视觉卡",
+  storyboard_25_grid: "25 宫格连续分镜",
+  cinematic_lighting_correction: "电影级光影校正"
+};
+
+function imageTypeLabel(templateId: string) {
+  return IMAGE_TYPE_LABELS[templateId] ?? "自定义图片类型";
+}
+
+const REFERENCE_ROLE_LABELS: Record<string, string> = {
+  actor: "演员",
+  character: "角色",
+  costume: "服装",
+  hair_makeup: "妆造",
+  prop: "道具",
+  scene: "场景",
+  style: "风格"
+};
+
+function referenceRole(node: CanvasNode) {
+  if (node.assetRole) return node.assetRole;
+  if (node.imageNodeType === "actor_identity_board" || node.imageNodeType === "actor_casting_single") return "actor";
+  if (node.imageNodeType === "character_identity_board") return "character";
+  return "other";
+}
+
+function referenceMention(node: CanvasNode, index: number) {
+  return `（参考图${index + 1}）`;
+}
+
+function PromptMiniTools({ blocked }: { blocked?: string }) {
+  return (
+    <div className="prompt-mini-tools">
+      <button className="generator-tool" title="@ 引用节点" type="button">
+        <AtSign size={13} />
+      </button>
+      <button className="generator-tool" title="斜杠菜单" type="button">
+        <Slash size={13} />
+      </button>
+      <button className="generator-tool" title="附件" type="button">
+        <Paperclip size={13} />
+      </button>
+      <span className="generator-credit">
+        <Sparkles size={13} />
+        {blocked ? "-" : "1"}
+      </span>
+    </div>
+  );
+}
+
+function outputModeIcon(mode: string) {
+  if (mode === "image") return <ImageIcon size={13} />;
+  if (mode === "audio") return <Volume2 size={13} />;
+  if (mode === "video") return <Video size={13} />;
+  return <FileText size={13} />;
+}
+
+function PromptOutputModeSelect({ actions, node, readOnly }: { actions: VideoP0Actions; node: CanvasNode; readOnly: boolean }) {
+  if (node.sourceKind !== "asset") return null;
+  const active = promptOutputModeMeta(node.outputMode || node.kind);
+  return <details className="prompt-output-mode-select">
+    <summary aria-label={`当前输出：${active.label}`}>{outputModeIcon(active.id)}<span>{active.label}</span><ChevronDown size={11} /></summary>
+    <div className="prompt-output-mode-menu nowheel" onWheelCapture={(event) => event.stopPropagation()} role="listbox">
+      {PROMPT_OUTPUT_MODES.map((mode) => <button aria-selected={active.id === mode.id} className={active.id === mode.id ? "active" : ""} disabled={readOnly} key={mode.id} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void actions.setPromptOutputMode?.(node.id, mode.id); }} role="option" type="button">{outputModeIcon(mode.id)}<span><strong>{mode.label}</strong><small>{mode.placeholder}</small></span>{active.id === mode.id ? <b>✓</b> : null}</button>)}
+    </div>
+  </details>;
+}
+
+export function PromptCard({
+  actions,
+  assets = [],
+  connectedSourceNodes = [],
+  node,
+  readOnly = false,
+  sourceNodes = [],
+  variant
+}: {
+  actions: VideoP0Actions;
+  assets?: ScriptAssetItem[];
+  connectedSourceNodes?: CanvasNode[];
+  node: CanvasNode;
+  readOnly?: boolean;
+  sourceNodes?: CanvasNode[];
+  variant: "generator" | "input";
+}) {
+  const [value, setValue] = useState(node.prompt);
+  const [promptDocument, setPromptDocument] = useState<PromptDocumentV1>(() => (node.promptDocument as PromptDocumentV1 | undefined) ?? { type: "doc", version: 1, content: [{ type: "text", text: node.prompt }] });
+  const [expanded, setExpanded] = useState(false);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [videoModelId, setVideoModelId] = useState(String(node.modelSelection?.modelId ?? "x-ai/grok-imagine-video"));
+  const [videoMode, setVideoMode] = useState<VideoReferenceMode>(normalizeVideoReferenceMode(node.modelSelection?.parameters?.mode));
+  const [videoRatio, setVideoRatio] = useState(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
+  const [videoResolution, setVideoResolution] = useState(String(node.modelSelection?.parameters?.resolution ?? "720p"));
+  const [videoDuration, setVideoDuration] = useState(Number(node.modelSelection?.parameters?.duration ?? 4));
+  const [videoCount, setVideoCount] = useState(Number(node.modelSelection?.parameters?.n ?? node.modelSelection?.parameters?.count ?? 1));
+  const [videoGenerateAudio, setVideoGenerateAudio] = useState(Boolean(node.modelSelection?.parameters?.generateAudio ?? true));
+  const [audioSpeakerId, setAudioSpeakerId] = useState(String(node.modelSelection?.parameters?.speakerId ?? ""));
+  const [audioSpeed, setAudioSpeed] = useState(Number(node.modelSelection?.parameters?.speed ?? 1));
+  const inputRef = useRef<HTMLDivElement>(null);
+  const expandedInputRef = useRef<HTMLTextAreaElement>(null);
+  const mentionTargetRef = useRef<{ surface: "compact" | "expanded"; triggerIndex: number; range?: Range } | null>(null);
+  const activeNodeIdRef = useRef(node.id);
+  const draftDirtyRef = useRef(false);
+  const draftVersionRef = useRef(0);
+  const latestSelectionRef = useRef<ModelExecutionSelection | undefined>(node.modelSelection);
+
+  const closeOwnedVideoPopovers = () => {
+    for (const owner of document.querySelectorAll<HTMLElement>("[data-video-popover-owner]")) {
+      if (owner.dataset.videoPopoverOwner !== node.id) continue;
+      for (const details of owner.querySelectorAll("details[open]")) details.removeAttribute("open");
+    }
+  };
+
+  const updateDraftValue = (nextValue: string) => {
+    if (readOnly) return;
+    draftDirtyRef.current = true;
+    draftVersionRef.current += 1;
+    setValue(nextValue);
+  };
+
+  useEffect(() => {
+    const changedNode = activeNodeIdRef.current !== node.id;
+    activeNodeIdRef.current = node.id;
+    if (changedNode || !draftDirtyRef.current || node.prompt === value) {
+      draftDirtyRef.current = false;
+      setValue(node.prompt);
+      setPromptDocument((node.promptDocument as PromptDocumentV1 | undefined) ?? { type: "doc", version: 1, content: [{ type: "text", text: node.prompt }] });
+      if (inputRef.current && inputRef.current.textContent !== node.prompt) {
+        inputRef.current.textContent = node.prompt;
+      }
+    }
+  }, [node.id, node.prompt, node.promptDocument]);
+
+  useEffect(() => {
+    latestSelectionRef.current = node.modelSelection;
+  }, [node.modelSelection]);
+
+  useEffect(() => {
+    if (readOnly || !draftDirtyRef.current || value === node.prompt) return undefined;
+    const version = draftVersionRef.current;
+    const timer = window.setTimeout(() => {
+      void Promise.resolve(actions.savePromptDraft(node.id, value, latestSelectionRef.current)).then(() => {
+        if (draftVersionRef.current === version) draftDirtyRef.current = false;
+      });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [actions, node.id, node.prompt, readOnly, value]);
+
+  useEffect(() => {
+    setVideoModelId(String(node.modelSelection?.modelId ?? "x-ai/grok-imagine-video"));
+    setVideoMode(normalizeVideoReferenceMode(node.modelSelection?.parameters?.mode));
+    setVideoRatio(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
+    setVideoResolution(String(node.modelSelection?.parameters?.resolution ?? "720p"));
+    setVideoDuration(Number(node.modelSelection?.parameters?.duration ?? 4));
+    setVideoCount(Number(node.modelSelection?.parameters?.n ?? node.modelSelection?.parameters?.count ?? 1));
+    setVideoGenerateAudio(Boolean(node.modelSelection?.parameters?.generateAudio ?? true));
+    setAudioSpeakerId(String(node.modelSelection?.parameters?.speakerId ?? ""));
+    setAudioSpeed(Number(node.modelSelection?.parameters?.speed ?? 1));
+  }, [
+    node.id,
+    node.modelSelection?.modelId,
+    node.modelSelection?.parameters?.audioSpeed,
+    node.modelSelection?.parameters?.aspectRatio,
+    node.modelSelection?.parameters?.count,
+    node.modelSelection?.parameters?.duration,
+    node.modelSelection?.parameters?.generateAudio,
+    node.modelSelection?.parameters?.mode,
+    node.modelSelection?.parameters?.n,
+    node.modelSelection?.parameters?.ratio,
+    node.modelSelection?.parameters?.resolution,
+    node.modelSelection?.parameters?.speed,
+    node.modelSelection?.parameters?.speakerId
+  ]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [expanded]);
+
+  useEffect(() => {
+    if (!isVideoPromptNode(node)) return undefined;
+    const dismissOnOutsideClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const owner = target?.closest<HTMLElement>("[data-video-popover-owner]");
+      if (owner?.dataset.videoPopoverOwner === node.id) return;
+      closeOwnedVideoPopovers();
+    };
+    document.addEventListener("click", dismissOnOutsideClick);
+    return () => document.removeEventListener("click", dismissOnOutsideClick);
+  }, [node.id]);
+
+  useEffect(() => {
+    if (!expanded && inputRef.current && inputRef.current.textContent !== value) {
+      inputRef.current.textContent = value;
+    }
+  }, [expanded, value]);
+
+  const closeExpandedPrompt = () => {
+    if (inputRef.current) inputRef.current.textContent = value;
+    mentionTargetRef.current = null;
+    setMentionOpen(false);
+    setExpanded(false);
+  };
+
+  const appendAudioToken = (token: string) => {
+    if (readOnly) return;
+    const nextValue = `${value}${value && !value.endsWith(" ") ? " " : ""}${token}`;
+    updateDraftValue(nextValue);
+    if (inputRef.current) inputRef.current.textContent = nextValue;
+  };
+
+  const mentionNodes = connectedSourceNodes.length > 0 ? connectedSourceNodes : sourceNodes;
+  const promptReferenceCandidates = useMemo(() => {
+    const connected = mentionNodes.map((reference) => ({
+      key: `node-${reference.id}`,
+      label: reference.title,
+      mediaId: reference.referenceMediaIds?.[0],
+      referenceKind: reference.kind === "video" || reference.kind === "audio" ? reference.kind : "image",
+      sourceNodeId: reference.id,
+      thumbnailUrl: reference.previewUrl
+    }));
+    const library = assets.flatMap((asset) => asset.versions.flatMap((version) => version?.mediaId ? [{ key: `asset-${asset.id}-${version.id}`, label: asset.name, referenceKind: version.kind || asset.mediaKind || "image", assetId: asset.id, assetVersionId: version.id, mediaId: version.mediaId, thumbnailUrl: version.url || asset.thumbnailUrl }] : []));
+    const pinned = (node.assetReferences ?? []).flatMap((reference) => library.filter((candidate) => candidate.assetId === reference.assetId && candidate.assetVersionId === reference.versionId));
+    const all = [...connected, ...pinned, ...library];
+    const preferred = (node.referenceMediaIds ?? []).flatMap((mediaId) => {
+      const candidate = all.find((item) => item.mediaId === mediaId);
+      return candidate ? [candidate] : [];
+    });
+    return [...preferred, ...connected, ...pinned, ...library].filter((candidate, index, items) => {
+      const binding = candidate.mediaId || candidate.assetId || candidate.sourceNodeId || candidate.key;
+      return items.findIndex((item) => (item.mediaId || item.assetId || item.sourceNodeId || item.key) === binding) === index;
+    });
+  }, [assets, mentionNodes, node.assetReferences, node.referenceMediaIds]);
+  useEffect(() => {
+    // Async node/asset loading can briefly leave the editor on the canvas
+    // payload's plain document while the server's exact pinned document has
+    // already arrived. Never migrate or persist that stale local snapshot.
+    if (!node.promptDocument || JSON.stringify(promptDocument) !== JSON.stringify(node.promptDocument)) return;
+    const hydrated = hydrateLegacyPromptReferences(promptDocument, promptReferenceCandidates) as PromptDocumentV1;
+    if (hydrated === promptDocument) return;
+    setPromptDocument(hydrated);
+  }, [actions, node.id, node.promptDocument, promptDocument, promptReferenceCandidates]);
+  const closeReferenceMention = () => {
+    mentionTargetRef.current = null;
+    setMentionOpen(false);
+  };
+  const updateReferenceMention = (surface: "compact" | "expanded", nextValue: string, caretOffset: number | null, range?: Range) => {
+    if (readOnly) return;
+    const rangeText = range?.endContainer.textContent ?? "";
+    if (surface === "compact" && range && range.endContainer.nodeType === Node.TEXT_NODE && range.endOffset > 0 && rangeText[range.endOffset - 1] === "@") {
+      mentionTargetRef.current = { surface, triggerIndex: -1, range };
+      setMentionOpen(true);
+      return;
+    }
+    if (caretOffset !== null && caretOffset > 0 && nextValue[caretOffset - 1] === "@") {
+      mentionTargetRef.current = { surface, triggerIndex: caretOffset - 1, range };
+      setMentionOpen(true);
+      return;
+    }
+    if (mentionTargetRef.current?.surface === surface) closeReferenceMention();
+  };
+  const insertReferenceMention = (reference: CanvasNode, index: number) => {
+    if (readOnly) return;
+    const target = mentionTargetRef.current;
+    if (!target) {
+      closeReferenceMention();
+      return;
+    }
+    const token = referenceMention(reference, index);
+    if (target.surface === "compact") {
+      const host = inputRef.current;
+      const range = target.range?.cloneRange();
+      const container = range?.endContainer;
+      const containerText = container?.textContent ?? "";
+      if (!host || !range || !container || !host.contains(container) || container.nodeType !== Node.TEXT_NODE || range.endOffset < 1 || containerText[range.endOffset - 1] !== "@") {
+        closeReferenceMention();
+        return;
+      }
+      const nextCharacter = containerText[range.endOffset] ?? "";
+      const trailingSpace = nextCharacter === "" || !/\s/.test(nextCharacter) ? " " : "";
+      range.setStart(container, range.endOffset - 1);
+      range.deleteContents();
+      const insertedText = document.createTextNode(`${token}${trailingSpace}`);
+      range.insertNode(insertedText);
+      range.setStartAfter(insertedText);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      updateDraftValue(host.textContent ?? "");
+      closeReferenceMention();
+      host.focus();
+      return;
+    }
+    if (value[target.triggerIndex] !== "@") {
+      closeReferenceMention();
+      return;
+    }
+    const beforeTrigger = value.slice(0, target.triggerIndex);
+    const afterTrigger = value.slice(target.triggerIndex + 1);
+    const trailingSpace = afterTrigger === "" || !/^\s/.test(afterTrigger) ? " " : "";
+    const nextValue = `${beforeTrigger}${token}${trailingSpace}${afterTrigger}`;
+    const nextCaretOffset = beforeTrigger.length + token.length + trailingSpace.length;
+    updateDraftValue(nextValue);
+    closeReferenceMention();
+    if (expandedInputRef.current) {
+      window.requestAnimationFrame(() => {
+        expandedInputRef.current?.focus();
+        expandedInputRef.current?.setSelectionRange(nextCaretOffset, nextCaretOffset);
+      });
+    }
+  };
+
+  const flushDraft = () => {
+    if (readOnly) return;
+    if (!draftDirtyRef.current) return;
+    const version = draftVersionRef.current;
+    void Promise.resolve(actions.savePromptDraft(node.id, value, latestSelectionRef.current)).then(() => {
+      if (draftVersionRef.current === version) draftDirtyRef.current = false;
+    });
+  };
+
+  const sendValue = (selection?: ModelExecutionSelection) => readOnly ? Promise.resolve(null) : actions.sendPrompt(node.id, value.trim() || node.prompt, selection);
+  const videoReferenceIds = node.referenceMediaIds ?? [];
+  const videoReferenceCount = videoReferenceIds.length;
+  const videoReferenceReady = videoMode === "text_to_video"
+    ? videoReferenceCount === 0
+    : videoMode === "image_reference"
+      ? videoReferenceCount > 0
+      : videoMode === "first_frame"
+        ? videoReferenceCount === 1
+        : videoReferenceCount === 2;
+  const videoReferenceIssue = videoMode === "text_to_video"
+    ? "文生视频不能携带参考图，请先移除当前参考"
+    : videoMode === "image_reference"
+      ? "全能参考至少需要 1 张图片"
+      : videoMode === "first_frame"
+        ? "首帧模式必须且只能使用 1 张图片"
+        : "首尾帧模式必须且只能使用 2 张图片";
+  const videoReferenceCapacity = videoMode === "text_to_video" ? 0 : videoMode === "first_frame" ? 1 : videoMode === "first_last_frame" ? 2 : Infinity;
+  const videoAddDisabled = videoReferenceCount >= videoReferenceCapacity;
+  const videoDurationCapability = videoDurationRange({ modelId: videoModelId, mode: videoMode, generateAudio: videoGenerateAudio });
+  const displayedVideoDuration = clampVideoDuration(videoDuration, videoDurationCapability);
+  const videoSelection = (mode: VideoReferenceMode = videoMode, overrides: { duration?: number; generateAudio?: boolean } = {}): ModelExecutionSelection => {
+    const generateAudio = overrides.generateAudio ?? videoGenerateAudio;
+    const duration = clampVideoDuration(overrides.duration ?? videoDuration, videoDurationRange({ modelId: videoModelId, mode, generateAudio }));
+    return {
+      modelId: videoModelId,
+      providerId: videoModelId === SEEDANCE_VIDEO_MODEL_ID ? "ark" : "openrouter",
+      parameters: {
+        mode,
+        ratio: videoRatio,
+        resolution: videoResolution,
+        duration,
+        n: videoCount,
+        generateAudio,
+        ...(mode === "first_frame" && videoReferenceIds[0] ? { firstFrameMediaId: videoReferenceIds[0] } : {}),
+        ...(mode === "first_last_frame" && videoReferenceIds[0] && videoReferenceIds[1]
+          ? { firstFrameMediaId: videoReferenceIds[0], lastFrameMediaId: videoReferenceIds[1] }
+          : {})
+      }
+    };
+  };
+  const runVideoGeneration = () => {
+    const selection = videoSelection();
+    setVideoDuration(Number(selection.parameters?.duration));
+    return sendValue(selection);
+  };
+  const chooseVideoMode = (mode: VideoReferenceMode) => {
+    if (readOnly) return;
+    if (videoModelId === GROK_VIDEO_MODEL_ID && mode === "first_last_frame") return;
+    setVideoMode(mode);
+    const duration = clampVideoDuration(videoDuration, videoDurationRange({ modelId: videoModelId, mode, generateAudio: videoGenerateAudio }));
+    setVideoDuration(duration);
+    const selection = videoSelection(mode, { duration });
+    latestSelectionRef.current = selection;
+    void actions.savePromptDraft(node.id, value, selection);
+  };
+  const saveAudioConfig = () => sendValue({
+    modelId: "seed-audio-1.0",
+    providerId: "openspeech",
+    parameters: { responseFormat: "mp3", speakerId: audioSpeakerId, speed: audioSpeed }
+  });
+  const isInput = variant === "input";
+  const isTextNode = node.kind === "text";
+  const isScriptNode = node.kind === "script";
+  const isImageExecutionNode = node.kind === "image";
+  const isVideoExecutionNode = isVideoPromptNode(node);
+  const isAudioExecutionNode = node.kind === "audio";
+  const isTextExecutionNode = isTextNode || isScriptNode;
+  const isMediaNode = isMediaPromptNode(node);
+  const usesCompactContext = isTextExecutionNode || isMediaNode || isAudioExecutionNode;
+  const textHasReferences = isTextExecutionNode && (connectedSourceNodes.length > 0 || (node.assetReferences?.length ?? 0) > 0);
+  const blocked = node.blockedReason;
+  const modelOptions = modelOptionsFor(node);
+  const specOptions = specOptionsFor(node);
+  const statusText = sourceNodes.length > 0 ? `已连接输入：${sourceNodes.map((source) => source.title).join(" / ")}` : blocked ?? (isInput ? "当前节点结果可通过连线作为其他节点的输入。" : node.summary);
+  const refNodes = sourceNodes.length > 0 ? sourceNodes : node.refs.map((ref) => ({ id: ref, title: ref }) as CanvasNode);
+  const promptClassName = `prompt-card prompt-card-${variant} copilotKitInputContainer${readOnly ? " prompt-card-readonly" : ""}${expanded ? " prompt-card-expanded" : ""}${isTextNode ? " prompt-card-text" : ""}${isScriptNode ? " prompt-card-script" : ""}${isMediaNode ? " prompt-card-media" : ""}${isVideoExecutionNode ? " prompt-card-video" : ""}${isAudioExecutionNode ? " prompt-card-audio" : ""}${isTextExecutionNode && !textHasReferences ? " prompt-card-text-no-upstream" : ""}`;
+  const isArkSeedanceMini = videoModelId === SEEDANCE_VIDEO_MODEL_ID;
+  const isOpenRouterGrok = videoModelId === GROK_VIDEO_MODEL_ID;
+  const videoPromptBytes = utf8ByteLength(value.trim() || node.prompt);
+  const videoPromptTooLong = isOpenRouterGrok && videoPromptBytes > GROK_PROMPT_MAX_BYTES;
+  const videoModelLabel = isArkSeedanceMini ? "Seedance 2.0 Mini" : "Grok Imagine Video";
+  const imageTemplateId = node.imageNodeType === "panorama_equirectangular"
+    ? "scene_panorama_equirectangular"
+    : node.imageNodeType && node.imageNodeType !== "standard"
+      ? node.imageNodeType
+      : "freeform";
+  const fixedImageSizeByTemplate: Record<string, string> = {
+    actor_casting_single: "1024x1536",
+    actor_identity_board: "1536x1024",
+    character_identity_board: "1536x1024",
+    costume_single: "1024x1536",
+    costume_design_sheet: "1536x1024",
+    hair_makeup_single: "1024x1536",
+    hair_makeup_design_sheet: "1536x1024",
+    scene_panorama_equirectangular: "3808x1904"
+  };
+  const fixedImageSize = fixedImageSizeByTemplate[imageTemplateId];
+  const imageInitialSelection: ModelExecutionSelection = {
+    modelId: node.modelSelection?.modelId ?? "openai/gpt-image-2",
+    providerId: node.modelSelection?.providerId ?? "ununu",
+    parameters: {
+      ...(node.modelSelection?.parameters ?? {}),
+      background: node.modelSelection?.parameters?.background === "opaque" ? "opaque" : "auto",
+      n: typeof node.modelSelection?.parameters?.n === "number"
+        ? node.modelSelection.parameters.n
+        : imageTemplateId === "shot_anchor_frame_candidate" || imageTemplateId === "shot_handoff_target_candidate"
+          ? 4
+          : 1,
+      outputFormat: "png",
+      quality: node.modelSelection?.parameters?.quality ?? "auto",
+      responseFormat: "b64_json",
+      size: fixedImageSize ?? node.modelSelection?.parameters?.size ?? "auto",
+      templateId: imageTemplateId
+    }
+  };
+  const isLockedImageType = imageTemplateId !== "freeform";
+  const isNodeGenerating = node.status === "running" || Boolean(node.generationActivity);
+  const promptPlaceholder = node.sourceKind === "asset"
+    ? promptOutputModeMeta(node.outputMode || node.kind).placeholder
+    : isScriptNode ? "填写镜头数量、节奏、时长等拆镜要求"
+      : isAudioExecutionNode ? "输入要合成的文本"
+        : isVideoExecutionNode ? "描述动作、运镜、节奏与时长"
+          : isInput ? "写入这个节点的输入内容" : "告诉这个节点要生成什么";
+
+  const videoFooter = (
+    <div
+      className="generator-actions video-execution-controls copilotKitInputControls"
+      data-video-popover-owner={node.id}
+      onClickCapture={(event) => {
+        const activeDetails = event.target instanceof Element ? event.target.closest("details") : null;
+        for (const details of event.currentTarget.querySelectorAll("details[open]")) {
+          if (details === activeDetails) continue;
+          details.removeAttribute("open");
+        }
+      }}
+    >
+      <PromptOutputModeSelect actions={actions} node={node} readOnly={readOnly} />
+      <details className="generator-model-select">
+        <summary className="generator-model" data-model={videoModelLabel}>
+          <WandSparkles size={14} />
+          <span>{videoModelLabel}</span>
+          <ChevronDown size={12} />
+        </summary>
+        <div className="generator-model-menu" role="listbox">
+          <button className={isOpenRouterGrok ? "active" : ""} onClick={(event) => { setVideoModelId(GROK_VIDEO_MODEL_ID); setVideoResolution((current) => current === "480p" ? current : "720p"); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: GROK_VIDEO_MODEL_ID, mode: videoMode, generateAudio: videoGenerateAudio }))); setVideoCount(1); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Grok Imagine Video · OpenRouter</button>
+          <button className={isArkSeedanceMini ? "active" : ""} onClick={(event) => { setVideoModelId(SEEDANCE_VIDEO_MODEL_ID); setVideoResolution((current) => current === "1080p" ? "720p" : current); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: SEEDANCE_VIDEO_MODEL_ID, mode: videoMode, generateAudio: videoGenerateAudio }))); setVideoCount(1); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Seedance 2.0 Mini · Ark</button>
+        </div>
+      </details>
+      <details className="video-mode-select">
+        <summary className="generator-spec-pill">
+          <ImageIcon size={13} />
+          <span>{videoReferenceModeLabel(videoMode)}</span>
+          <ChevronDown size={12} />
+        </summary>
+        <div className="video-mode-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}>
+          <small>视频生成模式</small>
+          {[
+            { icon: <FileText size={14} />, label: "文生视频", mode: "text_to_video" as VideoReferenceMode, note: "不使用图片" },
+            { icon: <ImageIcon size={14} />, label: "全能参考", mode: "image_reference" as VideoReferenceMode, note: "可使用多张图片" },
+            { icon: <Video size={14} />, label: "首帧", mode: "first_frame" as VideoReferenceMode, note: "只使用 1 张图片" },
+            { icon: <Video size={14} />, label: "首尾帧", mode: "first_last_frame" as VideoReferenceMode, note: "首帧＋尾帧，共 2 张" }
+          ].map(({ icon, label, mode, note }) => {
+            const unsupported = isOpenRouterGrok && mode === "first_last_frame";
+            return (
+            <button
+              className={videoMode === mode ? "active" : ""}
+              disabled={unsupported}
+              key={mode}
+              onClick={(event) => {
+                chooseVideoMode(mode);
+                event.currentTarget.closest("details")?.removeAttribute("open");
+              }}
+              title={unsupported ? "Grok Imagine Video 当前只支持单首帧，不支持首尾帧" : note}
+              type="button"
+            >
+              {icon}
+              <span><strong>{label}</strong><small>{unsupported ? "当前模型不支持" : note}</small></span>
+            </button>
+          );})}
+        </div>
+      </details>
+      <details className="video-parameter-select">
+        <summary className="generator-spec-pill">
+          <Video size={13} />
+          <span>{videoRatio} · {videoResolution} · {displayedVideoDuration}s · {videoGenerateAudio ? "音频" : "静音"} · {videoCount}个</span>
+          <ChevronDown size={12} />
+        </summary>
+        <div className="video-parameter-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}>
+          <section><span>比例</span><div>{["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"].map((ratio) => <button className={videoRatio === ratio ? "active" : ""} key={ratio} onClick={() => setVideoRatio(ratio)} type="button">{ratio}</button>)}</div></section>
+          <section><span>清晰度</span><div>{["480p", "720p"].map((resolution) => <button className={videoResolution === resolution ? "active" : ""} key={resolution} onClick={() => setVideoResolution(resolution)} type="button">{resolution.toUpperCase()}</button>)}</div></section>
+          <section><span>生成时长</span><label><input max={videoDurationCapability.max} min={videoDurationCapability.min} onChange={(event) => setVideoDuration(Number(event.target.value))} type="range" value={displayedVideoDuration} /><strong>{displayedVideoDuration}s</strong></label></section>
+          <section><span>生成数量</span><div>{[1].map((count) => <button className={videoCount === count ? "active" : ""} key={count} onClick={() => setVideoCount(count)} type="button">{count}个</button>)}</div></section>
+          <section className="video-audio-setting"><span>原声音频</span><label><input checked={videoGenerateAudio} onChange={(event) => { const next = event.target.checked; setVideoGenerateAudio(next); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: videoModelId, mode: videoMode, generateAudio: next }))); }} type="checkbox" /><strong>{videoGenerateAudio ? "生成" : "关闭"}</strong></label></section>
+        </div>
+      </details>
+      <span className="generator-spacer" />
+      <button aria-busy={isNodeGenerating} aria-label="生成视频" className="send-dot generator-send" disabled={readOnly || isNodeGenerating || !videoReferenceReady || videoPromptTooLong} onClick={() => void runVideoGeneration()} title={readOnly ? "全自动运行期间只读" : isNodeGenerating ? "视频任务正在处理中" : videoPromptTooLong ? `提示词 ${videoPromptBytes} bytes，超过 Grok 的 ${GROK_PROMPT_MAX_BYTES} bytes 上限` : videoReferenceReady ? "提交视频生成任务" : videoReferenceIssue} type="button">{isNodeGenerating ? <LoaderCircle aria-hidden="true" className="model-execution-spinner" size={14} /> : <ArrowUp size={14} />}</button>
+    </div>
+  );
+
+  const audioFooter = (
+    <div className="generator-actions audio-execution-controls copilotKitInputControls">
+      <PromptOutputModeSelect actions={actions} node={node} readOnly={readOnly} />
+      <details className="generator-model-select">
+        <summary className="generator-model" data-model="Seed Audio 1.0"><Volume2 size={14} /><span>Seed Audio 1.0</span><ChevronDown size={12} /></summary>
+        <div className="generator-model-menu" role="listbox"><button className="active" type="button">Seed Audio 1.0 · 豆包音频</button></div>
+      </details>
+      <details className="audio-voice-select">
+        <summary className="generator-spec-pill"><Volume2 size={13} /><span>{audioVoiceLabel(audioSpeakerId)}</span><ChevronDown size={12} /></summary>
+        <div className="audio-voice-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}>
+          {AUDIO_VOICE_OPTIONS.map((voice) => (
+            <button className={audioSpeakerId === voice.id ? "active" : ""} key={voice.id || "auto"} onClick={(event) => { setAudioSpeakerId(voice.id); event.currentTarget.closest("details")?.removeAttribute("open"); }} title={voice.description} type="button">
+              <span><strong>{voice.label}</strong><small>{voice.verified ? "可用" : "待验证"}</small></span>
+            </button>
+          ))}
+          <label className="audio-custom-speaker">
+            <span>自定义音色 ID</span>
+            <input onChange={(event) => setAudioSpeakerId(event.target.value.trim())} placeholder="粘贴 speaker ID" value={AUDIO_VOICE_OPTIONS.some((voice) => voice.id === audioSpeakerId) ? "" : audioSpeakerId} />
+          </label>
+        </div>
+      </details>
+      <details className="audio-parameter-select">
+        <summary className="generator-spec-pill" title="音频参数"><SlidersHorizontal size={13} /><span>{audioSpeed.toFixed(1)}x</span><ChevronDown size={12} /></summary>
+        <div className="audio-parameter-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}><span>语速</span><label><input max="1.5" min="0.6" onChange={(event) => setAudioSpeed(Number(event.target.value))} step="0.1" type="range" value={audioSpeed} /><strong>{audioSpeed.toFixed(1)}x</strong></label></div>
+      </details>
+      <span className="generator-spacer" />
+      <button aria-busy={isNodeGenerating} aria-label="生成音频" className="send-dot generator-send" disabled={readOnly || isNodeGenerating} onClick={() => void saveAudioConfig()} title={readOnly ? "全自动运行期间只读" : isNodeGenerating ? "音频正在生成" : "使用所选音色生成音频"} type="button">{isNodeGenerating ? <LoaderCircle aria-hidden="true" className="model-execution-spinner" size={14} /> : <ArrowUp size={14} />}</button>
+    </div>
+  );
+
+  const promptInput = (
+    <div className="generator-input-wrap">
+      <PromptDocumentEditor
+        candidates={promptReferenceCandidates}
+        document={promptDocument}
+        onChange={(nextDocument) => { setPromptDocument(nextDocument); void actions.savePromptDocument?.(node.id, nextDocument, latestSelectionRef.current); }}
+        onPlainTextChange={updateDraftValue}
+        onSubmit={() => { if (node.canRun) void sendValue(); }}
+        placeholder={promptPlaceholder}
+        readOnly={readOnly}
+      />
+      {isVideoExecutionNode && isOpenRouterGrok ? <span className={`video-prompt-byte-count${videoPromptTooLong ? " over-limit" : ""}`}>{videoPromptBytes} / {GROK_PROMPT_MAX_BYTES} bytes</span> : null}
+    </div>
+  );
+
+  return (
+    <section className={promptClassName} aria-label={`${node.title} prompt`} data-readonly={readOnly || undefined}>
+      <div className="generator-input-shell copilotKitInput">
+        {!usesCompactContext ? (
+          <div className="generator-card-topline">
+            <div className="generator-ref-row">
+              {refNodes.length > 0 ? (
+                refNodes.map((ref, index) => (
+                  <span className="generator-ref-chip" key={ref.id} title={ref.title}>
+                    <span className="ref-thumb">{sourceChipLabel(ref)}</span>
+                    <span className="ref-count">{index + 1}</span>
+                  </span>
+                ))
+              ) : (
+                <span className="generator-ref-chip" title={node.title}>
+                  <span className="ref-thumb">{isInput ? "T" : "S"}</span>
+                  <span className="ref-count">1</span>
+                </span>
+              )}
+            </div>
+            <button aria-label="打开节点详情" className="generator-expand" type="button">
+              <Maximize2 size={13} />
+            </button>
+          </div>
+        ) : (
+          <button
+            aria-label={expanded ? "关闭全屏 Prompt 编辑器" : isScriptNode ? "展开脚本提示词" : isTextNode ? "展开文本提示词" : isVideoExecutionNode ? "展开视频提示词" : isAudioExecutionNode ? "展开音频文本" : "展开图片提示词"}
+            className="generator-expand generator-expand-floating"
+            onClick={() => {
+              setExpanded((current) => !current);
+            }}
+            type="button"
+          >
+            {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
+        )}
+        {isTextExecutionNode && textHasReferences ? <NodeReferenceRows actions={actions} assets={assets} node={node} sourceNodes={connectedSourceNodes} /> : null}
+        {isMediaNode ? (
+          <div className="generator-media-context">
+            <NodeReferenceControls
+              actions={actions}
+              addDisabled={isVideoExecutionNode && videoAddDisabled}
+              addDisabledReason={isVideoExecutionNode && videoAddDisabled ? (videoMode === "text_to_video" ? "文生视频不使用图片" : `${videoReferenceModeLabel(videoMode)}已达到图片数量上限`) : undefined}
+              assets={assets}
+              node={node}
+              referenceMode={isVideoExecutionNode ? videoMode : undefined}
+              sourceNodes={connectedSourceNodes}
+            />
+          </div>
+        ) : null}
+        {isAudioExecutionNode ? (
+          <div className="generator-audio-context">
+            <NodeReferenceControls actions={actions} assets={assets} node={node} sourceNodes={connectedSourceNodes}>
+              <button className="generator-addon" onClick={() => appendAudioToken("<break time=\"0.5s\" />")} title="插入 0.5 秒停顿标记" type="button"><Timer size={13} />停顿</button>
+              <button className="generator-addon" onClick={() => appendAudioToken("（轻声）")} title="插入语气提示" type="button"><MessageCircleMore size={13} />语气词</button>
+            </NodeReferenceControls>
+          </div>
+        ) : null}
+        {!usesCompactContext ? (
+          <div className="generator-status-row">
+            <span className={`state-dot ${node.status}`} />
+            <span>{statusText}</span>
+          </div>
+        ) : null}
+        {!usesCompactContext && node.status === "running" ? (
+          <div className="generator-progress">
+            <i />
+          </div>
+        ) : null}
+        {!usesCompactContext ? (
+          <NodeReferenceControls actions={actions} assets={assets} node={node} sourceNodes={connectedSourceNodes} />
+        ) : null}
+        {!usesCompactContext ? <ModelReferencePacket packet={node.modelReferencePacket} sourceNodes={sourceNodes} /> : null}
+        {!usesCompactContext ? <ModelRequestManifest manifest={node.modelRequestManifest} receipt={node.modelExecutionReceipt} /> : null}
+        {isTextExecutionNode || isImageExecutionNode ? (
+          <ModelExecutionControls.Provider
+            busy={isNodeGenerating}
+            capability={isImageExecutionNode ? "image" : "text"}
+            initialSelection={isImageExecutionNode ? imageInitialSelection : node.modelSelection ?? { modelId: "deepseek/deepseek-v4-pro", providerId: "ununu" }}
+            onSelectionChange={(selection) => {
+              if (readOnly) return;
+              latestSelectionRef.current = selection;
+              void actions.savePromptDraft(node.id, value, selection);
+            }}
+            onSubmit={(selection) => sendValue(selection)}
+          >
+            {isImageExecutionNode && isLockedImageType ? <div className="image-node-type-lock"><ImageIcon size={13} /><span>{imageTypeLabel(imageTemplateId)}</span><small>类型已锁定</small></div> : null}
+            {promptInput}
+            <ModelExecutionControls.Feedback />
+            <ModelExecutionControls.Frame>
+              <PromptOutputModeSelect actions={actions} node={node} readOnly={readOnly} />
+              <ModelExecutionControls.Selector />
+              {isImageExecutionNode ? <ModelExecutionControls.Parameters /> : null}
+              <ModelExecutionControls.Spacer />
+              <ModelExecutionControls.Submit disabled={readOnly || !node.canRun} title={readOnly ? "全自动运行期间只读" : isImageExecutionNode ? "生成图片" : isScriptNode ? "生成脚本表" : "发布文本生成"} />
+            </ModelExecutionControls.Frame>
+            {(isTextExecutionNode || isImageExecutionNode) && expanded && typeof document !== "undefined" ? createPortal(
+              <div className="text-prompt-dialog-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) closeExpandedPrompt(); }} role="presentation">
+                <section aria-label={isScriptNode ? "展开脚本提示词" : isTextNode ? "展开文本提示词" : "展开图片提示词"} aria-modal="true" className="text-prompt-dialog" role="dialog">
+                  <button
+                    aria-label={isScriptNode ? "收起脚本提示词" : isTextNode ? "收起文本提示词" : "收起图片提示词"}
+                    className="text-prompt-dialog-close"
+                    onClick={closeExpandedPrompt}
+                    title="收起"
+                    type="button"
+                  >
+                    <Minimize2 size={14} />
+                  </button>
+                  {isImageExecutionNode ? (
+                    <NodeReferenceControls actions={actions} assets={assets} node={node} sourceNodes={connectedSourceNodes} />
+                  ) : textHasReferences ? <NodeReferenceRows actions={actions} assets={assets} node={node} sourceNodes={connectedSourceNodes} /> : null}
+                  {isImageExecutionNode && isLockedImageType ? <div className="image-node-type-lock"><ImageIcon size={13} /><span>{imageTypeLabel(imageTemplateId)}</span><small>类型已锁定</small></div> : null}
+                  <div className="text-prompt-dialog-editor nowheel" onWheelCapture={(event) => event.stopPropagation()}>
+                    <PromptDocumentEditor
+                      candidates={promptReferenceCandidates}
+                      document={promptDocument}
+                      onChange={(nextDocument) => { setPromptDocument(nextDocument); void actions.savePromptDocument?.(node.id, nextDocument, latestSelectionRef.current); }}
+                      onPlainTextChange={updateDraftValue}
+                      onSubmit={() => { if (node.canRun) void sendValue(); }}
+                      placeholder={isScriptNode ? "填写镜头数量、节奏、时长等拆镜要求" : isTextNode ? "告诉这个文本节点要生成什么" : "描述要生成的图片"}
+                      readOnly={readOnly}
+                    />
+                  </div>
+                  <ModelExecutionControls.Feedback />
+                  <ModelExecutionControls.Frame>
+                    <ModelExecutionControls.Selector />
+                    {isImageExecutionNode ? <ModelExecutionControls.Parameters /> : null}
+                    <ModelExecutionControls.Spacer />
+                    <ModelExecutionControls.Submit disabled={readOnly || !node.canRun} title={readOnly ? "全自动运行期间只读" : isImageExecutionNode ? "生成图片" : isScriptNode ? "生成脚本表" : "发布文本生成"} />
+                  </ModelExecutionControls.Frame>
+                </section>
+              </div>,
+              document.querySelector(".video-p0-shell") ?? document.body
+            ) : null}
+          </ModelExecutionControls.Provider>
+        ) : <>{promptInput}{isVideoExecutionNode ? videoFooter : isAudioExecutionNode ? audioFooter : (
+        <div className="generator-actions copilotKitInputControls">
+          <PromptOutputModeSelect actions={actions} node={node} readOnly={readOnly} />
+          <details className="generator-model-select">
+            <summary className="generator-model" data-model={primaryModelLabel(node)}>
+              <span className="model-dot" />
+              <span>{primaryModelLabel(node)}</span>
+              <ChevronDown size={12} />
+            </summary>
+            <div className="generator-model-menu" role="listbox">
+              {modelOptions.map((option) => (
+                <button className={option === primaryModelLabel(node) ? "active" : ""} key={option} type="button">
+                  {option}
+                </button>
+              ))}
+            </div>
+          </details>
+          {specOptions.map((option) => (
+            <span className="generator-spec-pill" key={option}>
+              {option}
+            </span>
+          ))}
+          {node.kind === "script" ? (
+            <button className="mini-action" onClick={() => actions.openPanel("scriptv2")} type="button">
+              分镜流程
+            </button>
+          ) : null}
+          <span className="generator-spacer" />
+          <div className="generator-submit-group">
+            <PromptMiniTools blocked={blocked} />
+            <button className="send-dot generator-send" disabled={readOnly || (!isInput && !node.canRun)} onClick={() => void sendValue()} title={readOnly ? "全自动运行期间只读" : blocked ?? (isInput ? "保存输入" : "发送到节点")} type="button">
+              <ArrowUp size={14} />
+            </button>
+          </div>
+        </div>
+        )}</>}
+        {(isVideoExecutionNode || isAudioExecutionNode) && expanded && typeof document !== "undefined" ? createPortal(
+          <div className="text-prompt-dialog-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) closeExpandedPrompt(); }} role="presentation">
+            <section
+              aria-label={isVideoExecutionNode ? "展开视频提示词" : "展开音频文本"}
+              aria-modal="true"
+              className={`text-prompt-dialog ${isVideoExecutionNode ? "video-prompt-dialog" : "audio-prompt-dialog"}`}
+              role="dialog"
+            >
+              <button
+                aria-label={isVideoExecutionNode ? "收起视频提示词" : "收起音频文本"}
+                className="text-prompt-dialog-close"
+                onClick={closeExpandedPrompt}
+                title="收起"
+                type="button"
+              >
+                <Minimize2 size={14} />
+              </button>
+              {isVideoExecutionNode ? (
+                <NodeReferenceControls
+                  actions={actions}
+                  addDisabled={videoAddDisabled}
+                  addDisabledReason={videoAddDisabled ? (videoMode === "text_to_video" ? "文生视频不使用图片" : `${videoReferenceModeLabel(videoMode)}已达到图片数量上限`) : undefined}
+                  assets={assets}
+                  node={node}
+                  referenceMode={videoMode}
+                  sourceNodes={connectedSourceNodes}
+                />
+              ) : (
+                <NodeReferenceControls actions={actions} assets={assets} node={node} sourceNodes={connectedSourceNodes}>
+                  <button className="generator-addon" onClick={() => appendAudioToken("<break time=\"0.5s\" />")} type="button"><Timer size={13} />停顿</button>
+                  <button className="generator-addon" onClick={() => appendAudioToken("（轻声）")} type="button"><MessageCircleMore size={13} />语气词</button>
+                </NodeReferenceControls>
+              )}
+              <div className="text-prompt-dialog-editor nowheel" onWheelCapture={(event) => event.stopPropagation()}>
+                <PromptDocumentEditor
+                  candidates={promptReferenceCandidates}
+                  document={promptDocument}
+                  onChange={(nextDocument) => { setPromptDocument(nextDocument); void actions.savePromptDocument?.(node.id, nextDocument, latestSelectionRef.current); }}
+                  onPlainTextChange={updateDraftValue}
+                  onSubmit={() => { if (node.canRun) void sendValue(); }}
+                  placeholder={isVideoExecutionNode ? "描述动作、运镜、节奏与时长" : "输入要合成的文本"}
+                  readOnly={readOnly}
+                />
+              </div>
+              {isVideoExecutionNode && isOpenRouterGrok ? <span className={`video-prompt-byte-count expanded${videoPromptTooLong ? " over-limit" : ""}`}>{videoPromptBytes} / {GROK_PROMPT_MAX_BYTES} bytes</span> : null}
+              {isVideoExecutionNode ? videoFooter : audioFooter}
+            </section>
+          </div>,
+          document.querySelector(".video-p0-shell") ?? document.body
+        ) : null}
+      </div>
+    </section>
+  );
+}

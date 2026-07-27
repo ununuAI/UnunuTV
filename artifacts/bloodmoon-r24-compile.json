@@ -1,0 +1,108 @@
+{
+  "boardId": "rear-occipital-clean-authority",
+  "assetNodeId": "node-2d6a455a-317c-420b-96b2-01e5798fa049",
+  "generationParameters": {
+    "provider": "ununu",
+    "model": "openai/gpt-image-2",
+    "aspectRatio": "2:3",
+    "resolution": "1024x1536",
+    "count": 1,
+    "referenceMediaIds": [
+      "media-f9f082ba-7c5e-479b-bd0b-5ae5369eade1",
+      "media-13e0c786-62c0-439b-9e29-24d16761cd9d"
+    ],
+    "quality": "high",
+    "background": "opaque"
+  },
+  "referenceBindings": [
+    {
+      "assetId": "asset-1d109462-0cee-40b3-a36c-0af724c62940",
+      "versionId": "asset-version-78341e2c-8a34-452c-b1b0-1c1f04b7cf7f",
+      "mediaId": "media-f9f082ba-7c5e-479b-bd0b-5ae5369eade1",
+      "displayName": "r23枕骨内嵌人脸几何标注控制板",
+      "promptAlias": "主几何源：只取标注下方已验收人物拓扑",
+      "providerIndex": 1,
+      "role": "character_geometry_control",
+      "controls": [
+        "严格背面头颅、中央颈部、后领、肩背和脊柱关系",
+        "青色 A 内的人物是一颗单一圆滑闭合无耳颅体",
+        "橙色 B 内眼眉鼻口只占后脑中央较小区域",
+        "绿色 C 对应的五官四周连续枕骨皮肤外环",
+        "黄色 D 以上嘴下方至颅底的连续皮肤带",
+        "白色 E 对应颅底几何中央唯一颈部轴线"
+      ],
+      "doesNotControl": [
+        "A-E 字母、青橙绿黄白红彩线、虚线、半透明色块、中心轴和箭头；这些像素必须全部删除",
+        "最终背景、最终裁切、战斗动作、客栈空间或群像差异"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-3e1e8177-5413-41d3-83ab-a049297c0a3b:r23:control-only",
+      "sourceMediaId": "media-f9f082ba-7c5e-479b-bd0b-5ae5369eade1",
+      "sourceMediaChecksum": "95be85114373ee69e815bce56ae86b340239a40eb1ce2a426395ce4e8f1de030",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "标注线下方的人物几何：单一无耳闭合颅体、缩进五官、四周枕骨皮肤环、嘴下颅底皮肤带和中央唯一颈部",
+          "身体背面、后领、肩背与脊柱关系",
+          "二维手绘动画设定稿的成人比例"
+        ],
+        "replace": [
+          {
+            "observed": "A-E 字母、彩色实线与虚线、绿色半透明区域、白色中心轴和红色箭头",
+            "target": "全部删除，恢复为连续自然肤色、自然衣料与纯净浅灰背景，不留下线条、色块、字母或痕迹"
+          }
+        ],
+        "complete": [
+          {
+            "missing": "干净角色 Authority 的自然皮肤与衣料收尾",
+            "target": "以自然二维动画皮肤明暗表现五官浅浮雕与枕骨皮肤环，不新增脸椭圆、下颌、下巴、耳朵、发际线或脸部颈"
+          }
+        ],
+        "ignore": [
+          "所有控制标注像素",
+          "字母引线与画面右侧标签留白",
+          "任何把人物重新解释为普通正脸的默认面部外轮廓"
+        ],
+        "styleOnly": []
+      }
+    },
+    {
+      "assetId": "asset-1d109462-0cee-40b3-a36c-0af724c62940",
+      "versionId": "asset-version-8b1e53da-98f2-4ce0-8dfb-de15f820e7c9",
+      "mediaId": "media-13e0c786-62c0-439b-9e29-24d16761cd9d",
+      "displayName": "r18尸傀正背身份结构控制板",
+      "promptAlias": "次身份源：只取右面板的体型、肤色、服装和二维动画媒介",
+      "providerIndex": 2,
+      "role": "character_identity_control",
+      "controls": [
+        "只取参考图右面板代表尸傀的成年体型、肤色、破旧深褐古代酒客服装",
+        "身体背面后领、脊柱、背褶与手背证据",
+        "日本二维手绘动画角色设定媒介"
+      ],
+      "doesNotControl": [
+        "参考图左面板全部像素和双面板排版",
+        "参考图右面板头部的耳朵、发束、脸椭圆、下颌、下巴、颈部连接或五官尺度",
+        "最终头部几何；头部几何只服从 r23 主几何源"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-3e1e8177-5413-41d3-83ab-a049297c0a3b:r18:control-only",
+      "sourceMediaId": "media-13e0c786-62c0-439b-9e29-24d16761cd9d",
+      "sourceMediaChecksum": "bb9cf8310d4597f0520bd9c24b57d917c4e7dc6fcf40b2ce7a54885754c36632",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "成年体型、肤色、破旧深褐古代酒客服装",
+          "身体背面后领、脊柱、背褶与手背证据",
+          "日本二维手绘动画设定稿媒介"
+        ],
+        "replace": [],
+        "complete": [],
+        "ignore": [
+          "左面板全部像素、双面板排版与背景留白",
+          "右面板任何耳朵、发束、脸椭圆、脸颊、下颌、下巴、颈部连接或五官尺度"
+        ],
+        "styleOnly": []
+      }
+    }
+  ]
+}

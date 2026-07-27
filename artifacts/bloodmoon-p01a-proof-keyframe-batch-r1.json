@@ -1,0 +1,159 @@
+{
+  "kind": "image",
+  "storyboardShotIds": [
+    "storyboard-shot-31195f57-23b3-4403-8261-ea8c7a1f8854"
+  ],
+  "approvedPaid": true,
+  "provider": "ununu",
+  "model": "openai/gpt-image-2",
+  "configuration": {
+    "executionNodeId": "node-747263aa-009a-4076-9d84-cdf3ed6e6f88",
+    "amount": 2,
+    "actualAmount": 2,
+    "currency": "CNY",
+    "aspectRatio": "16:9",
+    "resolution": "2048x1152",
+    "referenceMediaIds": [
+      "media-28707daf-54bd-4711-acc1-7f2c2b7aef45",
+      "media-c3366895-58cd-4b31-b719-30e499e625c5",
+      "media-e1710a32-0f4d-41b7-be62-006f9392426b",
+      "media-0434a67c-2091-4530-bd66-4115590c62c0",
+      "media-cb6a6e3c-b250-4a17-8beb-d0da883342c9"
+    ],
+    "referenceBindings": [
+      {
+        "assetId": "asset-2ce266d7-ee31-46c0-8713-4166ede00cab",
+        "versionId": "asset-version-c0465e41-fada-4299-ba8b-fee191c118b4",
+        "mediaId": "media-28707daf-54bd-4711-acc1-7f2c2b7aef45",
+        "displayName": "血月客栈室内场景母版",
+        "promptAlias": "封闭双层古代木构客栈的材质、楼梯、柜台、四桌八座与暖红暗褐氛围",
+        "role": "scene_authority",
+        "authorityRevision": "scene-authority-7c7bb23a-2ffe-4543-9e5c-2e05702360e7:r9",
+        "providerIndex": 1,
+        "controls": [
+          "古代木构客栈身份",
+          "楼梯与柜台方位",
+          "暖红暗褐材质与曝光",
+          "四桌八座的场景尺度"
+        ],
+        "doesNotControl": [
+          "人物身份",
+          "尸傀解剖",
+          "视频起始帧",
+          "动态动作"
+        ],
+        "required": true
+      },
+      {
+        "assetId": "asset-1d109462-0cee-40b3-a36c-0af724c62940",
+        "versionId": "asset-version-11a949da-1111-4486-a790-7591d4b5a849",
+        "mediaId": "media-c3366895-58cd-4b31-b719-30e499e625c5",
+        "displayName": "尸傀后脑唯一脸干净身份母版",
+        "promptAlias": "单一普通闭合头颅、后脑枕骨内唯一完整皮肤脸、前方平滑无脸、中央单颈",
+        "role": "character_authority",
+        "authorityRevision": "character-authority-3e1e8177-5413-41d3-83ab-a049297c0a3b:r25",
+        "providerIndex": 2,
+        "controls": [
+          "尸傀单头解剖",
+          "唯一完整人脸浅嵌在后脑枕骨皮肤内",
+          "头部正前方平滑无眼鼻口",
+          "中央单颈与古代酒客服"
+        ],
+        "doesNotControl": [
+          "客栈场景",
+          "主角身份",
+          "视频起始帧",
+          "动态动作"
+        ],
+        "required": true
+      },
+      {
+        "assetId": "asset-a2c848dc-d9ce-4a2f-a82f-a05e69028046",
+        "versionId": "asset-version-485b95d3-6da6-4ae6-8448-30b499dd2310",
+        "mediaId": "media-e1710a32-0f4d-41b7-be62-006f9392426b",
+        "displayName": "白璃已验收身份母版",
+        "promptAlias": "白璃长发半束、月白短斗篷、深色内衬与暖红符袋",
+        "role": "character_identity",
+        "authorityRevision": "character-authority-68c9f914-a722-43ec-8cc9-3b4d64e566ca:r8",
+        "providerIndex": 3,
+        "controls": [
+          "白璃身份",
+          "长发半束",
+          "月白短斗篷",
+          "深色内衬与暖红符袋"
+        ],
+        "doesNotControl": [
+          "镜头起始状态",
+          "动态动作",
+          "尸傀解剖",
+          "场景拓扑"
+        ],
+        "required": true
+      },
+      {
+        "assetId": "asset-28ac64eb-4fcd-4038-bf6f-a455deae56e9",
+        "versionId": "asset-version-5244aea9-bd3b-40d0-a07c-12f1e1310603",
+        "mediaId": "media-0434a67c-2091-4530-bd66-4115590c62c0",
+        "displayName": "顾沉已验收身份母版",
+        "promptAlias": "顾沉低短尾、深灰黑短打、旧皮护臂与成年刀客体态",
+        "role": "character_identity",
+        "authorityRevision": "character-authority-d3d7ee1f-e1bb-4ce3-9c96-ae07daa925ab:r9",
+        "providerIndex": 4,
+        "controls": [
+          "顾沉身份",
+          "黑发低短尾",
+          "深灰黑短打",
+          "旧皮护臂与成年体态"
+        ],
+        "doesNotControl": [
+          "镜头起始状态",
+          "动态动作",
+          "武器状态",
+          "场景拓扑"
+        ],
+        "required": true
+      },
+      {
+        "assetId": "asset-654689b2-44ef-42be-9a72-294bf8273185",
+        "versionId": "asset-version-3d3f31b3-9183-407b-8f36-fe8f4d7c58b9",
+        "mediaId": "media-cb6a6e3c-b250-4a17-8beb-d0da883342c9",
+        "displayName": "洛青已验收身份母版",
+        "promptAlias": "洛青高束长马尾、墨青窄袖战衣、轻甲腰封与成年枪修体态",
+        "role": "character_identity",
+        "authorityRevision": "character-authority-dd95aa60-b3ca-47f2-8ae6-1440a4230536:r8",
+        "providerIndex": 5,
+        "controls": [
+          "洛青身份",
+          "高束长马尾",
+          "墨青窄袖战衣",
+          "轻甲腰封与成年体态"
+        ],
+        "doesNotControl": [
+          "镜头起始状态",
+          "动态动作",
+          "长枪状态",
+          "场景拓扑"
+        ],
+        "required": true
+      }
+    ],
+    "keyframeMoment": "P01A第2.85秒的静止证据时刻：三位主角已从前门进入约两米，在入口侧前景背对摄影机停住；四桌八座与八名酒客仍在中后景原位。最近的尸傀身体、肩胸髋和双手仍朝桌案，但其后脑枕骨内唯一完整皮肤脸已睁眼凝视入口主角。此时尚未出现白璃转肩或斗篷遮幅。",
+    "spatialState": "严格16:9单帧。摄影机在三位主角身后、入口中轴，白璃位于前景中央，顾沉左后半步，洛青右后半步；三人背影只占前景下部，不遮住中央中景。中央到后出口纵深保留四张旧木桌、八把座椅、八名坐姿尸傀；每名尸傀臀部仍接触座椅，手或酒杯仍接触桌面。最近尸傀位于中景并足够大，可清楚验收其单头外轮廓、中央单颈和后脑唯一脸；楼梯与柜台位置继承客栈母版，前门—中央—后出口轴线不镜像。",
+    "subjectState": "白璃、顾沉、洛青均从背后三分之四可读身份服装与发型，保持警戒但尚未拔出新武器或施法。八名尸傀穿不同古代酒客服，身体和头部正前方始终朝各自桌案，不回头、不站起、不换位。每名尸傀只有一颗普通尺度闭合头颅和一条中央颈部；头部正前方是连续平滑无眼无鼻无口的皮肤；唯一完整人脸较头颅外包络更小，浅嵌在后脑枕骨皮肤内，四周和下方均可见连续头皮，不生成耳朵、独立下颌、第二颈或反向正常头。",
+    "cameraState": "35毫米等效镜头，平视，摄影机高度1.65米，位置接近导演台(10,1.65,-1)，沿入口到后出口的+Z轴；不环绕、不越轴、不倾斜。前景三主角背影、中景最近尸傀后脑脸、后景桌席和楼梯形成三层景深；焦点锁中景最近尸傀后脑脸，但四桌八座和三主角轮廓仍清楚。",
+    "performanceFocus": "恐怖来自静止关系而不是夸张表演：酒客肩胸髋完全不动，杯盏刚停，后脑唯一脸只有眼睑打开并冷静凝视入口；三位主角以肩颈微收和重心停顿表现发现异常。无对白、无口型、无攻击、无尖叫。",
+    "lightingFocus": "二维手绘动画电影、明确线稿与赛璐璐二至三层明暗。客栈暖红和旧木暗褐为主，人物轮廓有克制红色边光；保护月白斗篷、三主角发型服装、最近尸傀单头皮肤轮廓与后脑脸五官细节，禁止红光过曝或把脸画成白骨。",
+    "continuityFocus": "这是一张空间、身份、解剖和构图参考图，不是视频首帧，也不规定视频从此静帧开始。它只证明入口主角—四桌八座—后出口拓扑、三主角身份、尸傀身体朝桌而后脑脸朝入口的关系；P01A的进门、停杯、睁眼、硬停、白璃转肩和斗篷H1由分秒动态提示词驱动。",
+    "prohibitions": [
+      "不得输出拼贴、多宫格、设定表、三视图、文字、数字、标签、箭头、红圈、标尺、水印或界面",
+      "不得把任何参考图直接复制为最终画面；不得把角色母版背景或分格带入画面",
+      "不得出现外露骷髅、裸露骨骼、空洞眼眶、头骨裂口、面具、贴纸脸或伤口脸",
+      "不得出现普通正脸、反向正常侧脸、双面脸、第二张脸、第二颗头、第二条颈、独立耳朵或独立下颌",
+      "不得让酒客身体、肩胸髋、头部正前方、双手或膝盖转向入口；不得离桌、站起、换座或追击",
+      "不得把客栈变成露天庭院、现代餐厅、空旷大厅或血月户外门户；不得删除四桌八座",
+      "不得让三主角面向摄影机、读成撤退或出门；不得新增第四位主角",
+      "不得提前出现斗篷全幅遮挡、火符、五雷、战斗特效、Boss、断枪或伤势",
+      "不得环绕、越轴、鱼眼、极端广角、俯拍、斜构图或内部切镜语义"
+    ]
+  }
+}

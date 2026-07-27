@@ -1,0 +1,105 @@
+{
+  "boardId": "crowd-identity",
+  "assetNodeId": "node-2d6a455a-317c-420b-96b2-01e5798fa049",
+  "generationParameters": {
+    "provider": "ununu",
+    "model": "openai/gpt-image-2",
+    "aspectRatio": "3:2",
+    "resolution": "1536x1024",
+    "count": 1,
+    "referenceMediaIds": [
+      "media-c3366895-58cd-4b31-b719-30e499e625c5",
+      "media-f9f082ba-7c5e-479b-bd0b-5ae5369eade1"
+    ],
+    "quality": "high",
+    "background": "opaque"
+  },
+  "referenceBindings": [
+    {
+      "assetId": "asset-1d109462-0cee-40b3-a36c-0af724c62940",
+      "versionId": "asset-version-11a949da-1111-4486-a790-7591d4b5a849",
+      "mediaId": "media-c3366895-58cd-4b31-b719-30e499e625c5",
+      "displayName": "r24尸傀后脑唯一脸干净Authority",
+      "promptAlias": "唯一身份与最终像素源：单一无耳闭合颅体、后脑中央缩进五官、四周头皮环、嘴下头底皮肤带、中央单颈",
+      "providerIndex": 1,
+      "role": "accepted_character_authority",
+      "controls": [
+        "每个变体都继承同一单头拓扑",
+        "后脑中央较小五官浅浮雕",
+        "五官四周连续枕骨皮肤环",
+        "嘴下方至颅底的连续皮肤带",
+        "颅底几何中央唯一颈部",
+        "破旧古代中式酒客服与二维手绘动画媒介"
+      ],
+      "doesNotControl": [
+        "四种年龄、身高、体型和衣色差异",
+        "最终镜头构图、客栈空间、战斗动作或视频首帧"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-3e1e8177-5413-41d3-83ab-a049297c0a3b:r26:accepted",
+      "sourceMediaId": "media-c3366895-58cd-4b31-b719-30e499e625c5",
+      "sourceMediaChecksum": "01ad950fa2498a421fa97fdf08e4de45d7aef2ce4460464a3d5607d33479c23f",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "单一无耳闭合颅体、后脑中央较小五官、四周连续头皮环、嘴下颅底皮肤带和中央唯一颈部",
+          "身体严格背面时唯一后脑脸正对摄影机",
+          "二维手绘动画的成人比例与古代酒客服"
+        ],
+        "replace": [],
+        "complete": [
+          {
+            "missing": "同一解剖规则下的群像差异",
+            "target": "扩展为四名可区分的成年尸傀：年龄、身高、肩宽、肤色和衣色不同，但头颅拓扑完全相同"
+          }
+        ],
+        "ignore": [
+          "把参考图人物复制成相同克隆体",
+          "把后脑浅浮雕脸重新解释为正常正脸、第二脸、反向头、骷髅或面具"
+        ],
+        "styleOnly": []
+      }
+    },
+    {
+      "assetId": "asset-1d109462-0cee-40b3-a36c-0af724c62940",
+      "versionId": "asset-version-78341e2c-8a34-452c-b1b0-1c1f04b7cf7f",
+      "mediaId": "media-f9f082ba-7c5e-479b-bd0b-5ae5369eade1",
+      "displayName": "r23枕骨几何标注控制板",
+      "promptAlias": "只读取A-E人物几何，不复制任何标注像素",
+      "providerIndex": 2,
+      "role": "character_geometry_control",
+      "controls": [
+        "A单一圆滑闭合颅体外包络",
+        "B中央较小五官区",
+        "C五官四周连续枕骨皮肤环",
+        "D嘴下至颅底连续皮肤带",
+        "E颅底中央唯一颈部轴线"
+      ],
+      "doesNotControl": [
+        "A-E字母、彩线、虚线、半透明色块、中心轴、箭头和标签留白；这些必须全部删除",
+        "四种群像差异、服装配色、最终镜头或场景"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-3e1e8177-5413-41d3-83ab-a049297c0a3b:r23:control-only",
+      "sourceMediaId": "media-f9f082ba-7c5e-479b-bd0b-5ae5369eade1",
+      "sourceMediaChecksum": "95be85114373ee69e815bce56ae86b340239a40eb1ce2a426395ce4e8f1de030",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "标注线下方的单头、缩进五官、头皮环、嘴下皮肤带与中央颈几何"
+        ],
+        "replace": [
+          {
+            "observed": "A-E字母与全部彩色控制标注",
+            "target": "删除为纯净中性背景和自然二维动画皮肤衣料像素"
+          }
+        ],
+        "complete": [],
+        "ignore": [
+          "所有标注、字母、线框、色块、箭头、图例和右侧留白"
+        ],
+        "styleOnly": []
+      }
+    }
+  ]
+}

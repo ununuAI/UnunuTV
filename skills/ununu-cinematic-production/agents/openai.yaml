@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ununu 影视工业制片总控"
+  short_description: "先审剧情与分镜 revision，再编排可验证的影视生产、Prompt 与质量闭环"
+  default_prompt: "先审查并锁定当前剧情与分镜脚本 revision，再把任务转成可在 UnunuTV 执行的影视工业合同、生成单元和经过预检的 Prompt。"

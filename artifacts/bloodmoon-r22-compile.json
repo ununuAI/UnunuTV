@@ -1,0 +1,69 @@
+{
+  "boardId": "rear-occipital-authority",
+  "assetNodeId": "node-2d6a455a-317c-420b-96b2-01e5798fa049",
+  "generationParameters": {
+    "provider": "ununu",
+    "model": "openai/gpt-image-2",
+    "aspectRatio": "2:3",
+    "resolution": "1024x1536",
+    "count": 1,
+    "referenceMediaIds": ["media-13e0c786-62c0-439b-9e29-24d16761cd9d"],
+    "quality": "high",
+    "background": "opaque"
+  },
+  "referenceBindings": [
+    {
+      "assetId": "asset-1d109462-0cee-40b3-a36c-0af724c62940",
+      "versionId": "asset-version-8b1e53da-98f2-4ce0-8dfb-de15f820e7c9",
+      "mediaId": "media-13e0c786-62c0-439b-9e29-24d16761cd9d",
+      "displayName": "r18尸傀正背身份结构控制板",
+      "promptAlias": "右面板严格背视枕骨人脸身份源",
+      "providerIndex": 1,
+      "role": "character_identity_control",
+      "controls": [
+        "只取参考图右面板同一代表尸傀的身份、体型、肤色、发束和破旧深褐古代酒客服装",
+        "身体背面证据：后领、脊柱、背褶、手背、腿后侧和脚跟",
+        "唯一完整人脸正对摄影机并位于后脑枕骨皮肤",
+        "普通单头尺度、连续皮肤覆盖和中央颈部"
+      ],
+      "doesNotControl": [
+        "参考图左侧身体正面人物",
+        "双面板排版和留白",
+        "最终背面 Authority 的裁切与构图",
+        "战斗动作或客栈空间"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-3e1e8177-5413-41d3-83ab-a049297c0a3b:r18:control-only",
+      "sourceMediaId": "media-13e0c786-62c0-439b-9e29-24d16761cd9d",
+      "sourceMediaChecksum": "bb9cf8310d4597f0520bd9c24b57d917c4e7dc6fcf40b2ce7a54885754c36632",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "只保留参考图右面板人物：同一身份、体型、肤色、发束和破旧深褐古代酒客服装",
+          "身体背面严格正对摄影机，后领脊柱背褶手背腿后侧脚跟一致",
+          "唯一完整皮肤脸正对摄影机并位于后脑枕骨",
+          "普通成年人单头尺度和头颅底面中央颈部",
+          "日本二维手绘动画角色设定媒介"
+        ],
+        "replace": [
+          {
+            "observed": "参考图左右两个面板和左侧无脸正面人物",
+            "target": "只输出参考图右面板对应的一个严格背面人物，从头顶到髋部居中放大"
+          }
+        ],
+        "complete": [
+          {
+            "missing": "枕骨脸四周连续皮肤包围和独立下巴/颈部排除证据不够大",
+            "target": "放大后脑与上颈，使脸椭圆四周完全内含、脸下缘在头颅底面以上结束、中央颈部独立属于单头的关系清楚可见"
+          }
+        ],
+        "ignore": [
+          "参考图左面板全部像素",
+          "双面板排版、中央间距和背景留白",
+          "任何从正面人物推测出的正常正脸"
+        ],
+        "styleOnly": []
+      }
+    }
+  ]
+}

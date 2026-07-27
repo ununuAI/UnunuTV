@@ -1,0 +1,300 @@
+{
+  "generationUnit": {
+    "lifecycle": "active",
+    "rebuildPlanId": "bloodmoon-p01a-r10-semantic-reference-separation-v1",
+    "rebuildState": "Scene Authority r9、白璃 r8、顾沉 r9、洛青 r8、尸傀单体干净母版 r24 与群像扩展板 r27 已完成原像素 ACCEPT；P01A 不使用错误整景关键帧，也不把任何参考图当首帧。九张输入按场景外观、人物身份、怪物解剖、群像差异和起中末空间控制分职，动态事实只由 24fps 分秒合同驱动。当前仅允许 compile/preflight，视频 Provider 仍需新的明确批准。",
+    "paidApprovalRequired": true,
+    "providerCalled": false,
+    "generationParameters": {
+      "mode": "image_reference",
+      "referenceMediaIds": [
+        "media-28707daf-54bd-4711-acc1-7f2c2b7aef45",
+        "media-e1710a32-0f4d-41b7-be62-006f9392426b",
+        "media-0434a67c-2091-4530-bd66-4115590c62c0",
+        "media-cb6a6e3c-b250-4a17-8beb-d0da883342c9",
+        "media-c3366895-58cd-4b31-b719-30e499e625c5",
+        "media-711c3702-2b0a-4dcd-9689-517e50896882",
+        "media-996eda82-e579-46c0-9e91-5aa08b3ec5ee",
+        "media-ddc70493-a434-49db-95d6-0de55e8d177c"
+      ],
+      "firstFrameMediaId": null,
+      "lastFrameMediaId": null
+    }
+  },
+  "referenceBindings": [
+    {
+      "assetId": "asset-2ce266d7-ee31-46c0-8713-4166ede00cab",
+      "versionId": "asset-version-c0465e41-fada-4299-ba8b-fee191c118b4",
+      "mediaId": "media-28707daf-54bd-4711-acc1-7f2c2b7aef45",
+      "displayName": "血月客栈场景 Authority r9",
+      "promptAlias": "客栈外观材质与血月红光参考",
+      "providerIndex": 1,
+      "role": "scene_appearance_authority",
+      "controls": [
+        "古代木构客栈材质",
+        "暗褐暖灯与血月红光色彩关系",
+        "入口、柜台、楼梯、后出口的建筑身份"
+      ],
+      "doesNotControl": [
+        "人物身份、数量、动作与站位",
+        "四桌八座的精确度量布局",
+        "摄影机起中末位置",
+        "视频首帧或动态结果"
+      ],
+      "required": true,
+      "authorityRevision": "scene-authority-7c7bb23a-2ffe-4543-9e5c-2e05702360e7:r9:accepted",
+      "checksum": "4a1dc94894ab243d6c3f56360f0ed582e2abe3402575cd8679a42fbb179af3fd",
+      "semanticControl": {
+        "temporalRole": "style_only",
+        "preserve": [],
+        "replace": [],
+        "complete": [],
+        "ignore": [
+          "参考图中的人物、桌席投影、相机透视和任何与导演台度量控制冲突的布局"
+        ],
+        "styleOnly": [
+          "古代木构材质、暗褐暖灯、血月红氛围与二维手绘动画背景质感"
+        ]
+      }
+    },
+    {
+      "assetId": "asset-a2c848dc-d9ce-4a2f-a82f-a05e69028046",
+      "versionId": "asset-version-485b95d3-6da6-4ae6-8448-30b499dd2310",
+      "mediaId": "media-e1710a32-0f4d-41b7-be62-006f9392426b",
+      "displayName": "白璃身份 Authority",
+      "promptAlias": "白璃人物身份参考",
+      "providerIndex": 2,
+      "role": "character_identity",
+      "controls": [
+        "白璃脸型、五官、发型、月白服装与人物比例"
+      ],
+      "doesNotControl": [
+        "本镜头姿势、入口站位、转肩时机、斗篷运动轨迹、摄影机或场景"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-68c9f914-a722-43ec-8cc9-3b4d64e566ca:r8:accepted",
+      "checksum": "e1e6424547125a93571d13d6ca4b2c599adb306d94810e3e8dace527ba389509",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "白璃脸型、五官、发型、月白服装与成熟青年二维动画比例"
+        ],
+        "replace": [],
+        "complete": [],
+        "ignore": [
+          "参考图姿势、背景、光向、镜头景别和动作结果"
+        ],
+        "styleOnly": []
+      }
+    },
+    {
+      "assetId": "asset-28ac64eb-4fcd-4038-bf6f-a455deae56e9",
+      "versionId": "asset-version-5244aea9-bd3b-40d0-a07c-12f1e1310603",
+      "mediaId": "media-0434a67c-2091-4530-bd66-4115590c62c0",
+      "displayName": "顾沉身份 Authority",
+      "promptAlias": "顾沉人物身份参考",
+      "providerIndex": 3,
+      "role": "character_identity",
+      "controls": [
+        "顾沉脸型、五官、发型、服装、武器归属与人物比例"
+      ],
+      "doesNotControl": [
+        "本镜头姿势、入口左后站位、手靠刀柄时机、摄影机或场景"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-d3d7ee1f-e1bb-4ce3-9c96-ae07daa925ab:r9:accepted",
+      "checksum": "ac14caac3f28505658e871b9c48f72b9d89d0b70cd231d53a025fd665268f4b6",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "顾沉脸型、五官、发型、服装、武器归属与成熟青年二维动画比例"
+        ],
+        "replace": [],
+        "complete": [],
+        "ignore": [
+          "参考图姿势、背景、光向、镜头景别和动作结果"
+        ],
+        "styleOnly": []
+      }
+    },
+    {
+      "assetId": "asset-654689b2-44ef-42be-9a72-294bf8273185",
+      "versionId": "asset-version-3d3f31b3-9183-407b-8f36-fe8f4d7c58b9",
+      "mediaId": "media-cb6a6e3c-b250-4a17-8beb-d0da883342c9",
+      "displayName": "洛青身份 Authority",
+      "promptAlias": "洛青人物身份参考",
+      "providerIndex": 4,
+      "role": "character_identity",
+      "controls": [
+        "洛青脸型、五官、发型、服装、长枪归属与人物比例"
+      ],
+      "doesNotControl": [
+        "本镜头姿势、入口右后站位、握枪时机、摄影机或场景"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-dd95aa60-b3ca-47f2-8ae6-1440a4230536:r8:accepted",
+      "checksum": "45bc8e55ed21ecbe83256094ee59f8f9071e2a6d378c22aa38073a8b91b8b130",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "洛青脸型、五官、发型、服装、长枪归属与成熟青年二维动画比例"
+        ],
+        "replace": [],
+        "complete": [],
+        "ignore": [
+          "参考图姿势、背景、光向、镜头景别和动作结果"
+        ],
+        "styleOnly": []
+      }
+    },
+    {
+      "assetId": "asset-1d109462-0cee-40b3-a36c-0af724c62940",
+      "versionId": "asset-version-11a949da-1111-4486-a790-7591d4b5a849",
+      "mediaId": "media-c3366895-58cd-4b31-b719-30e499e625c5",
+      "displayName": "尸傀后脑唯一脸干净 Authority",
+      "promptAlias": "尸傀单体枕骨解剖参考",
+      "providerIndex": 5,
+      "role": "character_anatomy_authority",
+      "controls": [
+        "单一闭合头颅",
+        "唯一完整人脸浅嵌在后脑枕骨皮肤",
+        "五官四周连续枕骨皮肤环",
+        "嘴下至颅底连续皮肤带",
+        "颅底中央唯一颈部",
+        "连续皮肤覆盖而非骷髅"
+      ],
+      "doesNotControl": [
+        "八名尸傀的个体差异、最终数量、桌席站位、坐姿、停杯和睁眼时机",
+        "视频首帧、尾帧或动作状态"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-3e1e8177-5413-41d3-83ab-a049297c0a3b:r27:accepted-base-r24",
+      "checksum": "01ad950fa2498a421fa97fdf08e4de45d7aef2ce4460464a3d5607d33479c23f",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "单一闭合头颅、后脑中央唯一完整皮肤脸、四周枕骨皮肤环、嘴下皮肤带和颅底中央单颈"
+        ],
+        "replace": [],
+        "complete": [],
+        "ignore": [
+          "参考图单人站姿、中性背景、画面景别以及任何将它误作视频起始帧的解释"
+        ],
+        "styleOnly": []
+      }
+    },
+    {
+      "assetId": "asset-1d109462-0cee-40b3-a36c-0af724c62940",
+      "versionId": "asset-version-aa1c1d12-0f18-493b-8dff-a3b96f7016c5",
+      "mediaId": "media-711c3702-2b0a-4dcd-9689-517e50896882",
+      "displayName": "尸傀群像结构扩展板 r27",
+      "promptAlias": "四种尸傀正背群像身份参考",
+      "providerIndex": 6,
+      "role": "character_group_identity",
+      "controls": [
+        "四种可区分体型、年龄、衣色",
+        "每个变体身体前方无脸、身体背面后脑唯一完整脸",
+        "所有变体保持单头中央单颈与古代酒客服"
+      ],
+      "doesNotControl": [
+        "最终四桌八座布局、人物站姿、坐姿、面向桌案方向、停杯、睁眼或摄影机",
+        "参考板的正背成对排版不得复制进成片",
+        "视频首帧、尾帧或动作状态"
+      ],
+      "required": true,
+      "authorityRevision": "character-authority-3e1e8177-5413-41d3-83ab-a049297c0a3b:r27:accepted-group",
+      "checksum": "1ff5d4230ff9a6cf5f306313a9f0e1bb384b20b5ddb588b5ee294f57c4e86707",
+      "semanticControl": {
+        "temporalRole": "identity_only",
+        "preserve": [
+          "四种可区分体型、年龄、衣色及统一的前无脸、后脑唯一脸、单头中央单颈规则"
+        ],
+        "replace": [],
+        "complete": [
+          {
+            "missing": "参考板没有客栈桌席和坐姿",
+            "target": "按导演台四桌八座把八名尸傀坐在各自座位，身体与头部正前方朝桌案，只有后脑脸朝入口"
+          }
+        ],
+        "ignore": [
+          "参考板中性背景、成对站立排版、双手自然下垂和静态展示姿势"
+        ],
+        "styleOnly": []
+      }
+    },
+    {
+      "assetId": "director-stage:node-3043a7e1-14ab-4438-bfbf-9b99fc35d2eb:director-capture-15e3ea91-a237-4401-aef8-571e9f709e27",
+      "versionId": "director-stage-v172:media-996eda82-e579-46c0-9e91-5aa08b3ec5ee",
+      "mediaId": "media-996eda82-e579-46c0-9e91-5aa08b3ec5ee",
+      "displayName": "P01A 导演台起点空间控制",
+      "promptAlias": "入口阈值起点度量控制图",
+      "providerIndex": 7,
+      "role": "director_stage_start_blocking",
+      "controls": [
+        "t0入口阈值、三主角背后三角编队",
+        "四桌八座与八名尸傀世界位置",
+        "入口—中央—后出口轴线",
+        "摄影机起点、视场与银幕方向"
+      ],
+      "doesNotControl": [
+        "人物身份、服装、怪物解剖、最终材质、灯光、表演或动作结果",
+        "代理模型与控制图颜色不得进入最终像素",
+        "不是视频首帧"
+      ],
+      "required": true,
+      "authorityRevision": "director-stage-v172:accepted-control",
+      "checksum": "8957a12d659d06d43d11633b0b035a0a8dd8b2f937a1a034e80818a914a8f6d0",
+      "semanticControl": {
+        "temporalRole": "static_state",
+        "preserve": [
+          "t0入口阈值、三主角背后三角编队、四桌八座、八名尸傀世界位置与摄影机起点"
+        ],
+        "replace": [],
+        "complete": [],
+        "ignore": [
+          "代理人物造型、控制图材质颜色、标签感和非最终美术像素"
+        ],
+        "styleOnly": []
+      }
+    },
+    {
+      "assetId": "director-stage:node-3043a7e1-14ab-4438-bfbf-9b99fc35d2eb:director-capture-d36050bd-9bb6-4ec8-aadc-7ca0152c2f3c",
+      "versionId": "director-stage-v178:media-ddc70493-a434-49db-95d6-0de55e8d177c",
+      "mediaId": "media-ddc70493-a434-49db-95d6-0de55e8d177c",
+      "displayName": "P01A 导演台遮幅前终点空间控制",
+      "promptAlias": "白璃身后遮幅前终点度量控制图",
+      "providerIndex": 8,
+      "role": "director_stage_end_blocking",
+      "controls": [
+        "3.7秒遮幅前摄影机终点",
+        "三主角仍在入口侧前景",
+        "八名尸傀与四桌八座世界位置不变",
+        "入口轴线与最终擦镜方向"
+      ],
+      "doesNotControl": [
+        "人物身份、服装、怪物解剖、最终材质、灯光、斗篷形变或动作结果",
+        "不是视频尾帧，也不代表全画幅H1已经存在"
+      ],
+      "required": true,
+      "authorityRevision": "director-stage-v178:accepted-control",
+      "checksum": "fd7ae4fa92c710c955a9b703c0239d3d9ae9b96658963c653e920380d994cc01",
+      "semanticControl": {
+        "temporalRole": "static_state",
+        "preserve": [
+          "3.7秒遮幅前摄影机终点、主角入口前景、四桌八座与八名尸傀静止世界位置"
+        ],
+        "replace": [],
+        "complete": [
+          {
+            "missing": "控制图没有真实月白斗篷全画幅H1",
+            "target": "只在3.7至4秒由白璃原地转肩的动力链驱动月白斗篷自左下向右上覆盖全画幅"
+          }
+        ],
+        "ignore": [
+          "代理人物造型、控制图材质颜色、标签感和非最终美术像素"
+        ],
+        "styleOnly": []
+      }
+    }
+  ]
+}

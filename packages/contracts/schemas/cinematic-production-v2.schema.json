@@ -1,0 +1,3080 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ununu.local/schemas/cinematic-production-v2.schema.json",
+  "title": "Ununu Cinematic Production V2",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/CinematicProduction"
+    },
+    {
+      "$ref": "#/$defs/StoryProductionPacket"
+    },
+    {
+      "$ref": "#/$defs/VisualBible"
+    },
+    {
+      "$ref": "#/$defs/CharacterAuthoritySet"
+    },
+    {
+      "$ref": "#/$defs/SceneAuthoritySet"
+    },
+    {
+      "$ref": "#/$defs/PropAuthoritySpec"
+    },
+    {
+      "$ref": "#/$defs/StoryboardPromptSpec"
+    },
+    {
+      "$ref": "#/$defs/CinematicShotSpec"
+    },
+    {
+      "$ref": "#/$defs/GenerationUnit"
+    },
+    {
+      "$ref": "#/$defs/ProfessionalContribution"
+    },
+    {
+      "$ref": "#/$defs/CinematicPromptEnvelopeV2"
+    },
+    {
+      "$ref": "#/$defs/CinematicImagePromptEnvelopeV2"
+    },
+    {
+      "$ref": "#/$defs/CinematicEvaluationRecord"
+    },
+    {
+      "$ref": "#/$defs/SequencePrevisDocument"
+    },
+    {
+      "$ref": "#/$defs/VisualContextBundle"
+    },
+    {
+      "$ref": "#/$defs/VisualTakeMemory"
+    },
+    {
+      "$ref": "#/$defs/CreativeDecisionTrace"
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stringArray": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "record": {
+      "type": "object"
+    },
+    "VisualStateAcceptanceProof": {
+      "type": "object",
+      "required": [
+        "reviewId",
+        "mediaId",
+        "checksum",
+        "shotId",
+        "shotRevision",
+        "pixelReviewed",
+        "verifiedDomains"
+      ],
+      "properties": {
+        "reviewId": {
+          "$ref": "#/$defs/id"
+        },
+        "mediaId": {
+          "$ref": "#/$defs/id"
+        },
+        "checksum": {
+          "$ref": "#/$defs/id"
+        },
+        "shotId": {
+          "$ref": "#/$defs/id"
+        },
+        "shotRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pixelReviewed": {
+          "const": true
+        },
+        "verifiedDomains": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "character_identity",
+              "scene_topology",
+              "spatial_blocking",
+              "camera_composition",
+              "continuity_state"
+            ]
+          }
+        }
+      }
+    },
+    "ContinuationHandoff": {
+      "type": "object",
+      "required": [
+        "mode",
+        "seamType",
+        "seamOpportunity",
+        "entryActionPhase",
+        "exitActionPhase",
+        "repeatedAction",
+        "newContentAfterH1",
+        "cutPointRule",
+        "trimPlan",
+        "camera",
+        "audioBridge",
+        "conservationChecks"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "TAIL_CONTINUE",
+            "DUPLICATE_HANDOFF"
+          ]
+        },
+        "seamType": {
+          "enum": [
+            "action_match",
+            "occlusion",
+            "foreground_wipe",
+            "whip_pan",
+            "flash",
+            "dark_frame",
+            "motion_blur"
+          ]
+        },
+        "seamOpportunity": {
+          "$ref": "#/$defs/id"
+        },
+        "entryActionPhase": {
+          "$ref": "#/$defs/id"
+        },
+        "exitActionPhase": {
+          "$ref": "#/$defs/id"
+        },
+        "repeatedAction": {
+          "$ref": "#/$defs/id"
+        },
+        "newContentAfterH1": {
+          "$ref": "#/$defs/id"
+        },
+        "cutPointRule": {
+          "$ref": "#/$defs/id"
+        },
+        "trimPlan": {
+          "$ref": "#/$defs/id"
+        },
+        "h0MediaId": {
+          "$ref": "#/$defs/id"
+        },
+        "h1MediaId": {
+          "$ref": "#/$defs/id"
+        },
+        "h0ToH1Action": {
+          "$ref": "#/$defs/id"
+        },
+        "camera": {
+          "type": "object",
+          "required": [
+            "movementDirection",
+            "exitSpeed",
+            "entrySpeed",
+            "lens",
+            "focus",
+            "exposure"
+          ],
+          "properties": {
+            "movementDirection": {
+              "$ref": "#/$defs/id"
+            },
+            "exitSpeed": {
+              "$ref": "#/$defs/id"
+            },
+            "entrySpeed": {
+              "$ref": "#/$defs/id"
+            },
+            "lens": {
+              "$ref": "#/$defs/id"
+            },
+            "focus": {
+              "$ref": "#/$defs/id"
+            },
+            "exposure": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        "audioBridge": {
+          "type": "object",
+          "required": [
+            "ambience",
+            "syncCue"
+          ],
+          "properties": {
+            "ambience": {
+              "$ref": "#/$defs/id"
+            },
+            "syncCue": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        "conservationChecks": {
+          "type": "array",
+          "minItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "blocking",
+              "props",
+              "lighting",
+              "action_phase",
+              "screen_direction"
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "DUPLICATE_HANDOFF"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "h0MediaId",
+              "h1MediaId",
+              "h0ToH1Action"
+            ]
+          }
+        }
+      ]
+    },
+    "ReferenceSemanticControl": {
+      "type": "object",
+      "required": [
+        "temporalRole",
+        "preserve",
+        "replace",
+        "complete",
+        "ignore",
+        "styleOnly"
+      ],
+      "properties": {
+        "temporalRole": {
+          "enum": [
+            "identity_only",
+            "static_state",
+            "initial_state",
+            "action_phase",
+            "endpoint",
+            "continuity_state",
+            "style_only"
+          ]
+        },
+        "preserve": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "replace": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "observed",
+              "target"
+            ],
+            "properties": {
+              "observed": {
+                "$ref": "#/$defs/id"
+              },
+              "target": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        },
+        "complete": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "missing",
+              "target"
+            ],
+            "properties": {
+              "missing": {
+                "$ref": "#/$defs/id"
+              },
+              "target": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        },
+        "ignore": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "styleOnly": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "TemporalMotionState": {
+      "type": "object",
+      "required": [
+        "stateId",
+        "atSeconds",
+        "phaseId",
+        "position",
+        "orientation",
+        "pose",
+        "contacts",
+        "visibility"
+      ],
+      "properties": {
+        "stateId": {
+          "$ref": "#/$defs/id"
+        },
+        "atSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "phaseId": {
+          "$ref": "#/$defs/id"
+        },
+        "position": {
+          "type": "object",
+          "required": [
+            "x",
+            "y",
+            "z"
+          ],
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "z": {
+              "type": "number"
+            }
+          }
+        },
+        "orientation": {
+          "type": "object",
+          "required": [
+            "yawDegrees",
+            "pitchDegrees",
+            "rollDegrees"
+          ],
+          "properties": {
+            "yawDegrees": {
+              "type": "number"
+            },
+            "pitchDegrees": {
+              "type": "number"
+            },
+            "rollDegrees": {
+              "type": "number"
+            }
+          }
+        },
+        "focusDistanceMeters": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 10000
+        },
+        "pose": {
+          "$ref": "#/$defs/id"
+        },
+        "contacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "visibility": {
+          "enum": [
+            "visible",
+            "occluded",
+            "offscreen"
+          ]
+        }
+      }
+    },
+    "TemporalMotionTransition": {
+      "type": "object",
+      "required": [
+        "fromStateId",
+        "toStateId",
+        "path",
+        "interpolation",
+        "velocityCurve",
+        "actionPhase",
+        "contactEvolution",
+        "requiredIntermediateStates"
+      ],
+      "properties": {
+        "fromStateId": {
+          "$ref": "#/$defs/id"
+        },
+        "toStateId": {
+          "$ref": "#/$defs/id"
+        },
+        "path": {
+          "$ref": "#/$defs/id"
+        },
+        "interpolation": {
+          "enum": [
+            "hold",
+            "linear",
+            "ease_in",
+            "ease_out",
+            "ease_in_out",
+            "bezier"
+          ]
+        },
+        "velocityCurve": {
+          "$ref": "#/$defs/id"
+        },
+        "actionPhase": {
+          "$ref": "#/$defs/id"
+        },
+        "contactEvolution": {
+          "$ref": "#/$defs/id"
+        },
+        "requiredIntermediateStates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "atSeconds",
+              "description"
+            ],
+            "properties": {
+              "atSeconds": {
+                "type": "number",
+                "minimum": 0
+              },
+              "description": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        }
+      }
+    },
+    "TemporalMotionTrack": {
+      "type": "object",
+      "required": [
+        "trackId",
+        "entityId",
+        "displayName",
+        "trackType",
+        "coordinateSpace",
+        "states",
+        "transitions"
+      ],
+      "properties": {
+        "trackId": {
+          "$ref": "#/$defs/id"
+        },
+        "entityId": {
+          "$ref": "#/$defs/id"
+        },
+        "displayName": {
+          "$ref": "#/$defs/id"
+        },
+        "trackType": {
+          "enum": [
+            "subject",
+            "prop",
+            "camera",
+            "environment"
+          ]
+        },
+        "coordinateSpace": {
+          "enum": [
+            "director_world",
+            "subject_local",
+            "screen"
+          ]
+        },
+        "states": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/TemporalMotionState"
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/TemporalMotionTransition"
+          }
+        }
+      }
+    },
+    "TemporalMotionPlan": {
+      "type": "object",
+      "required": [
+        "timelineId",
+        "durationSeconds",
+        "frameRate",
+        "phases",
+        "tracks",
+        "evaluationPolicy"
+      ],
+      "properties": {
+        "timelineId": {
+          "$ref": "#/$defs/id"
+        },
+        "durationSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "frameRate": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "phases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "phaseId",
+              "phaseType",
+              "startSeconds",
+              "endSeconds",
+              "dependsOn",
+              "description"
+            ],
+            "properties": {
+              "phaseId": {
+                "$ref": "#/$defs/id"
+              },
+              "phaseType": {
+                "enum": [
+                  "hold",
+                  "anticipation",
+                  "action",
+                  "impact",
+                  "follow_through",
+                  "settle",
+                  "handoff"
+                ]
+              },
+              "startSeconds": {
+                "type": "number",
+                "minimum": 0
+              },
+              "endSeconds": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "dependsOn": {
+                "$ref": "#/$defs/stringArray"
+              },
+              "description": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        },
+        "tracks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/TemporalMotionTrack"
+          }
+        },
+        "evaluationPolicy": {
+          "type": "object",
+          "required": [
+            "sampleEveryFrames",
+            "derivativeChecks"
+          ],
+          "properties": {
+            "sampleEveryFrames": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "derivativeChecks": {
+              "type": "array",
+              "minItems": 7,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "position_delta",
+                  "orientation_delta",
+                  "velocity_continuity",
+                  "acceleration_continuity",
+                  "contact_continuity",
+                  "action_phase",
+                  "screen_direction"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "GenerationControlIntent": {
+      "type": "object",
+      "required": [
+        "primaryConsistency",
+        "cameraFreedom",
+        "motionComplexity",
+        "modeRationale",
+        "invariants",
+        "permittedChanges",
+        "dynamicControl"
+      ],
+      "properties": {
+        "primaryConsistency": {
+          "enum": [
+            "within_clip_temporal",
+            "external_identity",
+            "cross_shot_continuity",
+            "spatial_blocking",
+            "balanced"
+          ]
+        },
+        "cameraFreedom": {
+          "enum": [
+            "locked",
+            "limited",
+            "expansive"
+          ]
+        },
+        "motionComplexity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "modeRationale": {
+          "$ref": "#/$defs/id"
+        },
+        "invariants": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "permittedChanges": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "dynamicControl": {
+          "type": "object",
+          "required": [
+            "source",
+            "subjectTrajectories",
+            "actionPhases",
+            "timing",
+            "cameraTrajectory",
+            "physicsContinuity",
+            "endState"
+          ],
+          "properties": {
+            "source": {
+              "enum": [
+                "text_motion_contract",
+                "action_phase_board",
+                "video_motion_reference",
+                "hybrid"
+              ]
+            },
+            "subjectTrajectories": {
+              "$ref": "#/$defs/id"
+            },
+            "actionPhases": {
+              "$ref": "#/$defs/id"
+            },
+            "timing": {
+              "$ref": "#/$defs/id"
+            },
+            "cameraTrajectory": {
+              "$ref": "#/$defs/id"
+            },
+            "physicsContinuity": {
+              "$ref": "#/$defs/id"
+            },
+            "endState": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        "temporalMotionPlan": {
+          "$ref": "#/$defs/TemporalMotionPlan"
+        },
+        "constraintRelease": {
+          "type": "object",
+          "required": [
+            "mechanism",
+            "releases",
+            "preserves"
+          ],
+          "properties": {
+            "mechanism": {
+              "$ref": "#/$defs/id"
+            },
+            "releases": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/id"
+              }
+            },
+            "preserves": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        }
+      }
+    },
+    "PromptCounterexampleClosure": {
+      "type": "object",
+      "required": [
+        "observedFailure",
+        "omittedDetail",
+        "positiveConstraint",
+        "vetoCriterion"
+      ],
+      "properties": {
+        "observedFailure": {
+          "$ref": "#/$defs/id"
+        },
+        "omittedDetail": {
+          "$ref": "#/$defs/id"
+        },
+        "positiveConstraint": {
+          "$ref": "#/$defs/id"
+        },
+        "vetoCriterion": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "PromptConstraintCoverage": {
+      "type": "object",
+      "properties": {
+        "subjectCountRoles": {
+          "$ref": "#/$defs/id"
+        },
+        "coordinateFrame": {
+          "$ref": "#/$defs/id"
+        },
+        "topologyAttachments": {
+          "$ref": "#/$defs/id"
+        },
+        "geometryScale": {
+          "$ref": "#/$defs/id"
+        },
+        "spatialBlocking": {
+          "$ref": "#/$defs/id"
+        },
+        "poseGazeHandsProps": {
+          "$ref": "#/$defs/id"
+        },
+        "surfaceMaterialWardrobe": {
+          "$ref": "#/$defs/id"
+        },
+        "visibilityOcclusionCompletion": {
+          "$ref": "#/$defs/id"
+        },
+        "cameraFramingLensFocus": {
+          "$ref": "#/$defs/id"
+        },
+        "lightingColorExposure": {
+          "$ref": "#/$defs/id"
+        },
+        "initialState": {
+          "$ref": "#/$defs/id"
+        },
+        "continuityInvariants": {
+          "$ref": "#/$defs/id"
+        },
+        "subjectTrajectories": {
+          "$ref": "#/$defs/id"
+        },
+        "actionPhases": {
+          "$ref": "#/$defs/id"
+        },
+        "timingSpeed": {
+          "$ref": "#/$defs/id"
+        },
+        "cameraTrajectory": {
+          "$ref": "#/$defs/id"
+        },
+        "contactForcesPhysics": {
+          "$ref": "#/$defs/id"
+        },
+        "performanceDialogueAudio": {
+          "$ref": "#/$defs/id"
+        },
+        "endStateHandoff": {
+          "$ref": "#/$defs/id"
+        },
+        "cutSeamStrategy": {
+          "$ref": "#/$defs/id"
+        },
+        "escapeRoutes": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "counterexampleClosures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PromptCounterexampleClosure"
+          }
+        }
+      }
+    },
+    "OrbitCameraPose": {
+      "type": "object",
+      "required": [
+        "azimuthDegrees",
+        "elevationDegrees",
+        "radiusMeters",
+        "heightMeters"
+      ],
+      "properties": {
+        "azimuthDegrees": {
+          "type": "number",
+          "minimum": -360,
+          "maximum": 360
+        },
+        "elevationDegrees": {
+          "type": "number",
+          "minimum": -89,
+          "maximum": 89
+        },
+        "radiusMeters": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 1000
+        },
+        "heightMeters": {
+          "type": "number",
+          "minimum": -1000,
+          "maximum": 1000
+        }
+      }
+    },
+    "CameraAnnotationReference": {
+      "type": "object",
+      "required": [
+        "mediaId",
+        "sourceMediaId",
+        "sourceChecksum",
+        "controlGeometryId",
+        "annotations"
+      ],
+      "properties": {
+        "mediaId": {
+          "$ref": "#/$defs/id"
+        },
+        "sourceMediaId": {
+          "$ref": "#/$defs/id"
+        },
+        "sourceChecksum": {
+          "$ref": "#/$defs/id"
+        },
+        "controlGeometryId": {
+          "$ref": "#/$defs/id"
+        },
+        "annotations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "annotationId",
+              "kind",
+              "meaning",
+              "instruction",
+              "startSeconds",
+              "endSeconds"
+            ],
+            "properties": {
+              "annotationId": {
+                "$ref": "#/$defs/id"
+              },
+              "kind": {
+                "enum": [
+                  "direction",
+                  "focus",
+                  "orientation",
+                  "path",
+                  "region",
+                  "timing"
+                ]
+              },
+              "meaning": {
+                "$ref": "#/$defs/id"
+              },
+              "instruction": {
+                "$ref": "#/$defs/id"
+              },
+              "startSeconds": {
+                "type": "number",
+                "minimum": 0
+              },
+              "endSeconds": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "OrbitCameraTrajectory": {
+      "type": "object",
+      "required": [
+        "movementType",
+        "coordinateSpace",
+        "pivot",
+        "startPose",
+        "endPose",
+        "direction",
+        "arcDegrees",
+        "durationSeconds",
+        "speedCurve",
+        "lookAt",
+        "lensFocus",
+        "rollDegrees",
+        "framingInvariant",
+        "subjectMotionRelation",
+        "occlusionPlan",
+        "parallaxExpectation",
+        "controlRouteId",
+        "cleanCaptures",
+        "overlayPolicy"
+      ],
+      "properties": {
+        "movementType": {
+          "const": "orbit"
+        },
+        "coordinateSpace": {
+          "enum": [
+            "subject_local",
+            "world"
+          ]
+        },
+        "pivot": {
+          "type": "object",
+          "required": [
+            "targetId",
+            "description"
+          ],
+          "properties": {
+            "targetId": {
+              "$ref": "#/$defs/id"
+            },
+            "description": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        "startPose": {
+          "$ref": "#/$defs/OrbitCameraPose"
+        },
+        "endPose": {
+          "$ref": "#/$defs/OrbitCameraPose"
+        },
+        "direction": {
+          "enum": [
+            "clockwise_from_overhead",
+            "counterclockwise_from_overhead"
+          ]
+        },
+        "arcDegrees": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 360
+        },
+        "durationSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 120
+        },
+        "speedCurve": {
+          "$ref": "#/$defs/id"
+        },
+        "lookAt": {
+          "$ref": "#/$defs/id"
+        },
+        "lensFocus": {
+          "$ref": "#/$defs/id"
+        },
+        "rollDegrees": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "framingInvariant": {
+          "$ref": "#/$defs/id"
+        },
+        "subjectMotionRelation": {
+          "$ref": "#/$defs/id"
+        },
+        "occlusionPlan": {
+          "$ref": "#/$defs/id"
+        },
+        "parallaxExpectation": {
+          "$ref": "#/$defs/id"
+        },
+        "controlRouteId": {
+          "$ref": "#/$defs/id"
+        },
+        "cleanCaptures": {
+          "type": "object",
+          "required": [
+            "startCaptureId",
+            "midCaptureId",
+            "endCaptureId"
+          ],
+          "properties": {
+            "startCaptureId": {
+              "$ref": "#/$defs/id"
+            },
+            "midCaptureId": {
+              "$ref": "#/$defs/id"
+            },
+            "endCaptureId": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        "overlayPolicy": {
+          "enum": [
+            "editor_only",
+            "provider_reference_only"
+          ]
+        },
+        "annotationReference": {
+          "$ref": "#/$defs/CameraAnnotationReference"
+        }
+      }
+    },
+    "CameraTrajectoryState": {
+      "type": "object",
+      "required": [
+        "position",
+        "yawDegrees",
+        "pitchDegrees",
+        "rollDegrees",
+        "fovDegrees",
+        "focusDistanceMeters"
+      ],
+      "properties": {
+        "position": {
+          "type": "object",
+          "required": [
+            "x",
+            "y",
+            "z"
+          ],
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "z": {
+              "type": "number"
+            }
+          }
+        },
+        "yawDegrees": {
+          "type": "number",
+          "minimum": -360,
+          "maximum": 360
+        },
+        "pitchDegrees": {
+          "type": "number",
+          "minimum": -89,
+          "maximum": 89
+        },
+        "rollDegrees": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "fovDegrees": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 179
+        },
+        "focusDistanceMeters": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 10000
+        }
+      }
+    },
+    "CameraTrajectoryPlan": {
+      "type": "object",
+      "required": [
+        "movementType",
+        "guideType",
+        "coordinateSpace",
+        "startState",
+        "endState",
+        "durationSeconds",
+        "pathDescription",
+        "directionDefinition",
+        "speedCurve",
+        "lookAt",
+        "lensFocus",
+        "framingInvariant",
+        "subjectMotionRelation",
+        "occlusionPlan",
+        "parallaxExpectation",
+        "controlGeometryId",
+        "cleanCaptures",
+        "overlayPolicy"
+      ],
+      "properties": {
+        "movementType": {
+          "enum": [
+            "arc",
+            "compound",
+            "crane",
+            "dolly",
+            "handheld",
+            "orbit",
+            "pan_tilt",
+            "pedestal",
+            "truck",
+            "zoom"
+          ]
+        },
+        "guideType": {
+          "enum": [
+            "compound_guides",
+            "lens_curve",
+            "motion_envelope",
+            "orientation_arc",
+            "path_curve"
+          ]
+        },
+        "coordinateSpace": {
+          "enum": [
+            "subject_local",
+            "world"
+          ]
+        },
+        "startState": {
+          "$ref": "#/$defs/CameraTrajectoryState"
+        },
+        "endState": {
+          "$ref": "#/$defs/CameraTrajectoryState"
+        },
+        "focusDistancePlan": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": [
+              "atSeconds",
+              "focusDistanceMeters",
+              "target",
+              "interpolation"
+            ],
+            "properties": {
+              "atSeconds": {
+                "type": "number",
+                "minimum": 0
+              },
+              "focusDistanceMeters": {
+                "type": "number",
+                "minimum": 0.01,
+                "maximum": 10000
+              },
+              "target": {
+                "$ref": "#/$defs/id"
+              },
+              "interpolation": {
+                "enum": [
+                  "hold",
+                  "linear",
+                  "ease_in",
+                  "ease_out",
+                  "ease_in_out"
+                ]
+              }
+            }
+          }
+        },
+        "durationSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 120
+        },
+        "pathDescription": {
+          "$ref": "#/$defs/id"
+        },
+        "directionDefinition": {
+          "$ref": "#/$defs/id"
+        },
+        "speedCurve": {
+          "$ref": "#/$defs/id"
+        },
+        "lookAt": {
+          "$ref": "#/$defs/id"
+        },
+        "lensFocus": {
+          "$ref": "#/$defs/id"
+        },
+        "framingInvariant": {
+          "$ref": "#/$defs/id"
+        },
+        "subjectMotionRelation": {
+          "$ref": "#/$defs/id"
+        },
+        "occlusionPlan": {
+          "$ref": "#/$defs/id"
+        },
+        "parallaxExpectation": {
+          "$ref": "#/$defs/id"
+        },
+        "controlGeometryId": {
+          "$ref": "#/$defs/id"
+        },
+        "cleanCaptures": {
+          "type": "object",
+          "required": [
+            "startCaptureId",
+            "midCaptureId",
+            "endCaptureId"
+          ],
+          "properties": {
+            "startCaptureId": {
+              "$ref": "#/$defs/id"
+            },
+            "midCaptureId": {
+              "$ref": "#/$defs/id"
+            },
+            "endCaptureId": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        "overlayPolicy": {
+          "enum": [
+            "editor_only",
+            "provider_reference_only"
+          ]
+        },
+        "annotationReference": {
+          "$ref": "#/$defs/CameraAnnotationReference"
+        }
+      }
+    },
+    "CinematicProduction": {
+      "type": "object",
+      "required": [
+        "productionId",
+        "projectType",
+        "productionMode",
+        "storyPacketIds",
+        "shotIds",
+        "generationUnitIds",
+        "assetAuthorityIds",
+        "teamManifestIds",
+        "reviewState",
+        "revision"
+      ],
+      "properties": {
+        "productionId": {
+          "$ref": "#/$defs/id"
+        },
+        "projectType": {
+          "enum": [
+            "feature_film",
+            "short_film",
+            "episodic_series",
+            "short_drama",
+            "commercial",
+            "music_video",
+            "documentary",
+            "animation",
+            "trailer",
+            "social_video"
+          ]
+        },
+        "productionMode": {
+          "enum": [
+            "direct",
+            "production"
+          ]
+        },
+        "storyPacketIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "visualBibleId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shotIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "generationUnitIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "assetAuthorityIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "teamManifestIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "reviewState": {
+          "$ref": "#/$defs/id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "StoryProductionPacket": {
+      "type": "object",
+      "required": [
+        "storyPacketId",
+        "sourceFacts",
+        "lockedStoryFacts",
+        "scenePurpose",
+        "characters",
+        "causalEventChain",
+        "dialogue",
+        "emotionalArc",
+        "entranceState",
+        "exitState",
+        "mustNotAppearYet",
+        "userLockedText",
+        "revision"
+      ],
+      "properties": {
+        "storyPacketId": {
+          "$ref": "#/$defs/id"
+        },
+        "sourceFacts": {
+          "type": "array",
+          "minItems": 1
+        },
+        "lockedStoryFacts": {
+          "type": "array"
+        },
+        "scenePurpose": {
+          "$ref": "#/$defs/id"
+        },
+        "characters": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/record"
+          }
+        },
+        "causalEventChain": {
+          "type": "array",
+          "minItems": 1
+        },
+        "dialogue": {
+          "type": "array"
+        },
+        "emotionalArc": {
+          "$ref": "#/$defs/record"
+        },
+        "entranceState": {
+          "$ref": "#/$defs/record"
+        },
+        "exitState": {
+          "$ref": "#/$defs/record"
+        },
+        "mustNotAppearYet": {
+          "type": "array"
+        },
+        "userLockedText": {
+          "type": "array"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "VisualBible": {
+      "type": "object",
+      "required": [
+        "visualBibleId",
+        "cinematography",
+        "lighting",
+        "color",
+        "productionDesign",
+        "characterLook",
+        "performance",
+        "sound",
+        "vfx",
+        "continuityLocks",
+        "visualMotifs",
+        "colorArc",
+        "spatialDramaturgy",
+        "propSemantics",
+        "costumeNarrative",
+        "materialAging",
+        "culturalResearchRefs",
+        "styleProhibitions",
+        "revision"
+      ],
+      "properties": {
+        "visualBibleId": {
+          "$ref": "#/$defs/id"
+        },
+        "cinematography": {
+          "$ref": "#/$defs/record"
+        },
+        "lighting": {
+          "$ref": "#/$defs/record"
+        },
+        "color": {
+          "$ref": "#/$defs/record"
+        },
+        "productionDesign": {
+          "$ref": "#/$defs/record"
+        },
+        "characterLook": {
+          "$ref": "#/$defs/record"
+        },
+        "performance": {
+          "$ref": "#/$defs/record"
+        },
+        "sound": {
+          "$ref": "#/$defs/record"
+        },
+        "vfx": {
+          "$ref": "#/$defs/record"
+        },
+        "continuityLocks": {
+          "type": "array"
+        },
+        "visualMotifs": {
+          "type": "array"
+        },
+        "colorArc": {
+          "$ref": "#/$defs/record"
+        },
+        "spatialDramaturgy": {
+          "$ref": "#/$defs/record"
+        },
+        "propSemantics": {
+          "$ref": "#/$defs/record"
+        },
+        "costumeNarrative": {
+          "$ref": "#/$defs/record"
+        },
+        "materialAging": {
+          "$ref": "#/$defs/record"
+        },
+        "culturalResearchRefs": {
+          "type": "array"
+        },
+        "styleProhibitions": {
+          "type": "array"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "AssetViewSpec": {
+      "type": "object",
+      "required": [
+        "viewId",
+        "label",
+        "framing",
+        "angle",
+        "description",
+        "background",
+        "controls",
+        "doesNotControl",
+        "required"
+      ],
+      "properties": {
+        "viewId": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "$ref": "#/$defs/id"
+        },
+        "framing": {
+          "$ref": "#/$defs/id"
+        },
+        "angle": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/id"
+        },
+        "background": {
+          "$ref": "#/$defs/id"
+        },
+        "controls": {
+          "type": "array",
+          "minItems": 1
+        },
+        "doesNotControl": {
+          "type": "array"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "AssetAuthorityBase": {
+      "type": "object",
+      "required": [
+        "authorityId",
+        "authorityType",
+        "displayName",
+        "riskLevel",
+        "status",
+        "viewSpecs",
+        "referenceAssetIds",
+        "acceptanceCriteria",
+        "prohibitedChanges",
+        "revision"
+      ],
+      "properties": {
+        "authorityId": {
+          "$ref": "#/$defs/id"
+        },
+        "displayName": {
+          "$ref": "#/$defs/id"
+        },
+        "riskLevel": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "candidate",
+            "accepted",
+            "rejected"
+          ]
+        },
+        "viewSpecs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/AssetViewSpec"
+          }
+        },
+        "referenceAssetIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "acceptanceCriteria": {
+          "type": "array"
+        },
+        "prohibitedChanges": {
+          "type": "array"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "CharacterAuthorityBoardSpec": {
+      "type": "object",
+      "required": [
+        "boardId",
+        "boardType",
+        "label",
+        "purpose",
+        "viewSpecIds",
+        "referencePolicy",
+        "acceptanceCriteria",
+        "prohibitedChanges",
+        "required"
+      ],
+      "properties": {
+        "boardId": {
+          "$ref": "#/$defs/id"
+        },
+        "boardType": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "$ref": "#/$defs/id"
+        },
+        "purpose": {
+          "$ref": "#/$defs/id"
+        },
+        "viewSpecIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "referencePolicy": {
+          "enum": [
+            "none",
+            "accepted_identity",
+            "accepted_identity_and_props",
+            "accepted_authority_versions"
+          ]
+        },
+        "pixelMode": {
+          "enum": [
+            "clean_authority",
+            "annotated_control"
+          ]
+        },
+        "annotationInstructions": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "acceptanceCriteria": {
+          "type": "array"
+        },
+        "prohibitedChanges": {
+          "type": "array"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "requirePromptCoverage": {
+          "type": "boolean"
+        },
+        "promptCoverage": {
+          "$ref": "#/$defs/PromptConstraintCoverage"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "pixelMode": {
+                "const": "annotated_control"
+              }
+            },
+            "required": [
+              "pixelMode"
+            ]
+          },
+          "then": {
+            "required": [
+              "annotationInstructions"
+            ],
+            "properties": {
+              "boardType": {
+                "pattern": "control"
+              },
+              "annotationInstructions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/id"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CharacterVoiceProfile": {
+      "type": "object",
+      "required": [
+        "voiceProfileId",
+        "source",
+        "bindingMode",
+        "language",
+        "description",
+        "status",
+        "acceptanceCriteria",
+        "prohibitedChanges"
+      ],
+      "properties": {
+        "voiceProfileId": {
+          "$ref": "#/$defs/id"
+        },
+        "source": {
+          "enum": [
+            "provider_preset",
+            "uploaded_sample",
+            "designed_prompt"
+          ]
+        },
+        "bindingMode": {
+          "enum": [
+            "provider_voice",
+            "provider_clone",
+            "reference_only"
+          ]
+        },
+        "language": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/id"
+        },
+        "status": {
+          "enum": [
+            "candidate",
+            "accepted",
+            "rejected"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speakerId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sampleMediaId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "acceptanceCriteria": {
+          "type": "array"
+        },
+        "prohibitedChanges": {
+          "type": "array"
+        }
+      }
+    },
+    "CharacterAuthoritySet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/AssetAuthorityBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "identityDescription",
+            "identityLocks",
+            "wardrobeMakeupHair"
+          ],
+          "properties": {
+            "authorityType": {
+              "const": "character"
+            },
+            "subjectMode": {
+              "enum": [
+                "single",
+                "ensemble"
+              ]
+            },
+            "identityDescription": {
+              "$ref": "#/$defs/id"
+            },
+            "identityLocks": {
+              "type": "array"
+            },
+            "wardrobeMakeupHair": {
+              "$ref": "#/$defs/record"
+            },
+            "boardSpecs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CharacterAuthorityBoardSpec"
+              }
+            },
+            "voiceProfile": {
+              "$ref": "#/$defs/CharacterVoiceProfile"
+            }
+          }
+        }
+      ]
+    },
+    "SceneAuthoritySet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/AssetAuthorityBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "spatialLogic",
+            "architecture",
+            "materials",
+            "lightingBaseline",
+            "palette"
+          ],
+          "properties": {
+            "authorityType": {
+              "const": "scene"
+            },
+            "spatialLogic": {
+              "$ref": "#/$defs/record"
+            },
+            "architecture": {
+              "$ref": "#/$defs/id"
+            },
+            "materials": {
+              "$ref": "#/$defs/id"
+            },
+            "lightingBaseline": {
+              "$ref": "#/$defs/record"
+            },
+            "palette": {
+              "$ref": "#/$defs/record"
+            },
+            "boardSpecs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CharacterAuthorityBoardSpec"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "PropAuthoritySpec": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/AssetAuthorityBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "narrativeFunction",
+            "geometry",
+            "material",
+            "scale",
+            "wearState",
+            "interactionRules"
+          ],
+          "properties": {
+            "authorityType": {
+              "const": "prop"
+            },
+            "narrativeFunction": {
+              "$ref": "#/$defs/id"
+            },
+            "geometry": {
+              "$ref": "#/$defs/id"
+            },
+            "material": {
+              "$ref": "#/$defs/id"
+            },
+            "scale": {
+              "$ref": "#/$defs/id"
+            },
+            "wearState": {
+              "$ref": "#/$defs/id"
+            },
+            "interactionRules": {
+              "$ref": "#/$defs/record"
+            }
+          }
+        }
+      ]
+    },
+    "CinematicImageGenerationParameters": {
+      "type": "object",
+      "required": [
+        "provider",
+        "model",
+        "aspectRatio",
+        "resolution",
+        "count",
+        "referenceMediaIds"
+      ],
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/id"
+        },
+        "model": {
+          "$ref": "#/$defs/id"
+        },
+        "aspectRatio": {
+          "$ref": "#/$defs/id"
+        },
+        "resolution": {
+          "$ref": "#/$defs/id"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "referenceMediaIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "quality": {
+          "enum": [
+            "auto",
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "background": {
+          "enum": [
+            "auto",
+            "opaque"
+          ]
+        }
+      }
+    },
+    "StoryboardPromptSpec": {
+      "type": "object",
+      "required": [
+        "storyboardId",
+        "layout",
+        "shotIds",
+        "panelSpecs",
+        "continuityLocks",
+        "styleIsolation",
+        "revision"
+      ],
+      "properties": {
+        "storyboardId": {
+          "$ref": "#/$defs/id"
+        },
+        "layout": {
+          "enum": [
+            "storyboard_sheet",
+            "shot_frame_set",
+            "action_phase_board"
+          ]
+        },
+        "shotIds": {
+          "type": "array",
+          "minItems": 1
+        },
+        "panelSpecs": {
+          "type": "array",
+          "minItems": 1
+        },
+        "continuityLocks": {
+          "type": "array"
+        },
+        "styleIsolation": {
+          "type": "array"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "CinematicContinuityState": {
+      "type": "object",
+      "required": [
+        "stateId",
+        "sceneAuthorityId",
+        "topologyRevision",
+        "axis",
+        "subjects",
+        "environment",
+        "props"
+      ],
+      "properties": {
+        "stateId": {
+          "$ref": "#/$defs/id"
+        },
+        "sceneAuthorityId": {
+          "$ref": "#/$defs/id"
+        },
+        "topologyRevision": {
+          "$ref": "#/$defs/id"
+        },
+        "axis": {
+          "type": "object",
+          "required": [
+            "axisId",
+            "axisLabel",
+            "entranceZoneId",
+            "entranceZoneLabel",
+            "targetZoneId",
+            "targetZoneLabel",
+            "positiveScreenDirection"
+          ],
+          "properties": {
+            "axisId": {
+              "$ref": "#/$defs/id"
+            },
+            "axisLabel": {
+              "$ref": "#/$defs/id"
+            },
+            "entranceZoneId": {
+              "$ref": "#/$defs/id"
+            },
+            "entranceZoneLabel": {
+              "$ref": "#/$defs/id"
+            },
+            "targetZoneId": {
+              "$ref": "#/$defs/id"
+            },
+            "targetZoneLabel": {
+              "$ref": "#/$defs/id"
+            },
+            "positiveScreenDirection": {
+              "enum": [
+                "screen_left",
+                "screen_right",
+                "toward_camera",
+                "away_from_camera",
+                "screen_up",
+                "screen_down",
+                "stationary"
+              ]
+            }
+          }
+        },
+        "subjects": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "entityId",
+              "displayName",
+              "zoneId",
+              "zoneLabel",
+              "bodyOrientation",
+              "gazeTargetId",
+              "motionDirection",
+              "motionMode",
+              "axisIntent",
+              "stateTags",
+              "irreversibleStateTags",
+              "propIds"
+            ],
+            "properties": {
+              "entityId": {
+                "$ref": "#/$defs/id"
+              },
+              "displayName": {
+                "$ref": "#/$defs/id"
+              },
+              "zoneId": {
+                "$ref": "#/$defs/id"
+              },
+              "zoneLabel": {
+                "$ref": "#/$defs/id"
+              },
+              "bodyOrientation": {
+                "enum": [
+                  "screen_left",
+                  "screen_right",
+                  "toward_camera",
+                  "away_from_camera",
+                  "screen_up",
+                  "screen_down"
+                ]
+              },
+              "gazeTargetId": {
+                "$ref": "#/$defs/id"
+              },
+              "motionDirection": {
+                "enum": [
+                  "screen_left",
+                  "screen_right",
+                  "toward_camera",
+                  "away_from_camera",
+                  "screen_up",
+                  "screen_down",
+                  "stationary"
+                ]
+              },
+              "motionMode": {
+                "enum": [
+                  "stationary",
+                  "forward",
+                  "backpedal",
+                  "sidestep"
+                ]
+              },
+              "axisIntent": {
+                "enum": [
+                  "stationary",
+                  "with_axis",
+                  "against_axis",
+                  "cross_axis"
+                ]
+              },
+              "stateTags": {
+                "type": "array"
+              },
+              "irreversibleStateTags": {
+                "type": "array"
+              },
+              "propIds": {
+                "type": "array"
+              }
+            }
+          }
+        },
+        "environment": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContinuityEntity"
+          }
+        },
+        "props": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/ContinuityEntity"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "ownerEntityId"
+                ],
+                "properties": {
+                  "ownerEntityId": {
+                    "$ref": "#/$defs/id"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "ContinuityEntity": {
+      "type": "object",
+      "required": [
+        "entityId",
+        "displayName",
+        "zoneId",
+        "zoneLabel",
+        "presence",
+        "stateTags",
+        "count"
+      ],
+      "properties": {
+        "entityId": {
+          "$ref": "#/$defs/id"
+        },
+        "displayName": {
+          "$ref": "#/$defs/id"
+        },
+        "zoneId": {
+          "$ref": "#/$defs/id"
+        },
+        "zoneLabel": {
+          "$ref": "#/$defs/id"
+        },
+        "presence": {
+          "enum": [
+            "present",
+            "occluded",
+            "destroyed",
+            "exited"
+          ]
+        },
+        "stateTags": {
+          "type": "array"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "CinematicContinuityPlan": {
+      "type": "object",
+      "required": [
+        "entry",
+        "exit",
+        "stateTransitions",
+        "actionOrigins"
+      ],
+      "properties": {
+        "entry": {
+          "$ref": "#/$defs/CinematicContinuityState"
+        },
+        "exit": {
+          "$ref": "#/$defs/CinematicContinuityState"
+        },
+        "stateTransitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "entityId",
+              "fromState",
+              "toState",
+              "cause",
+              "visibleOnScreen"
+            ],
+            "properties": {
+              "entityId": {
+                "$ref": "#/$defs/id"
+              },
+              "fromState": {
+                "$ref": "#/$defs/id"
+              },
+              "toState": {
+                "$ref": "#/$defs/id"
+              },
+              "cause": {
+                "$ref": "#/$defs/id"
+              },
+              "visibleOnScreen": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "actionOrigins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "actionId",
+              "initiatorId",
+              "originContact",
+              "carrierId",
+              "carrierLabel",
+              "trajectoryDirection",
+              "axisRelation",
+              "targetId",
+              "count"
+            ],
+            "properties": {
+              "actionId": {
+                "$ref": "#/$defs/id"
+              },
+              "initiatorId": {
+                "$ref": "#/$defs/id"
+              },
+              "originContact": {
+                "$ref": "#/$defs/id"
+              },
+              "carrierId": {
+                "$ref": "#/$defs/id"
+              },
+              "carrierLabel": {
+                "$ref": "#/$defs/id"
+              },
+              "targetId": {
+                "$ref": "#/$defs/id"
+              },
+              "trajectoryDirection": {
+                "enum": [
+                  "screen_left",
+                  "screen_right",
+                  "toward_camera",
+                  "away_from_camera",
+                  "screen_up",
+                  "screen_down"
+                ]
+              },
+              "axisRelation": {
+                "enum": [
+                  "with_axis",
+                  "against_axis",
+                  "cross_axis"
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "CinematicShotSpec": {
+      "type": "object",
+      "required": [
+        "shotId",
+        "order",
+        "narrativeJob",
+        "storyBeat",
+        "openingState",
+        "trigger",
+        "actionChain",
+        "endingState",
+        "blocking",
+        "cinematography",
+        "lighting",
+        "color",
+        "performance",
+        "sound",
+        "physicsVfx",
+        "editContinuity",
+        "dialogue",
+        "requiredAssetIds",
+        "mustNotAppearYet",
+        "acceptanceCriteria",
+        "revision"
+      ],
+      "properties": {
+        "shotId": {
+          "$ref": "#/$defs/id"
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "narrativeJob": {
+          "$ref": "#/$defs/id"
+        },
+        "storyBeat": {
+          "$ref": "#/$defs/id"
+        },
+        "openingState": {
+          "$ref": "#/$defs/id"
+        },
+        "trigger": {
+          "$ref": "#/$defs/id"
+        },
+        "actionChain": {
+          "type": "array",
+          "minItems": 1
+        },
+        "endingState": {
+          "$ref": "#/$defs/id"
+        },
+        "blocking": {
+          "$ref": "#/$defs/record"
+        },
+        "cinematography": {
+          "$ref": "#/$defs/record"
+        },
+        "lighting": {
+          "$ref": "#/$defs/record"
+        },
+        "color": {
+          "$ref": "#/$defs/record"
+        },
+        "performance": {
+          "$ref": "#/$defs/record"
+        },
+        "sound": {
+          "$ref": "#/$defs/record"
+        },
+        "physicsVfx": {
+          "$ref": "#/$defs/record"
+        },
+        "editContinuity": {
+          "$ref": "#/$defs/record"
+        },
+        "dialogue": {
+          "type": "array"
+        },
+        "requiredAssetIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "mustNotAppearYet": {
+          "type": "array"
+        },
+        "acceptanceCriteria": {
+          "type": "array",
+          "minItems": 1
+        },
+        "continuityPlan": {
+          "$ref": "#/$defs/CinematicContinuityPlan"
+        },
+        "cameraTrajectoryPlan": {
+          "$ref": "#/$defs/CameraTrajectoryPlan"
+        },
+        "orbitCameraTrajectory": {
+          "$ref": "#/$defs/OrbitCameraTrajectory"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "GenerationParameters": {
+      "type": "object",
+      "required": [
+        "provider",
+        "model",
+        "mode",
+        "duration",
+        "aspectRatio",
+        "resolution",
+        "count",
+        "generateAudio",
+        "referenceMediaIds"
+      ],
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/id"
+        },
+        "model": {
+          "$ref": "#/$defs/id"
+        },
+        "mode": {
+          "$ref": "#/$defs/id"
+        },
+        "duration": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "aspectRatio": {
+          "$ref": "#/$defs/id"
+        },
+        "resolution": {
+          "$ref": "#/$defs/id"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "generateAudio": {
+          "type": "boolean"
+        },
+        "firstFrameMediaId": {
+          "type": "string"
+        },
+        "lastFrameMediaId": {
+          "type": "string"
+        },
+        "referenceMediaIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "providerOptions": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/record"
+            }
+          ],
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "approvedPaid",
+                "prompt",
+                "provider",
+                "model",
+                "mode",
+                "duration",
+                "aspectRatio",
+                "resolution",
+                "count",
+                "generateAudio",
+                "firstFrameMediaId",
+                "lastFrameMediaId",
+                "referenceMediaIds"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "ReferenceBinding": {
+      "type": "object",
+      "required": [
+        "assetId",
+        "versionId",
+        "mediaId",
+        "displayName",
+        "providerIndex",
+        "role",
+        "controls",
+        "doesNotControl",
+        "required",
+        "authorityRevision"
+      ],
+      "properties": {
+        "assetId": {
+          "$ref": "#/$defs/id"
+        },
+        "versionId": {
+          "$ref": "#/$defs/id"
+        },
+        "mediaId": {
+          "$ref": "#/$defs/id"
+        },
+        "displayName": {
+          "$ref": "#/$defs/id"
+        },
+        "promptAlias": {
+          "$ref": "#/$defs/id"
+        },
+        "providerIndex": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "role": {
+          "$ref": "#/$defs/id"
+        },
+        "controls": {
+          "type": "array",
+          "minItems": 1
+        },
+        "doesNotControl": {
+          "type": "array"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "authorityRevision": {
+          "$ref": "#/$defs/id"
+        },
+        "sourceEvaluationId": {
+          "$ref": "#/$defs/id"
+        },
+        "sourceMediaId": {
+          "$ref": "#/$defs/id"
+        },
+        "sourceMediaChecksum": {
+          "$ref": "#/$defs/id"
+        },
+        "extractedAtSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "acceptanceProof": {
+          "$ref": "#/$defs/VisualStateAcceptanceProof"
+        },
+        "semanticControl": {
+          "$ref": "#/$defs/ReferenceSemanticControl"
+        },
+        "handoffVerification": {
+          "type": "object",
+          "required": [
+            "spatialContinuityVerified",
+            "subjectStateVerified",
+            "screenDirectionVerified"
+          ],
+          "properties": {
+            "spatialContinuityVerified": {
+              "type": "boolean"
+            },
+            "subjectStateVerified": {
+              "type": "boolean"
+            },
+            "screenDirectionVerified": {
+              "type": "boolean"
+            },
+            "cameraStateVerified": {
+              "type": "boolean"
+            },
+            "lensFocusExposureVerified": {
+              "type": "boolean"
+            },
+            "motionPhaseVerified": {
+              "type": "boolean"
+            },
+            "overlapHandleVerified": {
+              "type": "boolean"
+            },
+            "ambientAudioContinuityVerified": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "CinematicSequenceState": {
+      "type": "object",
+      "required": ["sceneId", "sequenceIndex", "relation", "feltIntent", "intentCarriers", "alreadyHappened", "thisUnitOnly", "reservedForLater", "plannedStartState", "plannedEndState", "extensionDepth", "maxExtensionDepth", "reanchorPolicy"],
+      "properties": {
+        "sceneId": { "$ref": "#/$defs/id" },
+        "sequenceIndex": { "type": "integer", "minimum": 1 },
+        "relation": { "enum": ["sequence_first", "seamless_continuation", "intentional_next_shot", "bridge", "repair_tail", "reanchor_after_drift"] },
+        "parentGenerationUnitId": { "$ref": "#/$defs/id" },
+        "sourceEvaluationId": { "$ref": "#/$defs/id" },
+        "feltIntent": { "$ref": "#/$defs/id" },
+        "intentCarriers": {
+          "type": "object",
+          "required": ["camera", "lighting", "performance", "sound"],
+          "properties": {
+            "camera": { "$ref": "#/$defs/id" },
+            "lighting": { "$ref": "#/$defs/id" },
+            "performance": { "$ref": "#/$defs/id" },
+            "sound": { "$ref": "#/$defs/id" }
+          }
+        },
+        "alreadyHappened": { "$ref": "#/$defs/stringArray" },
+        "thisUnitOnly": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "reservedForLater": { "$ref": "#/$defs/stringArray" },
+        "plannedStartState": { "$ref": "#/$defs/record" },
+        "plannedEndState": { "$ref": "#/$defs/record" },
+        "extensionDepth": { "type": "integer", "minimum": 0 },
+        "maxExtensionDepth": { "type": "integer", "minimum": 1 },
+        "reanchorPolicy": {
+          "type": "object",
+          "required": ["scheduled", "authorityIds", "reason"],
+          "properties": {
+            "scheduled": { "type": "boolean" },
+            "authorityIds": { "$ref": "#/$defs/stringArray" },
+            "reason": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "CinematicTakeObservation": {
+      "type": "object",
+      "required": ["observedStartState", "observedEndState", "completedBeats", "incompleteBeats", "unexpectedCompletedBeats", "continuityBreaks", "acceptedDeviations", "confidence", "uncertainties"],
+      "properties": {
+        "observedStartState": { "$ref": "#/$defs/record" },
+        "observedEndState": { "$ref": "#/$defs/record" },
+        "completedBeats": { "$ref": "#/$defs/stringArray" },
+        "incompleteBeats": { "$ref": "#/$defs/stringArray" },
+        "unexpectedCompletedBeats": { "$ref": "#/$defs/stringArray" },
+        "continuityBreaks": { "$ref": "#/$defs/stringArray" },
+        "acceptedDeviations": { "$ref": "#/$defs/stringArray" },
+        "confidence": { "enum": ["low", "medium", "high"] },
+        "uncertainties": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "CinematicCanonReconciliation": {
+      "type": "object",
+      "required": ["status", "acceptedObservedFacts", "rejectedObservedFacts", "promotedCompletedBeats", "carryForwardState", "nextUnitLocks", "rationale"],
+      "properties": {
+        "status": { "enum": ["accepted", "pending", "rejected"] },
+        "acceptedObservedFacts": { "$ref": "#/$defs/stringArray" },
+        "rejectedObservedFacts": { "$ref": "#/$defs/stringArray" },
+        "promotedCompletedBeats": { "$ref": "#/$defs/stringArray" },
+        "carryForwardState": { "$ref": "#/$defs/record" },
+        "nextUnitLocks": { "$ref": "#/$defs/stringArray" },
+        "rationale": { "$ref": "#/$defs/id" }
+      }
+    },
+    "CinematicRetakeDisposition": {
+      "type": "object",
+      "required": ["type", "primaryFailureLayer", "changedVariables", "reason", "nextAction"],
+      "properties": {
+        "type": { "enum": ["KEEP", "FIX_IN_POST", "EDIT_SOURCE", "REROLL", "REWRITE", "REANCHOR"] },
+        "primaryFailureLayer": { "$ref": "#/$defs/id" },
+        "changedVariables": { "type": "array", "maxItems": 1, "items": { "type": "string" } },
+        "reason": { "$ref": "#/$defs/id" },
+        "nextAction": { "$ref": "#/$defs/id" }
+      }
+    },
+    "SequenceWorkspaceBinding": {
+      "type": "object",
+      "required": ["sequencePrevisId", "sequencePrevisRevision", "visualContextBundleId"],
+      "properties": {
+        "sequencePrevisId": { "$ref": "#/$defs/id" },
+        "sequencePrevisRevision": { "type": "integer", "minimum": 1 },
+        "visualContextBundleId": { "$ref": "#/$defs/id" },
+        "reviewId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "SequencePrevisShot": {
+      "type": "object",
+      "required": ["previsShotId", "shotId", "shotRevision", "order", "startSeconds", "endSeconds", "narrativeJob", "entryPhase", "exitPhase", "cameraState", "performanceState", "spatialState", "audioCue"],
+      "properties": {
+        "previsShotId": { "$ref": "#/$defs/id" }, "shotId": { "$ref": "#/$defs/id" }, "shotRevision": { "type": "integer", "minimum": 1 }, "order": { "type": "integer", "minimum": 1 },
+        "startSeconds": { "type": "number", "minimum": 0 }, "endSeconds": { "type": "number", "exclusiveMinimum": 0 }, "narrativeJob": { "$ref": "#/$defs/id" },
+        "entryPhase": { "$ref": "#/$defs/id" }, "exitPhase": { "$ref": "#/$defs/id" }, "frameMediaId": { "$ref": "#/$defs/id" }, "frameSourceRole": { "$ref": "#/$defs/id" },
+        "cameraState": { "$ref": "#/$defs/record" }, "performanceState": { "$ref": "#/$defs/record" }, "spatialState": { "$ref": "#/$defs/record" }, "audioCue": { "$ref": "#/$defs/record" }
+      }
+    },
+    "CutDecision": {
+      "type": "object",
+      "required": ["cutDecisionId", "fromShotId", "toShotId", "atSeconds", "transitionType", "motivation", "outgoingPhase", "incomingPhase", "axisRule", "gazeRelation", "motionVector", "audioBridge"],
+      "properties": {
+        "cutDecisionId": { "$ref": "#/$defs/id" }, "fromShotId": { "$ref": "#/$defs/id" }, "toShotId": { "$ref": "#/$defs/id" }, "atSeconds": { "type": "number", "minimum": 0 },
+        "transitionType": { "enum": ["cut", "match_cut", "audio_bridge", "occlusion_cut", "whip_pan", "continuous_no_cut"] }, "motivation": { "$ref": "#/$defs/id" },
+        "outgoingPhase": { "$ref": "#/$defs/id" }, "incomingPhase": { "$ref": "#/$defs/id" }, "axisRule": { "$ref": "#/$defs/id" }, "gazeRelation": { "$ref": "#/$defs/id" },
+        "motionVector": { "$ref": "#/$defs/id" }, "audioBridge": { "$ref": "#/$defs/id" }, "overlapSeconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "SequencePrevisDocument": {
+      "type": "object",
+      "required": ["sequencePrevisId", "productionId", "title", "status", "storyPacketId", "storyPacketRevision", "durationSeconds", "frameRate", "shots", "cutDecisions", "acceptedAuthorityIds", "storyboardIds", "directorCaptureIds", "rejectedExampleEvaluationIds", "revision"],
+      "properties": {
+        "sequencePrevisId": { "$ref": "#/$defs/id" }, "productionId": { "$ref": "#/$defs/id" }, "title": { "$ref": "#/$defs/id" }, "status": { "enum": ["draft", "candidate", "accepted", "rejected"] },
+        "storyPacketId": { "$ref": "#/$defs/id" }, "storyPacketRevision": { "type": "integer", "minimum": 1 }, "durationSeconds": { "type": "number", "exclusiveMinimum": 0 }, "frameRate": { "type": "number", "exclusiveMinimum": 0 },
+        "shots": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/SequencePrevisShot" } }, "cutDecisions": { "type": "array", "items": { "$ref": "#/$defs/CutDecision" } },
+        "acceptedAuthorityIds": { "$ref": "#/$defs/stringArray" }, "storyboardIds": { "$ref": "#/$defs/stringArray" }, "directorCaptureIds": { "$ref": "#/$defs/stringArray" }, "rejectedExampleEvaluationIds": { "$ref": "#/$defs/stringArray" }, "revision": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "VisualContextBundle": {
+      "type": "object",
+      "required": ["visualContextBundleId", "productionId", "sequencePrevisId", "sequencePrevisRevision", "shotId", "shotRevision", "contextWindow", "sceneLocator", "authorityBindings", "phaseStrip", "rejectedExamples", "referenceRoles", "promptFacts", "createdAt"],
+      "properties": {
+        "visualContextBundleId": { "$ref": "#/$defs/id" }, "productionId": { "$ref": "#/$defs/id" }, "sequencePrevisId": { "$ref": "#/$defs/id" }, "sequencePrevisRevision": { "type": "integer", "minimum": 1 },
+        "shotId": { "$ref": "#/$defs/id" }, "shotRevision": { "type": "integer", "minimum": 1 }, "contextWindow": { "$ref": "#/$defs/record" }, "sceneLocator": { "$ref": "#/$defs/record" },
+        "authorityBindings": { "type": "array" }, "phaseStrip": { "type": "array" }, "rejectedExamples": { "type": "array" }, "referenceRoles": { "type": "array" }, "promptFacts": { "$ref": "#/$defs/record" }, "createdAt": { "$ref": "#/$defs/id" }
+      }
+    },
+    "VisualTakeMemory": {
+      "type": "object",
+      "required": ["visualTakeMemoryId", "productionId", "generationUnitId", "runId", "mediaId", "checksum", "durationSeconds", "phaseSamples", "observations", "plannedVsActual", "createdAt"],
+      "properties": {
+        "visualTakeMemoryId": { "$ref": "#/$defs/id" }, "productionId": { "$ref": "#/$defs/id" }, "generationUnitId": { "$ref": "#/$defs/id" }, "runId": { "$ref": "#/$defs/id" }, "mediaId": { "$ref": "#/$defs/id" }, "checksum": { "$ref": "#/$defs/id" },
+        "durationSeconds": { "type": "number", "exclusiveMinimum": 0 }, "phaseSamples": { "type": "array", "minItems": 2 }, "observations": { "$ref": "#/$defs/record" }, "plannedVsActual": { "type": "array" }, "createdAt": { "$ref": "#/$defs/id" }
+      }
+    },
+    "CreativeDecisionTrace": {
+      "type": "object",
+      "required": ["creativeDecisionTraceId", "productionId", "targetType", "targetId", "action", "observedInputs", "decision", "reasons", "alternatives", "createdAt"],
+      "properties": {
+        "creativeDecisionTraceId": { "$ref": "#/$defs/id" }, "productionId": { "$ref": "#/$defs/id" }, "targetType": { "$ref": "#/$defs/id" }, "targetId": { "$ref": "#/$defs/id" }, "action": { "$ref": "#/$defs/id" },
+        "observedInputs": { "type": "array" }, "decision": { "$ref": "#/$defs/id" }, "reasons": { "type": "array" }, "alternatives": { "type": "array" }, "changedVariable": { "type": ["object", "null"] }, "outcome": { "type": ["object", "null"] }, "createdAt": { "$ref": "#/$defs/id" }
+      }
+    },
+    "GenerationUnit": {
+      "type": "object",
+      "required": [
+        "generationUnitId",
+        "strategy",
+        "shotLinks",
+        "visualAnchorPolicy",
+        "requiredCapabilities",
+        "generationParameters",
+        "revision"
+      ],
+      "properties": {
+        "generationUnitId": {
+          "$ref": "#/$defs/id"
+        },
+        "lifecycle": {
+          "enum": [
+            "active",
+            "blocked_by_authority",
+            "blocked_by_rejected_continuity_source",
+            "superseded"
+          ]
+        },
+        "supersededReason": {
+          "$ref": "#/$defs/id"
+        },
+        "supersededByPlan": {
+          "$ref": "#/$defs/id"
+        },
+        "strategy": {
+          "enum": [
+            "single_shot",
+            "designed_multi_shot",
+            "continuous_segment",
+            "storyboard_action_sequence"
+          ]
+        },
+        "shotLinks": {
+          "type": "array",
+          "minItems": 1
+        },
+        "visualAnchorPolicy": {
+          "enum": [
+            "NONE",
+            "FIRST_FRAME",
+            "FIRST_LAST_FRAME",
+            "STORYBOARD_SHEET",
+            "SHOT_FRAME_SET",
+            "ACTION_PHASE_BOARD",
+            "PREVIOUS_ACCEPTED_TAIL",
+            "DUPLICATE_HANDOFF"
+          ]
+        },
+        "requiredCapabilities": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "generationParameters": {
+          "$ref": "#/$defs/GenerationParameters"
+        },
+        "controlIntent": {
+          "$ref": "#/$defs/GenerationControlIntent"
+        },
+        "promptCoverage": {
+          "$ref": "#/$defs/PromptConstraintCoverage"
+        },
+        "continuationHandoff": {
+          "$ref": "#/$defs/ContinuationHandoff"
+        },
+        "continuitySource": {
+          "type": "object",
+          "required": [
+            "boundaryType"
+          ],
+          "properties": {
+            "boundaryType": {
+              "enum": [
+                "initial",
+                "continuous",
+                "hard_cut"
+              ]
+            },
+            "sourceEvaluationId": {
+              "$ref": "#/$defs/id"
+            },
+            "screenDirectionChangeReason": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        "sequenceState": {
+          "$ref": "#/$defs/CinematicSequenceState"
+        },
+        "sequenceWorkspaceBinding": {
+          "$ref": "#/$defs/SequenceWorkspaceBinding"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "ProfessionalContribution": {
+      "type": "object",
+      "required": [
+        "roleId",
+        "expertPackId",
+        "targetType",
+        "targetId",
+        "diagnosis",
+        "selectedTradeoff",
+        "structuredFields",
+        "hardConstraints",
+        "vetoFindings",
+        "knowledgeRefs",
+        "acceptanceCriteria",
+        "revision"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "finalPrompt"
+            ]
+          },
+          {
+            "required": [
+              "compiledContentPrompt"
+            ]
+          }
+        ]
+      }
+    },
+    "CinematicPromptEnvelopeV2": {
+      "type": "object",
+      "required": [
+        "protocolId",
+        "protocolVersion",
+        "generationUnitId",
+        "sourceVersions",
+        "compiledContentPrompt",
+        "highRiskNegatives",
+        "referenceBindings",
+        "generationParameters",
+        "capabilitySnapshot",
+        "capabilityDegradation",
+        "generationControl",
+        "compilerVersion",
+        "payloadHash",
+        "lint",
+        "preflight",
+        "manualOverride",
+        "requiresPreflight"
+      ],
+      "properties": {
+        "protocolId": {
+          "pattern": "^ununu\\.video\\..+\\.v2$"
+        },
+        "protocolVersion": {
+          "const": "2.0.0"
+        },
+        "generationUnitId": {
+          "$ref": "#/$defs/id"
+        },
+        "compiledContentPrompt": {
+          "$ref": "#/$defs/id"
+        },
+        "referenceBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReferenceBinding"
+          }
+        },
+        "generationParameters": {
+          "$ref": "#/$defs/GenerationParameters"
+        },
+        "generationControl": {
+          "$ref": "#/$defs/record"
+        },
+        "cameraTrajectory": {
+          "$ref": "#/$defs/record"
+        },
+        "promptCoverage": {
+          "$ref": "#/$defs/record"
+        },
+        "payloadHash": {
+          "$ref": "#/$defs/id"
+        },
+        "manualOverride": {
+          "type": "boolean"
+        },
+        "requiresPreflight": {
+          "type": "boolean"
+        }
+      }
+    },
+    "CinematicImagePromptEnvelopeV2": {
+      "type": "object",
+      "required": [
+        "protocolId",
+        "protocolVersion",
+        "targetId",
+        "sourceVersions",
+        "compiledContentPrompt",
+        "negativeConstraints",
+        "referenceBindings",
+        "generationParameters",
+        "compilerVersion",
+        "payloadHash",
+        "lint",
+        "manualOverride",
+        "requiresPreflight"
+      ],
+      "properties": {
+        "protocolId": {
+          "enum": [
+            "ununu.character.v2",
+            "ununu.image.v2",
+            "ununu.storyboard.v2",
+            "ununu.storyboard.keyframe.v1"
+          ]
+        },
+        "protocolVersion": {
+          "const": "2.0.0"
+        },
+        "targetId": {
+          "$ref": "#/$defs/id"
+        },
+        "sourceVersions": {
+          "$ref": "#/$defs/record"
+        },
+        "compiledContentPrompt": {
+          "$ref": "#/$defs/id"
+        },
+        "negativeConstraints": {
+          "type": "array"
+        },
+        "referenceBindings": {
+          "type": "array"
+        },
+        "generationParameters": {
+          "$ref": "#/$defs/CinematicImageGenerationParameters"
+        },
+        "compilerVersion": {
+          "$ref": "#/$defs/id"
+        },
+        "payloadHash": {
+          "$ref": "#/$defs/id"
+        },
+        "lint": {
+          "$ref": "#/$defs/record"
+        },
+        "promptCoverage": {
+          "$ref": "#/$defs/record"
+        },
+        "manualOverride": {
+          "type": "boolean"
+        },
+        "requiresPreflight": {
+          "type": "boolean"
+        }
+      }
+    },
+    "CinematicEvaluationRecord": {
+      "type": "object",
+      "required": [
+        "evaluationId",
+        "runId",
+        "mediaId",
+        "checksum",
+        "duration",
+        "frameRate",
+        "hasAudio",
+        "planActualDiff",
+        "scores",
+        "internalCuts",
+        "usableRanges",
+        "actualExitState",
+        "authoritativeRanges",
+        "decision",
+        "failureResponsibilityLayer",
+        "repairSuggestions",
+        "knowledgeFeedbackCandidates",
+        "revision"
+      ],
+      "properties": {
+        "evaluationId": {
+          "$ref": "#/$defs/id"
+        },
+        "runId": {
+          "$ref": "#/$defs/id"
+        },
+        "mediaId": {
+          "$ref": "#/$defs/id"
+        },
+        "generationUnitId": {
+          "$ref": "#/$defs/id"
+        },
+        "decision": {
+          "enum": [
+            "ACCEPT",
+            "PARTIAL",
+            "REJECT"
+          ]
+        },
+        "visibleEntityChecks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record"
+          }
+        },
+        "vetoFindings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "actualContinuityState": {
+          "$ref": "#/$defs/CinematicContinuityState"
+        },
+        "takeObservation": {
+          "$ref": "#/$defs/CinematicTakeObservation"
+        },
+        "canonReconciliation": {
+          "$ref": "#/$defs/CinematicCanonReconciliation"
+        },
+        "retakeDisposition": {
+          "$ref": "#/$defs/CinematicRetakeDisposition"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

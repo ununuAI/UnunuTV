@@ -1,0 +1,4 @@
+interface:
+  display_name: "UnunuTV 影视制作执行器"
+  short_description: "通过本地 API 与 CLI 执行影视生产合同、素材、Provider 和验收持久化"
+  default_prompt: "Use $ununu-unutv-operator to inspect this UnunuTV project and execute the next verified cinematic-production state change."

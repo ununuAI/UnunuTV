@@ -1,0 +1,15 @@
+{
+  "name": "@ununu/unutv-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/server.mjs",
+  "scripts": {
+    "dev": "node --watch src/start.mjs",
+    "start": "node src/start.mjs"
+  },
+  "dependencies": {
+    "@ununu/unutv-contracts": "0.1.0",
+    "@ununu/unutv-local-runtime": "0.1.0"
+  }
+}

@@ -1,0 +1,181 @@
+[
+  {
+    "contributionId": "professional-contribution-bloodmoon-p01a-r53-director-pass-v1",
+    "roleId": "director-story",
+    "expertPackId": "ep-cec1c2f441cdb47affca",
+    "targetType": "GenerationUnit",
+    "targetId": "generation-unit-bloodmoon-keyframe-r01",
+    "diagnosis": "Story r7、Shot r50 与 Unit r53 的主动清剿动机、怪物规则揭示、背面可读表演、0.9秒静止证明和斗篷H1因果一致；没有撤退、找出口、提前攻击或同时伪证头颅前后面的指令。",
+    "selectedTradeoff": "保持入口背视单镜与空间建立；画面只证明当前机位真实可见的后脑唯一脸、单头闭合皮肤、身体朝桌与桌席接触，正前方无脸作为画外Authority不变量；3.3秒后只由白璃右肩背驱动斗篷交接。",
+    "structuredFields": {
+      "decision": "PASS",
+      "targetRevision": 53,
+      "sourceGenerationUnitRevision": 53,
+      "sourceStoryPacketRevision": 7,
+      "sourceShotRevisions": {
+        "shot-script-script-row-13d94706-568b-41fa-81ed-74695954da48": 50
+      },
+      "compilationId": "prompt-compilation-2d110717-0ad0-423b-8d43-03a7af0baf6e",
+      "directorStageRevision": 181,
+      "teamManifestId": "team-a61f0664e7b9e9d0685f",
+      "teamManifestApprovalState": "candidate_unapproved"
+    },
+    "hardConstraints": [
+      "三主角为逐一消灭怪物主动进入，不撤退、不找出口、不提前攻击",
+      "唯一完整人脸浅嵌后脑枕骨，头部正前方为平滑无脸皮肤，禁止骷髅、双面脸和第二头",
+      "背视镜头不得声称同时看见画外头部正前方",
+      "2.4至3.3秒静止证明不得被遮挡或偷切",
+      "本意见不授权Provider"
+    ],
+    "vetoFindings": [],
+    "knowledgeRefs": [
+      "cap-directing-visual-grammar",
+      "cap-blocking-staging",
+      "cap-information-release",
+      "cap-scene-objective",
+      "cap-story-causality",
+      "kn-bb31fe64727be0387728",
+      "kn-794e9c0d3bc1171777aa",
+      "kn-82a726e86751311f76e0"
+    ],
+    "acceptanceCriteria": [
+      "Story r7、Shot r50、Unit r53与compilation版本完全一致",
+      "0/1/2.4/3.3/3.7/4秒动作因果与焦点目标连续",
+      "白璃脚髋胸持续朝大厅+Z且斗篷形成真实全画幅H1"
+    ],
+    "revision": 1
+  },
+  {
+    "contributionId": "professional-contribution-bloodmoon-p01a-r53-cinematography-pass-v1",
+    "roleId": "cinematography",
+    "expertPackId": "ep-7cbd1d5b66dcb0f4a84f",
+    "targetType": "GenerationUnit",
+    "targetId": "generation-unit-bloodmoon-keyframe-r01",
+    "diagnosis": "Shot r50 与 Unit r53 的机位、朝向、FOV和焦距面已逐边界同步；2.4至4秒摄影机与三主角硬停，3.3秒后只有焦点和白璃右肩背/斗篷运动，消除了旧版末段冲刺与背景锁焦错误。",
+    "selectedTradeoff": "保留入口轴65度视场和Director实测中点；焦距面按9.92、9.33、8.56、8.56、3.00、0.25米先证明后脑唯一脸，再回拉到右肩背与贴镜斗篷H1。",
+    "structuredFields": {
+      "decision": "PASS",
+      "targetRevision": 53,
+      "sourceGenerationUnitRevision": 53,
+      "sourceStoryPacketRevision": 7,
+      "sourceShotRevisions": {
+        "shot-script-script-row-13d94706-568b-41fa-81ed-74695954da48": 50
+      },
+      "compilationId": "prompt-compilation-2d110717-0ad0-423b-8d43-03a7af0baf6e",
+      "directorStageRevision": 181,
+      "teamManifestId": "team-a61f0664e7b9e9d0685f",
+      "teamManifestApprovalState": "candidate_unapproved"
+    },
+    "hardConstraints": [
+      "Shot focusDistancePlan 与 Unit camera track 每个共享时间边界逐值一致",
+      "2.4至4秒position yaw pitch roll FOV保持不变",
+      "3.3秒后不得末段冲刺、环绕、越轴或内部切镜",
+      "最终0.25米焦距面必须锁贴镜斗篷H1",
+      "本意见不授权Provider"
+    ],
+    "vetoFindings": [],
+    "knowledgeRefs": [
+      "cap-camera-emotion-first",
+      "cap-cinematography",
+      "cap-plot-driven-camera-dispatch",
+      "cap-universal-camera-motion-rule",
+      "kn-cde18f1eade2b3b6446a",
+      "kn-aed4742d1bff0dfd963d",
+      "kn-35cf3071145595fe0225"
+    ],
+    "acceptanceCriteria": [
+      "焦距面六边界为9.92/9.33/8.56/8.56/3.00/0.25米",
+      "Director mid/end机位与三主角站位相同",
+      "曝光、色温和斗篷H1光学交接连续"
+    ],
+    "revision": 1
+  },
+  {
+    "contributionId": "professional-contribution-bloodmoon-p01a-r53-continuity-pass-v1",
+    "roleId": "continuity-qa",
+    "expertPackId": "ep-af5aff6455118c1458bd",
+    "targetType": "GenerationUnit",
+    "targetId": "generation-unit-bloodmoon-keyframe-r01",
+    "diagnosis": "Shot r50、Unit r53与六张Provider语义参考维持三主角、八尸傀、四桌八座、入口到后出口轴、身体朝桌和后脑朝入口的连续状态；editor_only Director图未进入Provider，P01B仍被真实H1与P01A视频ACCEPT门禁阻断。",
+    "selectedTradeoff": "整镜语义构图仅作为人物、场景与空间状态载体；分秒动作、焦点、物理接触与H1由Unit动态合同负责；旧Shot r46像素证明不得自动授权r50。",
+    "structuredFields": {
+      "decision": "PASS",
+      "targetRevision": 53,
+      "sourceGenerationUnitRevision": 53,
+      "sourceStoryPacketRevision": 7,
+      "sourceShotRevisions": {
+        "shot-script-script-row-13d94706-568b-41fa-81ed-74695954da48": 50
+      },
+      "compilationId": "prompt-compilation-2d110717-0ad0-423b-8d43-03a7af0baf6e",
+      "directorStageRevision": 181,
+      "teamManifestId": "team-a61f0664e7b9e9d0685f",
+      "teamManifestApprovalState": "candidate_unapproved",
+      "p01bState": "blocked_by_rejected_continuity_source"
+    },
+    "hardConstraints": [
+      "三主角、八尸傀、四桌八座及其座位与接触逐帧守恒",
+      "尸傀身体与头部正前方朝桌，后脑唯一脸朝入口主角",
+      "editor_only Director媒体不得进入Provider references",
+      "旧Shot r46语义构图验收不得授权Shot r50",
+      "P01B在P01A真实视频与H1最新ACCEPT前保持阻断"
+    ],
+    "vetoFindings": [],
+    "knowledgeRefs": [
+      "cap-reference-authority-binding",
+      "cap-performance-physical-continuity",
+      "cap-edit-continuity",
+      "cap-audio-continuity",
+      "kn-e45c45fcc49145a2761a",
+      "kn-fd102a3d7493db38bcc2",
+      "kn-7d3a2702dc84f95340fc"
+    ],
+    "acceptanceCriteria": [
+      "Provider六张语义参考均有checksum与明确职责且无editor_only图",
+      "Shot和Unit的实体、空间、屏幕轴、焦距面六边界一致",
+      "P01B不从静态参考或旧ACCEPT伪造连续性来源"
+    ],
+    "revision": 1
+  },
+  {
+    "contributionId": "professional-contribution-bloodmoon-p01a-r53-screenwriter-pass-v1",
+    "roleId": "screenwriter",
+    "expertPackId": "ep-387eec1a1664dbab19d0",
+    "targetType": "GenerationUnit",
+    "targetId": "generation-unit-bloodmoon-keyframe-r01",
+    "diagnosis": "P01A明确是三位主角主动进入逐一消灭怪物，并在尚未确认酒客身份时完成目标识别、怪物规则揭示和战斗前斗篷交接；不存在撤退、找出口、突围、杀出去、杀穿或提前攻击。",
+    "selectedTradeoff": "保留4秒无对白连续镜头，以战术三角、步幅收短、肩颈/呼吸/重心、靠刀/握枪和右肩背驱动斗篷表达判断与准备，不使用背面不可见眼线或正面口型。",
+    "structuredFields": {
+      "decision": "PASS",
+      "targetRevision": 53,
+      "sourceGenerationUnitRevision": 53,
+      "sourceStoryPacketRevision": 7,
+      "sourceShotRevisions": {
+        "shot-script-script-row-13d94706-568b-41fa-81ed-74695954da48": 50
+      },
+      "compilationId": "prompt-compilation-2d110717-0ad0-423b-8d43-03a7af0baf6e",
+      "teamManifestId": "team-a61f0664e7b9e9d0685f",
+      "teamManifestApprovalState": "candidate_unapproved"
+    },
+    "hardConstraints": [
+      "禁止撤退、逃生、突围、找出口、杀出去或杀穿",
+      "P01A遮幅前禁止主角攻击和尸傀起身",
+      "不得用不可见眼线、正面表情或口型表达背视镜头的战术确认",
+      "不得以黑帧、烟雾、闪光或内部切镜伪造H1",
+      "没有真实H1最新ACCEPT时P01B必须保持阻断"
+    ],
+    "vetoFindings": [],
+    "knowledgeRefs": [
+      "cap-scene-objective",
+      "cap-story-causality",
+      "kn-82a726e86751311f76e0",
+      "kn-6b70fc6e34b013f14540",
+      "kn-7180b75d58ef259b8328"
+    ],
+    "acceptanceCriteria": [
+      "Shot、Unit和编译文本明确主动清剿且尚在识别目标",
+      "P01A只完成识别、证明和交接",
+      "P01B仅在真实P01A视频与H1最新ACCEPT后开始"
+    ],
+    "revision": 1
+  }
+]
