@@ -13,11 +13,9 @@ import {
   Maximize2,
   Moon,
   PanelBottom,
-  PanelsTopLeft,
   Plus,
   Scan,
   Settings,
-  ListTree,
   Sun,
   Workflow
 } from "lucide-react";
@@ -31,9 +29,7 @@ export function MomoCanvasChrome({
   canMutate,
   light,
   onAdd,
-  onAutomationFlow,
   onAssets,
-  onCinematicControl,
   onFit,
   onFullscreen,
   onHistory,
@@ -47,8 +43,6 @@ export function MomoCanvasChrome({
   onToggleConnections,
   onWorkflow,
   onZoom,
-  cinematicControlOpen,
-  automationFlowOpen,
   playerOpen,
   showMiniMap,
   showConnections,
@@ -58,8 +52,6 @@ export function MomoCanvasChrome({
   return <div className="momo-canvas-chrome" aria-label="Ununu 画布控制底座">
     <nav className="momo-side-toolbar" aria-label="画布主工具栏">
       <ChromeButton className="momo-side-add" disabled={!canMutate} icon={Plus} label="添加节点" onClick={onAdd} />
-      <ChromeButton active={cinematicControlOpen} icon={PanelsTopLeft} label="影视总控" onClick={onCinematicControl} />
-      <ChromeButton active={automationFlowOpen} icon={ListTree} label="全自动生产流" onClick={onAutomationFlow} />
       <ChromeButton active={activePanel === "assets"} icon={Folder} label="资产库" onClick={onAssets} />
       <ChromeButton active={activePanel === "assetManager"} icon={Workflow} label="工作流与节点" onClick={onWorkflow} />
       <ChromeButton active={activePanel === "history"} icon={History} label="素材历史" onClick={onHistory} />

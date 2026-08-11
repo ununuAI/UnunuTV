@@ -17,17 +17,12 @@ import { api } from "./api.js";
 import { ProjectHome } from "./HomePanels.jsx";
 import { MomoCanvasWorkbench } from "./MomoCanvasWorkbench.jsx";
 import ProviderSettings from "./ProviderSettings.jsx";
-import { AutomationControlBar } from "./AutomationControlBar.jsx";
-import { AutomationFlowWindow } from "./AutomationFlowWindow.jsx";
 import { CanvasMaterialHistoryPanel, CanvasWorkflowPanel } from "./CanvasShellPanels.jsx";
 import { CanvasPlayerWorkspace } from "./CanvasPlayerWorkspace.jsx";
 import { CanvasTimelineDock } from "./CanvasTimelineDock.jsx";
-import { CinematicControlWindow } from "./CinematicControlWindow.jsx";
 import { MomoCanvasChrome } from "./MomoCanvasChrome.jsx";
-import { cinematicNodeViewTransition } from "./cinematic-node-view-policy.js";
 import { CANVAS_ASSET_TRANSFER_TYPE, canvasAssetTransfer, canvasNodeInputFromAssetTransfer, serializeCanvasAssetTransfer } from "./canvas-asset-drag-policy.js";
 import { nextSideToolbarSurface } from "./side-toolbar-surface-policy.js";
-import { useProjectControlSession } from "./use-project-control-session.js";
 
 const ASSET_ROLES = [
   ["all", "全部"], ["actor", "演员"], ["character", "角色"], ["crowd_double", "群众 / 替身"],
@@ -159,16 +154,10 @@ export default function App({ initialProjectId = null }) {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [playerOpen, setPlayerOpen] = useState(false);
   const [playerPreview, setPlayerPreview] = useState(null);
-  const [cinematicControlOpen, setCinematicControlOpen] = useState(false);
-  const [automationFlowOpen, setAutomationFlowOpen] = useState(false);
-  const [cinematicControlNodeId, setCinematicControlNodeId] = useState(null);
   const [timelineHeight, setTimelineHeight] = useState(280);
   const messageTimerRef = useRef(null);
   const selected = canvas?.nodes.find((node) => node.id === selectedId);
-  const cinematicControlNode = canvas?.nodes.find((node) => node.id === cinematicControlNodeId)
-    || canvas?.nodes.find((node) => node.kind === "cinematic")
-    || null;
-  const activeSideToolbarSurface = cinematicControlOpen ? "cinematic" : automationFlowOpen ? "automation" : tab;
+  const activeSideToolbarSurface = tab;
 
   useEffect(() => {
     if (selected && ["video", "videoShot", "compose", "video-clip"].includes(selected.kind)) setPlayerPreview(null);
@@ -180,7 +169,6 @@ export default function App({ initialProjectId = null }) {
     if (messageTimerRef.current) window.clearTimeout(messageTimerRef.current);
     messageTimerRef.current = window.setTimeout(() => setMessage(null), isError ? 12000 : 4000);
   }, []);
-  const projectControl = useProjectControlSession(project?.id, notify);
 
   useEffect(() => {
     const openTimeline = () => setTimelineOpen(true);
@@ -268,7 +256,6 @@ export default function App({ initialProjectId = null }) {
   }
 
   function openProjectRename() {
-    if (projectControl.readOnly) return;
     setProjectTitleDraft(project.title);
     setRenameOpen(true);
   }
@@ -276,7 +263,7 @@ export default function App({ initialProjectId = null }) {
   async function renameProject(event) {
     event.preventDefault();
     const title = projectTitleDraft.trim();
-    if (!title || renamingProject || projectControl.readOnly) return;
+    if (!title || renamingProject) return;
     setRenamingProject(true);
     try {
       const updated = await api.updateProject(project.id, { title });
@@ -288,45 +275,8 @@ export default function App({ initialProjectId = null }) {
     finally { setRenamingProject(false); }
   }
 
-  async function openCinematicControl() {
-    if (activeSideToolbarSurface === "cinematic") {
-      setSideToolbarSurface(null);
-      return;
-    }
-    setSideToolbarSurface(null);
-    try {
-      let node = canvas.nodes.find((item) => item.kind === "cinematic") || null;
-      if (!node) {
-        if (projectControl.readOnly) {
-          notify("当前项目还没有影视总控节点；结束全自动模式后可建立。", false);
-          return;
-        }
-        node = await api.createNode(project.id, canvas.id, {
-          kind: "cinematic",
-          title: "影视总控",
-          x: 120,
-          y: 120,
-          width: 572,
-          height: 360,
-          payload: { cinematicExpanded: false, projectType: "short_film", sourceNodeId: null }
-        });
-      } else if (node.payload?.cinematicExpanded && !projectControl.readOnly) {
-        await api.updateNode(project.id, node.id, cinematicNodeViewTransition(node, false));
-      }
-      setCinematicControlNodeId(node.id);
-      setSideToolbarSurface("cinematic");
-      await refresh();
-    } catch (error) { notify(error); }
-  }
-
-  function toggleAutomationFlow() {
-    setSideToolbarSurface(nextSideToolbarSurface(activeSideToolbarSurface, "automation"));
-  }
-
   function setSideToolbarSurface(surface) {
     canvasRef.current?.closeMenus?.();
-    setCinematicControlOpen(surface === "cinematic");
-    setAutomationFlowOpen(surface === "automation");
     setTab(["assets", "assetManager", "history", "toolbox", "settings", "zoom"].includes(surface) ? surface : null);
   }
 
@@ -340,10 +290,9 @@ export default function App({ initialProjectId = null }) {
     {message ? <div className={`toast ${message.error ? "error" : "success"}`} role={message.error ? "alert" : "status"}><span>{message.text}</span>{message.error ? <button aria-label="关闭错误提示" onClick={() => setMessage(null)} type="button"><X size={14} /></button> : null}</div> : null}
   </>;
 
-  return <div className={`video-p0-shell ${light ? "theme-light" : "theme-dark"}${projectControl.readOnly ? " project-readonly" : ""}${timelineOpen ? " timeline-open" : ""}`} style={{ "--timeline-dock-height": `${timelineHeight}px` }}>
+  return <div className={`video-p0-shell ${light ? "theme-light" : "theme-dark"}${timelineOpen ? " timeline-open" : ""}`} style={{ "--timeline-dock-height": `${timelineHeight}px` }}>
     <header className="unutv-topbar">
-      <div className="project-identity"><button className="project-chip" onClick={() => router.push("/")} title="返回项目列表" type="button"><span className="brand-dot">u</span><span className="project-copy"><strong>{project.title}</strong><small>{canvas?.title || "主画布"} · 自由画布</small></span></button><button aria-label="修改项目名称" className="rename-project-button" disabled={projectControl.readOnly} onClick={openProjectRename} title={projectControl.readOnly ? "全自动运行期间不可修改" : "修改项目名称"} type="button"><Pencil size={12} /></button></div>
-      <AutomationControlBar control={projectControl} />
+      <div className="project-identity"><button className="project-chip" onClick={() => router.push("/")} title="返回项目列表" type="button"><span className="brand-dot">u</span><span className="project-copy"><strong>{project.title}</strong><small>{canvas?.title || "主画布"} · 自由画布</small></span></button><button aria-label="修改项目名称" className="rename-project-button" onClick={openProjectRename} title="修改项目名称" type="button"><Pencil size={12} /></button></div>
     </header>
 
     <MomoCanvasWorkbench
@@ -357,7 +306,6 @@ export default function App({ initialProjectId = null }) {
       projectId={project.id}
       ref={canvasRef}
       refresh={refresh}
-      readOnly={projectControl.readOnly}
       showConnections={showConnections}
       showMiniMap={showMiniMap}
       zoom={zoom}
@@ -365,24 +313,18 @@ export default function App({ initialProjectId = null }) {
 
     {renameOpen ? <div className="modal-backdrop" onMouseDown={() => !renamingProject && setRenameOpen(false)}><form aria-label="修改项目名称" className="settings-modal rename-project-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={renameProject}><header><div><span className="surface-eyebrow">PROJECT SETTINGS</span><h2>修改项目名称</h2></div><button aria-label="关闭" disabled={renamingProject} onClick={() => setRenameOpen(false)} type="button"><X size={16} /></button></header><div className="rename-project-form"><label htmlFor="project-title-input">项目名称</label><input autoFocus id="project-title-input" maxLength={120} onChange={(event) => setProjectTitleDraft(event.target.value)} value={projectTitleDraft} /><div className="rename-project-actions"><button disabled={renamingProject} onClick={() => setRenameOpen(false)} type="button">取消</button><button className="primary" disabled={!projectTitleDraft.trim() || renamingProject} type="submit">{renamingProject ? "保存中…" : "保存名称"}</button></div></div></form></div> : null}
 
-    <FloatingPanel active={tab} caption={tab === "assetManager" ? "可复用生产流程" : undefined} onClose={() => setTab(null)}>{tab === "assetManager" && <CanvasWorkflowPanel />}{tab === "history" && <CanvasMaterialHistoryPanel nodes={canvas.nodes} onFocus={(nodeId) => { setSelectedId(nodeId); canvasRef.current?.focusNode(nodeId); }} />}{tab === "assets" && <AssetsPanel canvas={canvas} projectId={project.id} readOnly={projectControl.readOnly} refresh={refresh} notify={notify} selected={selected} onSelect={setSelectedId} />}{tab === "toolbox" && <div className="momo-toolbox-panel"><button onClick={() => canvasRef.current?.fitCanvas()} type="button"><Maximize2 size={17} /><span><strong>适应全部节点</strong><small>将当前画布内容收进可视区域</small></span></button><button disabled={!selectedId} onClick={() => selectedId && canvasRef.current?.focusNode(selectedId)} type="button"><Focus size={17} /><span><strong>聚焦已选节点</strong><small>{selectedId ? "居中并放大当前节点" : "请先选择节点"}</small></span></button><button onClick={() => setShowMiniMap((value) => !value)} type="button"><Map size={17} /><span><strong>{showMiniMap ? "关闭画布小地图" : "打开画布小地图"}</strong><small>查看节点分布与当前视口</small></span></button><button onClick={() => setShowConnections((value) => !value)} type="button"><EyeOff size={17} /><span><strong>{showConnections ? "隐藏节点连线" : "显示节点连线"}</strong><small>仅改变个人画布视图</small></span></button><button onClick={() => setTab("settings")} type="button"><SlidersHorizontal size={17} /><span><strong>画布与 Provider 设置</strong><small>在右侧检查器中打开</small></span></button><div className="canvas-shortcut-hint"><strong>快捷键</strong><span><kbd>Space</kbd> 平移画布</span><span><kbd>⌘ Z</kbd> 撤销</span><span><kbd>⇧ ⌘ Z</kbd> 重做</span></div></div>}{tab === "zoom" && <div className="panel-stack zoom-panel"><button onClick={() => canvasRef.current?.fitCanvas()} type="button"><Maximize2 size={14} />显示全部节点</button>{[10,20,25,50,100,150,200].map((value) => <button className={zoom === value ? "active" : ""} key={value} onClick={() => canvasRef.current?.setZoom(value)} type="button">缩放至 {value}%</button>)}</div>}{tab === "settings" && !projectControl.readOnly && <ProviderSettings notify={notify} />}</FloatingPanel>
+    <FloatingPanel active={tab} caption={tab === "assetManager" ? "可复用生产流程" : undefined} onClose={() => setTab(null)}>{tab === "assetManager" && <CanvasWorkflowPanel />}{tab === "history" && <CanvasMaterialHistoryPanel nodes={canvas.nodes} onFocus={(nodeId) => { setSelectedId(nodeId); canvasRef.current?.focusNode(nodeId); }} />}{tab === "assets" && <AssetsPanel canvas={canvas} projectId={project.id} refresh={refresh} notify={notify} selected={selected} onSelect={setSelectedId} />}{tab === "toolbox" && <div className="momo-toolbox-panel"><button onClick={() => canvasRef.current?.fitCanvas()} type="button"><Maximize2 size={17} /><span><strong>适应全部节点</strong><small>将当前画布内容收进可视区域</small></span></button><button disabled={!selectedId} onClick={() => selectedId && canvasRef.current?.focusNode(selectedId)} type="button"><Focus size={17} /><span><strong>聚焦已选节点</strong><small>{selectedId ? "居中并放大当前节点" : "请先选择节点"}</small></span></button><button onClick={() => setShowMiniMap((value) => !value)} type="button"><Map size={17} /><span><strong>{showMiniMap ? "关闭画布小地图" : "打开画布小地图"}</strong><small>查看节点分布与当前视口</small></span></button><button onClick={() => setShowConnections((value) => !value)} type="button"><EyeOff size={17} /><span><strong>{showConnections ? "隐藏节点连线" : "显示节点连线"}</strong><small>仅改变个人画布视图</small></span></button><button onClick={() => setTab("settings")} type="button"><SlidersHorizontal size={17} /><span><strong>画布与 Provider 设置</strong><small>在右侧检查器中打开</small></span></button><div className="canvas-shortcut-hint"><strong>快捷键</strong><span><kbd>Space</kbd> 平移画布</span><span><kbd>⌘ Z</kbd> 撤销</span><span><kbd>⇧ ⌘ Z</kbd> 重做</span></div></div>}{tab === "zoom" && <div className="panel-stack zoom-panel"><button onClick={() => canvasRef.current?.fitCanvas()} type="button"><Maximize2 size={14} />显示全部节点</button>{[10,20,25,50,100,150,200].map((value) => <button className={zoom === value ? "active" : ""} key={value} onClick={() => canvasRef.current?.setZoom(value)} type="button">缩放至 {value}%</button>)}</div>}{tab === "settings" && <ProviderSettings notify={notify} />}</FloatingPanel>
 
     {playerOpen ? <CanvasPlayerWorkspace onClose={() => setPlayerOpen(false)} preview={playerPreview} ref={playerRef} selected={selected} /> : null}
-    {timelineOpen ? <CanvasTimelineDock canvas={canvas} initialHeight={timelineHeight} notify={notify} onClose={() => setTimelineOpen(false)} onHeightChange={setTimelineHeight} onPlaybackChange={(playing) => { if (playing) void playerRef.current?.play()?.catch?.(() => {}); else playerRef.current?.pause(); }} onPreviewMedia={(preview) => { setPlayerPreview(preview); setPlayerOpen(true); }} onSeek={(milliseconds) => playerRef.current?.seek(milliseconds / 1000)} projectId={project.id} readOnly={projectControl.readOnly} refreshCanvas={refresh} selected={selected} /> : null}
+    {timelineOpen ? <CanvasTimelineDock canvas={canvas} initialHeight={timelineHeight} notify={notify} onClose={() => setTimelineOpen(false)} onHeightChange={setTimelineHeight} onPlaybackChange={(playing) => { if (playing) void playerRef.current?.play()?.catch?.(() => {}); else playerRef.current?.pause(); }} onPreviewMedia={(preview) => { setPlayerPreview(preview); setPlayerOpen(true); }} onSeek={(milliseconds) => playerRef.current?.seek(milliseconds / 1000)} projectId={project.id} refreshCanvas={refresh} selected={selected} /> : null}
 
-    {cinematicControlOpen && cinematicControlNode ? <CinematicControlWindow node={cinematicControlNode} notify={notify} onClose={() => setCinematicControlOpen(false)} projectId={project.id} readOnly={projectControl.readOnly} /> : null}
-    {automationFlowOpen ? <AutomationFlowWindow control={projectControl} executionNodes={canvas.nodes} onClose={() => setAutomationFlowOpen(false)} projectId={project.id} /> : null}
 
     <MomoCanvasChrome
       activePanel={tab}
-      automationFlowOpen={automationFlowOpen}
-      canMutate={!projectControl.readOnly}
-      cinematicControlOpen={cinematicControlOpen}
+      canMutate
       light={light}
       onAdd={(event) => { setSideToolbarSurface(null); const rect = event.currentTarget.getBoundingClientRect(); canvasRef.current?.openAddMenu({ x: rect.right + 16, y: Math.max(16, rect.top - 42) }); }}
-      onAutomationFlow={toggleAutomationFlow}
       onAssets={() => toggleSideToolbarPanel("assets")}
-      onCinematicControl={() => void openCinematicControl()}
       onFit={() => canvasRef.current?.fitCanvas()}
       onFullscreen={() => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()}
       onHistory={() => toggleSideToolbarPanel("history")}
@@ -402,7 +344,6 @@ export default function App({ initialProjectId = null }) {
       timelineOpen={timelineOpen}
       zoom={zoom}
     />
-    {projectControl.readOnly ? <div className="automation-readonly-notice"><EyeOff size={13} /><span>全自动模式：当前项目只读。你可以查看画布、节点、播放器和时间线。</span></div> : null}
     {message ? <div className={`toast ${message.error ? "error" : "success"}`} role={message.error ? "alert" : "status"}><span>{message.text}</span>{message.error ? <button aria-label="关闭错误提示" onClick={() => setMessage(null)} type="button"><X size={14} /></button> : null}</div> : null}
   </div>;
 }
