@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
+import { eventPrefix, useDebouncedRefresh, useProjectEvents } from "./use-project-events.js";
 
 export function useAuthorityAggregateProjection(canvas, projectId) {
   const [aggregates, setAggregates] = useState([]);
+  const loadRef = useRef(null);
   const productionIdsKey = useMemo(() => [...new Set(
     canvas.nodes
       .filter((node) => ["asset_authority", "project_asset"].includes(node.payload?.resourceType))
@@ -34,12 +36,16 @@ export function useAuthorityAggregateProjection(canvas, projectId) {
     };
     setAggregates([]);
     void load();
-    const timer = window.setInterval(() => { void load(); }, 3000);
+    loadRef.current = load;
     return () => {
       active = false;
-      window.clearInterval(timer);
+      loadRef.current = null;
     };
   }, [productionIdsKey, projectId]);
+
+  // 权威投影随节点与生成变更推送刷新,不再每 3 秒轮询
+  const refreshAggregates = useDebouncedRefresh(() => { void loadRef.current?.(); }, 150);
+  useProjectEvents(projectId, refreshAggregates, eventPrefix("node.", "run.", "media."));
 
   return aggregates;
 }

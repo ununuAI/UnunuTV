@@ -23,6 +23,7 @@ import { CanvasTimelineDock } from "./CanvasTimelineDock.jsx";
 import { MomoCanvasChrome } from "./MomoCanvasChrome.jsx";
 import { CANVAS_ASSET_TRANSFER_TYPE, canvasAssetTransfer, canvasNodeInputFromAssetTransfer, serializeCanvasAssetTransfer } from "./canvas-asset-drag-policy.js";
 import { nextSideToolbarSurface } from "./side-toolbar-surface-policy.js";
+import { subscribeProjectEvents } from "./use-project-events.js";
 
 const ASSET_ROLES = [
   ["all", "全部"], ["actor", "演员"], ["character", "角色"], ["crowd_double", "群众 / 替身"],
@@ -33,12 +34,27 @@ const ASSET_ROLES = [
 ];
 const ASSET_ROLE_LABELS = Object.fromEntries(ASSET_ROLES);
 const projectSlug = (projectId) => projectId.replace(/^project-/, "");
-const CANVAS_SYNC_INTERVAL_MS = 1000;
+// 事件到达后合并前的合流窗口:一次批量改动只触发一次拉取
+const CANVAS_MERGE_DEBOUNCE_MS = 80;
 
-function canvasEditingActive() {
+/** 你此刻正在输入的那个节点。合并远端画布时保留它的本地状态,
+ *  取代过去「只要有输入框获焦就整个停止同步」的做法。 */
+function editingNodeId() {
   const active = document.activeElement;
-  if (!active) return false;
-  return active.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
+  if (!active) return null;
+  const editable = active.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
+  if (!editable) return null;
+  return active.closest("[data-nodeid]")?.dataset.nodeid ?? null;
+}
+
+/** 远端画布覆盖本地时,逐节点合并:只把正在编辑的那个节点留在本地版本。 */
+function mergeCanvas(current, next) {
+  if (!current) return next;
+  const editing = editingNodeId();
+  if (!editing) return next;
+  const local = current.nodes.find((node) => node.id === editing);
+  if (!local) return next;
+  return { ...next, nodes: next.nodes.map((node) => (node.id === editing ? local : node)) };
 }
 
 function AssetsPanel({ canvas, projectId, readOnly, refresh, notify, selected, onSelect }) {
@@ -216,9 +232,10 @@ export default function App({ initialProjectId = null }) {
 
     let stopped = false;
     let requestInFlight = false;
+    let mergeTimer = null;
 
     const syncCanvas = async () => {
-      if (stopped || requestInFlight || document.visibilityState === "hidden" || canvasEditingActive()) return;
+      if (stopped || requestInFlight) return;
       requestInFlight = true;
       try {
         const nextCanvas = await api.canvas(projectId, canvasId);
@@ -226,23 +243,36 @@ export default function App({ initialProjectId = null }) {
         nextCanvas.nodes = nextCanvas.nodes.map((node) => ({ ...node, projectId }));
         setCanvas((current) => {
           if (!current || current.id !== nextCanvas.id) return current;
-          return Number(nextCanvas.revision) > Number(current.revision) ? nextCanvas : current;
+          if (Number(nextCanvas.revision) <= Number(current.revision)) return current;
+          return mergeCanvas(current, nextCanvas);
         });
       } catch {
-        // The normal API error surface remains the user's explicit refresh/action.
+        // 常规错误面仍然是用户的显式刷新/操作
       } finally {
         requestInFlight = false;
       }
     };
 
-    const timer = window.setInterval(() => { void syncCanvas(); }, CANVAS_SYNC_INTERVAL_MS);
+    const scheduleSync = () => {
+      if (mergeTimer) return;
+      mergeTimer = window.setTimeout(() => { mergeTimer = null; void syncCanvas(); }, CANVAS_MERGE_DEBOUNCE_MS);
+    };
+
+    // 服务端推送取代轮询;连接由 use-project-events 共享
+    const unsubscribe = subscribeProjectEvents(projectId, (event) => {
+      const owner = event.payload?.canvasId;
+      if (owner && owner !== canvasId) return;
+      scheduleSync();
+    });
+
     const resume = () => { if (document.visibilityState === "visible") void syncCanvas(); };
     window.addEventListener("focus", resume);
     document.addEventListener("visibilitychange", resume);
 
     return () => {
       stopped = true;
-      window.clearInterval(timer);
+      if (mergeTimer) window.clearTimeout(mergeTimer);
+      unsubscribe();
       window.removeEventListener("focus", resume);
       document.removeEventListener("visibilitychange", resume);
     };

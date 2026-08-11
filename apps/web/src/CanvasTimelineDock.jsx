@@ -4,6 +4,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clapperboard, Diamon
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { TIMELINE_MEDIA_TRANSFER_TYPE, parseTimelineMediaTransfer, timelineDropStartMs } from "./timeline-drag-policy.js";
+import { eventPrefix, useDebouncedRefresh, useProjectEvents } from "./use-project-events.js";
 
 const MIN_HEIGHT = 190;
 
@@ -53,11 +54,10 @@ export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClos
   }, [projectId]);
 
   useEffect(() => { load().catch(notify); }, [load, notify]);
-  useEffect(() => {
-    if (!renderJobs.some((job) => ["queued", "running"].includes(job.status))) return undefined;
-    const timer = window.setInterval(() => load().catch(notify), 900);
-    return () => window.clearInterval(timer);
-  }, [load, notify, renderJobs]);
+  // 渲染进度与时间线变更走 SSE 推送,不再每 900ms 轮询。
+  // render.job_changed 带 {status, progress},timeline.* 覆盖剪辑改动。
+  const refreshTimeline = useDebouncedRefresh(() => load().catch(notify), 120);
+  useProjectEvents(projectId, refreshTimeline, eventPrefix("render.", "timeline.", "media."));
   useEffect(() => { onHeightChange(height); }, [height, onHeightChange]);
   useEffect(() => {
     if (!playing) return undefined;

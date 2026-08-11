@@ -15,6 +15,7 @@ import { handleCinematicSequenceWorkspaceRoutes } from "./cinematic-sequence-wor
 import { handleCinematicWorkflowRoutes } from "./cinematic-workflow-routes.mjs";
 import { handlePlatformOsRoutes } from "./platform-os-routes.mjs";
 import { handleAutomationTaskRoutes } from "./automation-task-routes.mjs";
+import { createCanvasEventHub } from "./canvas-events.mjs";
 import { handleRenderRoutes } from "./render-routes.mjs";
 import { handleTimelineRoutes } from "./timeline-routes.mjs";
 
@@ -395,9 +396,28 @@ async function dispatch(request, response, runtime, webRoot) {
   throw new UnuTvError("route_not_found", `No route: ${method} ${pathname}`, 404);
 }
 
+const SSE_ROUTE = /^\/api\/projects\/([^/]+)\/events\/?$/;
+
+/** 事件推送中枢按 runtime 复用,取代浏览器轮询。 */
+function eventHub(runtime) {
+  if (!runtime.__canvasEventHub) runtime.__canvasEventHub = createCanvasEventHub(runtime);
+  return runtime.__canvasEventHub;
+}
+
 export async function handleUnuTvRequest(request, response, runtime, webRoot = "/__ununu_no_static_web__") {
+  const requestUrl = new URL(request.url, "http://127.0.0.1");
+  const sseMatch = request.method === "GET" && SSE_ROUTE.exec(requestUrl.pathname);
+  if (sseMatch) {
+    return eventHub(runtime).handle(request, response, decodeURIComponent(sseMatch[1]), requestUrl.searchParams.get("since"));
+  }
+
   try {
     await dispatch(request, response, runtime, webRoot);
+    // 写请求落库后立刻推,不等监听周期
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      const owner = /^\/api\/projects\/([^/]+)/.exec(requestUrl.pathname);
+      if (owner) eventHub(runtime).notify(decodeURIComponent(owner[1]));
+    }
   } catch (error) {
     if (response.headersSent) return response.destroy(error);
     const status = error.status || 500;
@@ -427,6 +447,7 @@ export function createUnuTvServer(options = {}) {
       return server.address();
     },
     async close() {
+      runtime.__canvasEventHub?.close();
       if (server.listening) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       runtime.close();
     }
