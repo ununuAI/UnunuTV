@@ -15,7 +15,9 @@ import { createSeriesStore } from "./series-store.mjs";
 export function createLocalRuntime(options = {}) {
   const dataRoot = resolveDataRoot(options.dataRoot);
   const catalog = new CatalogStore(dataRoot);
-  const projects = new ProjectStore(dataRoot);
+  const projects = new ProjectStore(dataRoot, {
+    transactionObserver: options.transactionObserver
+  });
   const media = new LocalMediaStore(dataRoot, projects, options.ffmpeg);
   const publisher = new ProviderMediaPublisher(dataRoot, projects, media, options.publisher);
   const credentials = new LocalSecretStore(dataRoot, options.env ?? process.env);

@@ -32,6 +32,7 @@ export function projectStoryboardImageCandidate(payload = {}, candidate = {}) {
     latestReviewId: null,
     latestReviewState: "candidate",
     latestChecksum: text(candidate.checksum) || null,
+    frameNormalization: candidate.frameNormalization ?? null,
     reviewHistoryIds,
     allowedUse: "review_only",
     prohibitedUse: ["provider_reference", "first_frame", "last_frame", "continuity_state"],

@@ -1,25 +1,44 @@
 import {
-  CINEMATIC_SHOT_REVISION_REVIEW_TYPE,
-  CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE,
-  CINEMATIC_VISUAL_STATE_DOMAINS,
-  UnuTvError,
-  cinematicRevisionReviewTargetId,
-  cinematicSequencePrevisReviewTargetId,
-  latestCinematicMediaReview,
-  latestCinematicEvaluationsByUnit,
-  nowIso
+  CINEMATIC_SHOT_REVISION_REVIEW_TYPE, CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE,
+  CINEMATIC_VISUAL_STATE_DOMAINS, UnuTvError, cinematicRevisionReviewTargetId,
+  cinematicSequencePrevisReviewTargetId, latestCinematicMediaReview,
+  latestCinematicEvaluationsByUnit, auditCinematicSequencePlan,
+  assessCinematicPerformanceTimeline, normalizeDirectorCompositionV1, nowIso,
+  resolveCinematicFormatProfile
 } from "@ununu/unutv-contracts";
 import { generationStrategy } from "./automation-provider-strategy-policy.mjs";
 import { requireCinematicVisualProductionOwnerAcceptance } from "./cinematic-visual-production-review-use-case.mjs";
 import { cameraTrajectoryNeedsProjection } from "../cinematic-camera-trajectory-projection.mjs";
+import { assessCinematicDevelopmentReviews } from "../cinematic-development-review-policy.mjs";
+import { assessCinematicShotFormation } from "../cinematic-shot-formation-policy.mjs";
+import { assessCinematicAssetReadiness } from "../cinematic-asset-readiness-policy.mjs";
+import { deriveDeterministicPrevisCameraRoutePoints } from "../cinematic-previs-camera-route-policy.mjs";
+import { deriveDeterministicPrevisBlocking } from "../cinematic-previs-blocking-policy.mjs";
+import {
+  bindDirectorRoutesToPrevisShot,
+  DIRECTOR_PREVIS_ROUTE_BOUND_RENDER_VERSION,
+  directorActorRoutesHaveTopologyCollision,
+  spreadCollocatedDirectorActorRoutes
+} from "../director-previs-render-policy.mjs";
+import { cinematicAssetNodeMetadata } from "../cinematic-asset-node-metadata-policy.mjs";
 import { renderCleanPrevisFrameSvg, renderPrevisSvg } from "../previs-svg-renderer.mjs";
-
+import { executeAutomationSoundStage } from "./automation-sound-stage-executor.mjs";
+import { executeAutomationContinuityQaStage, executeAutomationTimelineEditStage } from "./automation-editorial-stage-executor.mjs";
+import { executeAutomationDeliveryQcStage } from "./automation-delivery-stage-executor.mjs";
+import { executeAutomationCandidateRenderStage } from "./automation-render-stage-executor.mjs";
+import { materializeCinematicBoundaryCanvas } from "../cinematic-boundary-canvas-materialization.mjs";
+import { loadCurrentAssetMediaRecords } from "./cinematic-production-use-case-helpers.mjs";
+import { prepareStoryboardImageReferencePlans } from "./automation-storyboard-image-reference-stage.mjs";
+import { latestSequencePrevis } from "../latest-sequence-previs-policy.mjs";
 function artifact(resourceType, resourceId, title, extra = {}) {
   return { resourceType, resourceId, ...(title ? { title } : {}), ...extra };
 }
-
 function output(artifactRefs = [], details = {}) { return { artifactRefs, ...details }; }
-
+function hasCurrentStoryboardMedia(shot, kind) { const prefix = kind === "video" ? "video" : "image"; return Boolean(shot?.[`${prefix}MediaId`]) && shot?.[`${prefix}SourceShotRevision`] === shot?.shotRevision; }
+function readableAudioBridge(value, fallback = "雨声与室内搬运声连续") {
+  if (Array.isArray(value)) { const joined = value.map((entry) => typeof entry === "string" ? entry.trim() : "").filter(Boolean).join("；"); return joined || fallback; }
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
 export function createAutomationStageExecutor({ ports, dependencies, isBudgetlessWorkflow } = {}) {
   async function liveCanvas(projectId) {
     const project = await ports.projects.open(projectId);
@@ -28,7 +47,6 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
     if (!canvas) throw new UnuTvError("production_canvas_required", "A visible root canvas is required", 409);
     return canvas;
   }
-
   async function ensureNode(projectId, {
     kind,
     title,
@@ -36,6 +54,8 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
     y,
     resourceType,
     resourceId,
+    size,
+    preserveExistingPosition = false,
     payload = {}
   }) {
     const canvas = await liveCanvas(projectId);
@@ -49,8 +69,8 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
         projectId,
         nodeId: current.id,
         title,
-        x,
-        y,
+        ...(!preserveExistingPosition ? { x, y } : {}),
+        ...(size ? { width: size.width, height: size.height } : {}),
         expectedRevision: current.revision,
         payload: { ...current.payload, ...payload, resourceType, resourceId }
       });
@@ -63,6 +83,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       title,
       x,
       y,
+      ...(size ? { size } : {}),
       payload: { ...payload, resourceType, resourceId }
     });
   }
@@ -94,22 +115,82 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
     ) return null;
     const shots = await dependencies.cinematic.listShots({ projectId, productionId });
     const missing = shots.filter(cameraTrajectoryNeedsProjection);
-    if (!missing.length) return null;
-    const directorNodeIds = [...new Set(missing.map((shot) => shot.directorStageBinding?.directorNodeId).filter(Boolean))];
+    const canvasBeforeProjection = await liveCanvas(projectId);
+    const knownDirectorNodeIds = [...new Set(shots.map((shot) => shot.directorStageBinding?.directorNodeId).filter(Boolean))];
+    const directorBeforeProjection = knownDirectorNodeIds.length === 1
+      ? await dependencies.getDirectorStage({ projectId, nodeId: knownDirectorNodeIds[0] })
+      : null;
+    const latestPrevisBeforeProjection = latestSequencePrevis(
+      await dependencies.sequenceWorkspace.listSequencePrevis({ projectId, productionId })
+    );
+    const topologyStaleShotIds = new Set(shots
+      .filter((shot) => directorActorRoutesHaveTopologyCollision({
+        routes: directorBeforeProjection?.stage?.routes || [],
+        shotId: shot.shotId
+      }))
+      .map((shot) => shot.shotId));
+    const staleCleanFrameShotIds = new Set((latestPrevisBeforeProjection?.shots || [])
+      .filter((previsShot) => {
+        const shot = shots.find((entry) => entry.shotId === previsShot.shotId);
+        const sourceNode = canvasBeforeProjection.nodes.find((node) => (
+          node.payload?.resourceType === "director_previs_clean_frame"
+          && (
+            node.payload?.currentMediaId === previsShot.frameMediaId
+            || node.payload?.resourceId === `${previsShot.shotId}:start`
+          )
+        ));
+        const boundCleanCaptureIds = Object.values(shot?.cameraTrajectoryPlan?.cleanCaptures || {}).filter(Boolean);
+        const boundCaptureMissing = boundCleanCaptureIds.some((captureId) => (
+          !directorBeforeProjection?.stage?.captures?.some((capture) => capture.id === captureId)
+        ));
+        return Boolean(sourceNode) && (
+          sourceNode.payload?.cleanRenderVersion !== DIRECTOR_PREVIS_ROUTE_BOUND_RENDER_VERSION
+          || Number(sourceNode.payload?.cleanRenderSourceShotRevision) !== Number(shot?.revision)
+          || boundCaptureMissing
+        );
+      })
+      .map((previsShot) => previsShot.shotId));
+    const projectionShots = shots.filter((shot) => (
+      missing.some((entry) => entry.shotId === shot.shotId)
+      || staleCleanFrameShotIds.has(shot.shotId)
+      || topologyStaleShotIds.has(shot.shotId)
+    ));
+    if (!projectionShots.length) return null;
+    const directorNodeIds = [...new Set(projectionShots.map((shot) => shot.directorStageBinding?.directorNodeId).filter(Boolean))];
     if (directorNodeIds.length !== 1) {
       throw new UnuTvError("director_stage_binding_required", "结构化运镜修复要求所有待修镜头绑定同一可见 Director Stage。", 409, {
-        shotIds: missing.map((shot) => shot.shotId),
+        shotIds: projectionShots.map((shot) => shot.shotId),
         directorNodeIds
       });
     }
     const directorNodeId = directorNodeIds[0];
-    let director = await dependencies.getDirectorStage({ projectId, nodeId: directorNodeId });
+    let director = knownDirectorNodeIds[0] === directorNodeId
+      ? directorBeforeProjection
+      : await dependencies.getDirectorStage({ projectId, nodeId: directorNodeId });
     if (!director?.stage) throw new UnuTvError("director_stage_not_initialized", "Director Stage is not initialized", 409);
     let stage = director.stage;
-    const allCleanAlreadyExist = missing.every((shot) => (
-      ["start", "mid", "end"].every((phase) => stage.captures.some((capture) => (
-        capture.shotId === shot.shotId && capture.phase === phase && capture.clean === true
-      )))
+    for (const shot of projectionShots) {
+      const boundCleanCaptureIds = Object.values(shot.cameraTrajectoryPlan?.cleanCaptures || {}).filter(Boolean);
+      if (boundCleanCaptureIds.some((captureId) => !stage.captures.some((capture) => capture.id === captureId))) {
+        staleCleanFrameShotIds.add(shot.shotId);
+      }
+    }
+    const allCleanAlreadyExist = projectionShots.every((shot) => (
+      !topologyStaleShotIds.has(shot.shotId)
+      &&
+      ["start", "mid", "end"].every((phase) => {
+        const sourceNode = canvasBeforeProjection.nodes.find((node) => (
+          node.payload?.resourceType === "director_previs_clean_frame"
+          && node.payload?.resourceId === `${shot.shotId}:${phase}`
+        ));
+        return stage.captures.some((capture) => (
+          capture.shotId === shot.shotId && capture.phase === phase && capture.clean === true
+        ))
+          && sourceNode?.payload?.cleanRenderVersion === DIRECTOR_PREVIS_ROUTE_BOUND_RENDER_VERSION
+          && Number(sourceNode?.payload?.cleanRenderSourceShotRevision) === Number(shot.revision)
+          && Object.values(shot.cameraTrajectoryPlan?.cleanCaptures || {}).filter(Boolean)
+            .every((captureId) => stage.captures.some((capture) => capture.id === captureId));
+      })
     ));
     if (!allCleanAlreadyExist) {
       const nextStageRevision = Number(director.version ?? stage.revision ?? 0) + 1;
@@ -117,9 +198,18 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
         ...capture,
         providerEligible: false
       }));
-      for (const [shotIndex, shot] of missing.entries()) {
+      let nextRoutes = stage.routes || [];
+      for (const shot of projectionShots) {
+        if (!topologyStaleShotIds.has(shot.shotId)) continue;
+        nextRoutes = spreadCollocatedDirectorActorRoutes({
+          routes: nextRoutes,
+          shotId: shot.shotId
+        });
+      }
+      for (const [shotIndex, shot] of projectionShots.entries()) {
         const camera = stage.cameras.find((entry) => entry.id === shot.directorStageBinding?.cameraId);
         if (!camera) throw new UnuTvError("director_capture_camera_missing", `Camera missing for ${shot.shotId}`, 409);
+        const routeBoundShot = bindDirectorRoutesToPrevisShot({ shot, routes: nextRoutes });
         for (const [phaseIndex, phase] of ["start", "mid", "end"].entries()) {
           const resourceId = `${shot.shotId}:${phase}`;
           let imageNode = await ensureNode(projectId, {
@@ -145,13 +235,17 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
           });
           let mediaId = imageNode.payload?.currentMediaId || null;
           let checksum = imageNode.payload?.checksum || null;
-          if (!mediaId) {
+          const cleanRenderIsCurrent = (
+            imageNode.payload?.cleanRenderVersion === DIRECTOR_PREVIS_ROUTE_BOUND_RENDER_VERSION
+            && Number(imageNode.payload?.cleanRenderSourceShotRevision) === Number(shot.revision)
+          );
+          if (!mediaId || !cleanRenderIsCurrent) {
             const media = await ports.media.importBytes({
               projectId,
               nodeId: imageNode.id,
               kind: "image",
               mimeType: "image/svg+xml",
-              bytes: renderCleanPrevisFrameSvg({ shot, phase }),
+              bytes: renderCleanPrevisFrameSvg({ shot: routeBoundShot, phase }),
               title: `S${String(shot.order).padStart(2, "0")}-${phase}-clean-previs.svg`
             });
             mediaId = media.id;
@@ -165,14 +259,20 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
                 ...imageNode.payload,
                 currentMediaId: mediaId,
                 checksum,
-                stageRevision: nextStageRevision
+                stageRevision: nextStageRevision,
+                cleanRenderVersion: DIRECTOR_PREVIS_ROUTE_BOUND_RENDER_VERSION,
+                cleanRenderSourceShotRevision: shot.revision
               }
             });
           }
-          const captureId = `capture-${shot.shotId}-clean-${phase}-r${nextStageRevision}`;
           const existingIndex = nextCaptures.findIndex((entry) => (
             entry.shotId === shot.shotId && entry.phase === phase && entry.clean === true
           ));
+          const boundCaptureKey = `${phase}CaptureId`;
+          const stableBoundCaptureId = shot.cameraTrajectoryPlan?.cleanCaptures?.[boundCaptureKey];
+          const captureId = !cameraTrajectoryNeedsProjection(shot) && stableBoundCaptureId
+            ? stableBoundCaptureId
+            : `capture-${shot.shotId}-clean-${phase}-r${nextStageRevision}`;
           const capture = {
             id: captureId,
             imageNodeId: imageNode.id,
@@ -194,6 +294,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       stage = {
         ...stage,
         revision: nextStageRevision,
+        routes: nextRoutes,
         captures: nextCaptures,
         updatedAt: nowIso()
       };
@@ -235,11 +336,15 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       }
     }
 
-    const latestPrevis = (await dependencies.sequenceWorkspace.listSequencePrevis({ projectId, productionId }))
-      .sort((left, right) => right.revision - left.revision)[0] ?? null;
+    const latestPrevis = latestSequencePrevis(
+      await dependencies.sequenceWorkspace.listSequencePrevis({ projectId, productionId })
+    );
     let sequencePrevis = latestPrevis;
     if (latestPrevis) {
-      const revisedById = new Map(revisedShots.map((shot) => [shot.shotId, shot]));
+      const affectedById = new Map(projectionShots.map((shot) => [
+        shot.shotId,
+        revisedShots.find((entry) => entry.shotId === shot.shotId) || shot
+      ]));
       sequencePrevis = await dependencies.sequenceWorkspace.updateSequencePrevis({
         projectId,
         productionId,
@@ -248,7 +353,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
         patch: {
           status: "candidate",
           shots: latestPrevis.shots.map((previsShot) => {
-            const currentShot = revisedById.get(previsShot.shotId);
+            const currentShot = affectedById.get(previsShot.shotId);
             if (!currentShot) return previsShot;
             const startCapture = stage.captures.find((capture) => (
               capture.shotId === currentShot.shotId && capture.phase === "start" && capture.clean === true
@@ -303,6 +408,13 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       shotId: shot.shotId,
       revision: shot.revision
     }));
+    if (!targets.length) {
+      return {
+        repairedCleanPrevisFrames: projectionShots.length,
+        sequencePrevisId: sequencePrevis?.sequencePrevisId,
+        sequencePrevisRevision: sequencePrevis?.revision
+      };
+    }
     throw new UnuTvError(
       "shot_script_owner_acceptance_required",
       "已将接受过的导演台路线投影成结构化运镜合同和独立干净首/中/尾帧；请接受画布上的精确 Shot revision 后再编译视频。",
@@ -322,8 +434,9 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
 
   async function requireCurrentSequencePrevisAcceptance({ projectId, productionId }) {
     if (!dependencies.sequenceWorkspace) return;
-    const sequencePrevis = (await dependencies.sequenceWorkspace.listSequencePrevis({ projectId, productionId }))
-      .sort((left, right) => right.revision - left.revision)[0] ?? null;
+    const sequencePrevis = latestSequencePrevis(
+      await dependencies.sequenceWorkspace.listSequencePrevis({ projectId, productionId })
+    );
     if (!sequencePrevis) return;
     const reviews = await ports.projects.listReviews(projectId);
     const missingFrames = sequencePrevis.shots
@@ -422,6 +535,60 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       requireProduction(resolved);
       const packet = await dependencies.cinematic.getStoryPacket({ projectId, productionId });
       if (!packet) throw new UnuTvError("story_packet_required", "StoryProductionPacket is missing; Agent must create or approve story facts", 409);
+      if (resolved.configuration?.workflowManifest) {
+        const [contributions, scriptDocument] = await Promise.all([
+          dependencies.cinematic.listProfessionalContributions({ projectId, productionId }),
+          dependencies.getScriptDocument({ projectId, nodeId: requireSource(resolved) })
+        ]);
+        const reviewGate = assessCinematicDevelopmentReviews({
+          contributions,
+          screenplayDocument: scriptDocument.screenplayDocument,
+          storyPacket: packet
+        });
+        if (!reviewGate.ok) {
+          throw new UnuTvError(
+            "cinematic_development_review_required",
+            "正式电影工业流程必须先完成剧本诊断、对白审校与平台节奏审核；不得把未经证据化审核的 StoryPacket 直接当作已分析。",
+            409,
+            reviewGate
+          );
+        }
+        const storyNode = (await liveCanvas(projectId)).nodes.find((node) => node.id === resolved.sourceNodeId)
+          ?? (await liveCanvas(projectId)).nodes.find((node) => node.payload?.resourceId === packet.storyPacketId);
+        const reviewArtifacts = [];
+        for (const [index, roleId] of ["script_doctor", "dialogue_editor", "platform_editor"].entries()) {
+          const contribution = reviewGate.reviews[roleId].contribution;
+          const node = await ensureNode(projectId, {
+            kind: "review",
+            title: `${roleId === "script_doctor" ? "剧本诊断" : roleId === "dialogue_editor" ? "对白审校" : "平台节奏审核"} · r${packet.revision}`,
+            x: 80 + index * 640,
+            y: 920,
+            resourceType: "professional_contribution",
+            resourceId: contribution.contributionId,
+            payload: {
+              contribution,
+              productionId,
+              roleId,
+              sourceScreenplayDocumentChecksum: scriptDocument.screenplayDocument.checksum,
+              sourceScreenplayDocumentId: scriptDocument.screenplayDocument.documentId,
+              sourceScreenplayDocumentRevision: scriptDocument.screenplayDocument.revision,
+              sourceStoryPacketId: packet.storyPacketId,
+              sourceStoryPacketRevision: packet.revision,
+              stage: "script_analysis",
+              stageStatus: "accepted"
+            }
+          });
+          if (storyNode) await ensureEdge(projectId, storyNode.id, node.id, `cinematic_stage:${roleId}`);
+          reviewArtifacts.push(artifact("professional_contribution", contribution.contributionId, node.title, { versionId: `r${contribution.revision}` }));
+        }
+        return {
+          reused: true,
+          output: output([
+            artifact("story_packet", packet.storyPacketId, "StoryProductionPacket", { versionId: `r${packet.revision}` }),
+            ...reviewArtifacts
+          ], { developmentReview: reviewGate })
+        };
+      }
       return { reused: true, output: output([artifact("story_packet", packet.storyPacketId, "StoryProductionPacket", { versionId: `r${packet.revision}` })]) };
     }
     if (task.stage === "block_planning") {
@@ -446,6 +613,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       }
       if (!assets.length && !authorities.length) throw new UnuTvError("asset_authority_required", "剧作事实不足以派生资产权威；请先补充人物、场景或关键道具事实", 409);
       const bibleNode = (await liveCanvas(projectId)).nodes.find((node) => node.payload?.resourceType === "visual_bible");
+      const authorityNodes = new Map();
       for (const [index, authority] of authorities.entries()) {
         const node = await ensureNode(projectId, {
           kind: "asset",
@@ -454,7 +622,9 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
           y: 560 + Math.floor(index / 4) * 430,
           resourceType: "asset_authority",
           resourceId: authority.authorityId,
+          preserveExistingPosition: true,
           payload: {
+            ...cinematicAssetNodeMetadata(authority),
             authorityId: authority.authorityId,
             authorityType: authority.authorityType,
             productionId,
@@ -465,7 +635,65 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
             stageStatus: authority.status
           }
         });
+        authorityNodes.set(authority.authorityId, node);
         if (bibleNode) await ensureEdge(projectId, bibleNode.id, node.id, "cinematic_stage:asset_authority");
+      }
+      for (const [index, asset] of assets.entries()) {
+        const currentVersion = asset.versions?.find((entry) => entry.id === asset.currentVersionId) ?? null;
+        const authority = authorities.find((entry) => entry.referenceAssetIds?.includes(asset.id)) ?? null;
+        const node = await ensureNode(projectId, {
+          kind: "asset",
+          title: `${asset.title}${currentVersion ? " · 当前媒体" : " · 待生成"}`,
+          x: 80 + (index % 4) * 630,
+          y: 1500 + Math.floor(index / 4) * 430,
+          resourceType: "project_asset",
+          resourceId: asset.id,
+          preserveExistingPosition: true,
+          payload: {
+            ...(authority ? cinematicAssetNodeMetadata(authority) : {}),
+            assetId: asset.id,
+            ...(authority ? {
+              authorityId: authority.authorityId,
+              authorityRevision: authority.revision
+            } : {}),
+            currentMediaId: currentVersion?.mediaId ?? null,
+            currentVersionId: asset.currentVersionId,
+            productionId,
+            role: asset.role,
+            stage: "asset_design",
+            stageStatus: currentVersion ? "candidate" : "blocked"
+          }
+        });
+        for (const linkedAuthority of authorities.filter((entry) => entry.referenceAssetIds?.includes(asset.id))) {
+          const authorityNode = authorityNodes.get(linkedAuthority.authorityId);
+          if (authorityNode) await ensureEdge(projectId, authorityNode.id, node.id, "cinematic_stage:accepted_asset_version");
+        }
+      }
+      if (resolved.configuration?.workflowManifest) {
+        await requireCinematicVisualProductionOwnerAcceptance({
+          getProduction: ports.projects.getCinematicProduction.bind(ports.projects),
+          getStoryPacket: ports.projects.getStoryPacket.bind(ports.projects),
+          listReviews: ports.projects.listReviews.bind(ports.projects),
+          listShots: ports.projects.listCinematicShots.bind(ports.projects),
+          productionId,
+          projectId,
+          requireShotAcceptance: false
+        });
+        const reviews = await ports.projects.listReviews(projectId);
+        const mediaRecords = await loadCurrentAssetMediaRecords({
+          assets,
+          getMedia: ports.media?.open?.bind(ports.media),
+          projectId
+        });
+        const readiness = assessCinematicAssetReadiness({ assets, authorities, mediaRecords, reviews });
+        if (!readiness.ok) {
+          throw new UnuTvError(
+            "cinematic_asset_readiness_required",
+            "资产名称或文字权威不等于生产资产。正式分镜必须等待角色、场景、道具的当前真实媒体和逐像素 ACCEPT。",
+            409,
+            readiness
+          );
+        }
       }
       return { reused: true, output: output([
         ...assets.map((entry) => artifact("asset", entry.id, entry.title, { versionId: entry.currentVersionId })),
@@ -473,6 +701,39 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       ]) };
     }
     if (task.stage === "shot_design") {
+      if (resolved.configuration?.workflowManifest) {
+        const document = await dependencies.getScriptDocument({ projectId, nodeId: requireSource(resolved) });
+        const formation = assessCinematicShotFormation({
+          rows: document.rows,
+          targetDurationSeconds: resolved.configuration.workflowManifest.targetDurationSeconds
+        });
+        if (!formation.ok) {
+          throw new UnuTvError(
+            "cinematic_shot_formation_required",
+            "正式分镜前必须完成场—节拍—镜头形成决策和导演 11 字段合同；镜头数量与时长不能由固定模板或剧本文字行数决定。",
+            409,
+            formation
+          );
+        }
+        const performanceErrors = document.rows.flatMap((row) => {
+          const audit = assessCinematicPerformanceTimeline(row.payload);
+          return audit.ok ? [] : [{
+            code: "shot_performance_contract_required",
+            message: `结构化分镜 ${row.id} 在进入低模预演前缺少连续、可见、可验收的秒级表演因果。`,
+            rowId: row.id,
+            shotNumber: row.shotNumber,
+            performanceErrors: audit.errors
+          }];
+        });
+        if (performanceErrors.length) {
+          throw new UnuTvError(
+            "shot_performance_contract_required",
+            "秒级表演合同必须在 shot_design 阶段完成，不能延迟到图片或付费视频阶段才发现。",
+            409,
+            { errors: performanceErrors }
+          );
+        }
+      }
       const plan = await dependencies.scriptPlanning.planCinematicFromScript({ projectId, productionId, sourceNodeId: requireSource(resolved), createStoryboard: true });
       const storyboardNode = await ensureNode(projectId, {
         kind: "storyboard",
@@ -522,17 +783,23 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       if (!dependencies.sequenceWorkspace || !dependencies.saveDirectorStage || !dependencies.directorCinematic) {
         throw new UnuTvError("previs_runtime_unavailable", "Sequence previs runtime is unavailable", 500);
       }
-      const existing = (await dependencies.sequenceWorkspace.listSequencePrevis({ projectId, productionId }))
-        .sort((left, right) => right.revision - left.revision)[0] ?? null;
+      const currentShots = await dependencies.cinematic.listShots({ projectId, productionId });
+      const existing = latestSequencePrevis(
+        await dependencies.sequenceWorkspace.listSequencePrevis({ projectId, productionId })
+      );
       if (existing) {
+        const currentShotRevisions = new Map(currentShots.map((shot) => [shot.shotId, shot.revision]));
+        const exactShotLineage = (
+          existing.shots.length === currentShots.length
+          && existing.shots.every((shot) => currentShotRevisions.get(shot.shotId) === shot.shotRevision)
+        );
         const reviews = await ports.projects.listReviews(projectId);
         const targetId = cinematicSequencePrevisReviewTargetId(existing.sequencePrevisId, existing.revision);
-        const accepted = reviews.some((review) => (
-          review.targetType === CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE
-          && review.targetId === targetId
-          && review.state === "accepted"
-        ));
-        if (!accepted) {
+        const latestReview = reviews
+          .filter((review) => review.targetType === CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE && review.targetId === targetId)
+          .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")))
+          .at(-1) ?? null;
+        if (exactShotLineage && latestReview?.state !== "accepted" && latestReview?.state !== "rejected") {
           throw new UnuTvError(
             "sequence_previs_owner_acceptance_required",
             "完整播放并复核低模预演、起落幅、人物路径、摄影机轨迹与每个切镜后，接受当前 Sequence Previs。",
@@ -546,18 +813,20 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
             }
           );
         }
-        return {
-          reused: true,
-          output: output([artifact("sequence_previs", existing.sequencePrevisId, existing.title, { versionId: `r${existing.revision}` })])
-        };
+        if (exactShotLineage && latestReview?.state === "accepted") {
+          return {
+            reused: true,
+            output: output([artifact("sequence_previs", existing.sequencePrevisId, existing.title, { versionId: `r${existing.revision}` })])
+          };
+        }
       }
 
-      const [story, authorities, boards, shots] = await Promise.all([
+      const [story, authorities, boards] = await Promise.all([
         dependencies.cinematic.getStoryPacket({ projectId, productionId }),
         dependencies.authorities.listAssetAuthorities({ projectId, productionId }),
-        dependencies.storyboards.listStoryboards({ projectId, productionId }),
-        dependencies.cinematic.listShots({ projectId, productionId })
+        dependencies.storyboards.listStoryboards({ projectId, productionId })
       ]);
+      const shots = currentShots;
       if (!shots.length) throw new UnuTvError("cinematic_shots_required", "Low-poly previs requires current shots", 409);
       const directorNode = await ensureNode(projectId, {
         kind: "director",
@@ -579,17 +848,23 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       const routes = [];
       const cameras = [];
       const captures = [];
+      let previsTimelineCursorMs = 0;
       let stageRevision = 1;
+      const storyCharacters = story?.storyPacket?.characters ?? story?.characters ?? [];
       const currentDirector = await dependencies.getDirectorStage?.({ projectId, nodeId: directorNode.id });
       if (currentDirector?.stage?.revision) stageRevision = currentDirector.stage.revision + 1;
       for (const [shotIndex, shot] of shots.entries()) {
-        for (const [actorIndex, actor] of (shot.blocking?.actors ?? []).entries()) {
-          const id = `actor-${String(actor.name || actorIndex + 1).replace(/[^\p{L}\p{N}_-]+/gu, "-")}`;
+        const shotDurationMs = Math.round((Number(shot.durationSeconds) || 5) * 1000);
+        const shotStartMs = previsTimelineCursorMs;
+        const shotEndMs = shotStartMs + shotDurationMs;
+        const shotBlocking = deriveDeterministicPrevisBlocking({ shot, characters: storyCharacters });
+        for (const [actorIndex, actor] of shotBlocking.actors.entries()) {
+          const id = `actor-${String(actor.name).replace(/[^\p{L}\p{N}_-]+/gu, "-")}`;
           if (!objectsByName.has(id)) {
-            const start = actor.start ?? { x: 2 + actorIndex, y: 0, z: 2 + (actorIndex % 3) };
+            const start = actor.start;
             objectsByName.set(id, {
               id,
-              label: actor.name || `人物${actorIndex + 1}`,
+              label: actor.name,
               type: "character",
               position: { x: Number(start.x) || 0, y: Number(start.y) || 0, z: Number(start.z) || 0 },
               rotation: { x: 0, y: Number(actor.facingDegrees) || 0, z: 0 },
@@ -600,39 +875,67 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
           }
           routes.push({
             id: `actor-route-${shot.shotId}-${actorIndex + 1}`,
-            label: `${actor.name || `人物${actorIndex + 1}`} · S${String(shot.order).padStart(2, "0")}`,
+            label: `${actor.name} · S${String(shot.order).padStart(2, "0")}`,
             type: "character",
             color: actor.color || "#60a5fa",
+            objectId: id,
+            pathMode: "polyline",
+            speedCurve: "linear",
+            startMs: shotStartMs,
+            endMs: shotEndMs,
             points: [
-              { x: Number(actor.start?.x) || 0, y: Number(actor.start?.y) || 0, z: Number(actor.start?.z) || 0, atMs: 0 },
-              { x: Number(actor.end?.x ?? actor.start?.x) || 0, y: Number(actor.end?.y ?? actor.start?.y) || 0, z: Number(actor.end?.z ?? actor.start?.z) || 0, atMs: Math.round((Number(shot.durationSeconds) || 5) * 1000) }
+              { x: actor.start.x, y: actor.start.y, z: actor.start.z, atMs: shotStartMs },
+              { x: actor.end.x, y: actor.end.y, z: actor.end.z, atMs: shotEndMs }
             ]
           });
         }
         const cameraRouteId = `camera-route-${shot.shotId}`;
-        const routePoints = (shot.cinematography?.routePoints?.length
-          ? shot.cinematography.routePoints
-          : [{ x: 1.2, y: 1.55, z: 6.8 }, { x: 4.2, y: 1.55, z: 5.2 }])
-          .map((point, index, all) => ({
-            x: Number(point.x) || 0,
-            y: Number(point.y ?? 1.55) || 1.55,
-            z: Number(point.z) || 0,
-            atMs: Math.round(((Number(shot.durationSeconds) || 5) * 1000 * index) / Math.max(1, all.length - 1))
-          }));
+        const declaredPathMode = ["polyline", "arc_left", "arc_right"].includes(shot.cinematography?.pathMode)
+          ? shot.cinematography.pathMode
+          : /左弧|left arc/i.test(shot.cinematography?.movementPath || "")
+            ? "arc_left"
+            : /右弧|right arc/i.test(shot.cinematography?.movementPath || "")
+              ? "arc_right"
+              : "polyline";
+        const declaredSpeedCurve = ["linear", "ease", "ease_in", "ease_out", "ease_in_out", "step", "hold"].includes(shot.cinematography?.speedCurve)
+          ? shot.cinematography.speedCurve
+          : "linear";
+        const followActorName = typeof shot.cinematography?.subjectFollow === "string"
+          ? shot.cinematography.subjectFollow
+          : shot.cinematography?.subjectFollow?.actorName;
+        const matchedFollowActor = shotBlocking.actors.find((actor) => followActorName?.includes(actor.name));
+        const subjectFollowObjectId = matchedFollowActor
+          ? `actor-${String(matchedFollowActor.name).replace(/[^\p{L}\p{N}_-]+/gu, "-")}`
+          : "";
+        const shotLookAt = shot.cinematography?.lookAt ?? shotBlocking.lookAt;
+        const routePoints = deriveDeterministicPrevisCameraRoutePoints({
+          cameraPlacement: shot.cinematography?.cameraPlacement,
+          endMs: shotEndMs,
+          lookAt: shotLookAt,
+          movementPath: shot.cinematography?.movementPath,
+          pathMode: declaredPathMode,
+          routePoints: shot.cinematography?.routePoints,
+          startMs: shotStartMs,
+        });
         routes.push({
           id: cameraRouteId,
           label: `摄影机 · S${String(shot.order).padStart(2, "0")}`,
           type: "camera",
           color: "#3b82f6",
+          pathMode: declaredPathMode,
+          speedCurve: declaredSpeedCurve,
+          ...(subjectFollowObjectId ? { subjectFollowObjectId } : {}),
+          startMs: shotStartMs,
+          endMs: shotEndMs,
           points: routePoints
         });
         const cameraId = `camera-${shot.shotId}`;
-        const first = routePoints[0];
+        const first = routePoints[0] ?? { x: 1.2, y: 1.55, z: 6.8 };
         cameras.push({
           id: cameraId,
           label: `S${String(shot.order).padStart(2, "0")} · ${shot.cinematography?.movementPath || "固定机位"}`,
           position: { x: first.x, y: first.y, z: first.z },
-          target: shot.cinematography?.lookAt ?? { x: 6, y: 1.45, z: 3.8 },
+          target: shotLookAt,
           fov: Number(shot.cinematography?.fov) || 54,
           aspectRatio: resolved.configuration?.aspectRatio || "9:16",
           shotIds: [shot.shotId],
@@ -662,7 +965,11 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
           nodeId: imageNode.id,
           kind: "image",
           mimeType: "image/svg+xml",
-          bytes: renderPrevisSvg({ shot, order: shot.order, durationSeconds: shot.durationSeconds }),
+          bytes: renderPrevisSvg({
+            shot: bindDirectorRoutesToPrevisShot({ shot, routes }),
+            order: shot.order,
+            durationSeconds: shot.durationSeconds
+          }),
           title: `S${String(shot.order).padStart(2, "0")}-previs.svg`
         });
         const liveImageNode = await ports.projects.getNode(projectId, imageNode.id);
@@ -687,8 +994,9 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
           capturedAt: timestamp
         });
         await ensureEdge(projectId, directorNode.id, imageNode.id, "cinematic_stage:previs_capture");
+        previsTimelineCursorMs = shotEndMs;
       }
-      const stage = {
+      const stageBase = {
         version: "director_stage_v1",
         revision: stageRevision,
         dimensions: { width: 12, depth: 8, height: 3, unit: "m" },
@@ -702,13 +1010,24 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
         cameras,
         captures,
         selectedCameraId: cameras[0]?.id || "",
-        compositionData: {
-          views: ["top_2_5d", "editor", "camera_pov", "start_end_compare"],
-          playback: { frameRate: 24, durationSeconds: shots.reduce((sum, shot) => sum + (Number(shot.durationSeconds) || 0), 0), interpolation: "continuous" },
-          axis: { attentionAxis: "入口—公共木箱—楼梯", allowedCameraSide: "南侧主轴，只有动机明确的遮挡切才跨轴" }
-        },
         createdAt: currentDirector?.stage?.createdAt || timestamp,
         updatedAt: timestamp
+      };
+      const stage = {
+        ...stageBase,
+        compositionData: normalizeDirectorCompositionV1({
+          views: ["top_2_5d", "camera_first_person", "timeline"],
+          playback: {
+            frameRate: 24,
+            durationSeconds: shots.reduce((sum, shot) => sum + (Number(shot.durationSeconds) || 0), 0),
+            interpolation: "linear"
+          },
+          axis: "X-right_Y-up_Z-depth",
+          axisPolicy: {
+            attentionAxis: "入口—公共木箱—楼梯",
+            allowedCameraSide: "南侧主轴，只有动机明确的遮挡切才跨轴"
+          }
+        }, stageBase)
       };
       await dependencies.saveDirectorStage({ projectId, nodeId: directorNode.id, stage });
       const boundShots = [];
@@ -748,7 +1067,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
           },
           performanceState: { description: shot.performance?.visibleEvidence || shot.storyBeat },
           spatialState: { description: shot.blocking?.positions || shot.openingState, actors: shot.blocking?.actors || [] },
-          audioCue: { description: shot.sound?.design || shot.sound?.ambience || "按镜头声音合同" },
+          audioCue: { description: readableAudioBridge(shot.sound?.design || shot.sound?.ambience, "按镜头声音合同") },
           frameMediaId: captures[index].mediaId,
           frameSourceRole: "director_low_poly_start_end_control"
         };
@@ -765,7 +1084,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
         axisRule: ordered[index + 1].editContinuity?.axis || "保持入口—木箱主轴",
         gazeRelation: "视线与下一镜主体方向连续",
         motionVector: "动作方向或声桥连续",
-        audioBridge: ordered[index + 1].sound?.ambience || "雨声与室内搬运声连续",
+        audioBridge: readableAudioBridge(ordered[index + 1].sound?.ambience),
         overlapSeconds: 0
       }));
       const sequencePrevis = await dependencies.sequenceWorkspace.saveSequencePrevis({
@@ -795,6 +1114,14 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
           shotId: shot.shotId
         });
       }
+      await materializeCinematicBoundaryCanvas({
+        ensureEdge,
+        ensureNode,
+        liveCanvas,
+        projectId,
+        productionId,
+        sequencePrevis
+      });
       const liveDirector = await ports.projects.getNode(projectId, directorNode.id);
       await dependencies.updateNode({
         projectId,
@@ -867,6 +1194,29 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       });
       let units = await dependencies.cinematic.listGenerationUnits({ projectId, productionId });
       if (!units.length) throw new UnuTvError("generation_units_required", "GenerationUnit 尚未建立；请为已批准镜头选择模型策略", 409);
+      const currentPrevis = latestSequencePrevis(
+        await dependencies.sequenceWorkspace.listSequencePrevis({ projectId, productionId })
+      );
+      const currentEvaluations = await dependencies.cinematic.listEvaluations({ projectId, productionId });
+      await materializeCinematicBoundaryCanvas({
+        ensureEdge,
+        ensureNode,
+        evaluations: currentEvaluations,
+        generationUnitRecords: units,
+        liveCanvas,
+        projectId,
+        productionId,
+        sequencePrevis: currentPrevis
+      });
+      const sequencePlan = auditCinematicSequencePlan(units);
+      if (!sequencePlan.ok) {
+        throw new UnuTvError(
+          "cinematic_sequence_plan_invalid",
+          "镜头序列不是连续正典链：同一场只能有一个第一单元，后续单元必须绑定紧邻上一单元。",
+          409,
+          sequencePlan
+        );
+      }
       // Optional knowledge-grounded auto signoff when knowledge port is wired
       if (dependencies.knowledge) {
         const { autoSignoffGenerationUnit } = await import("../workers/expert-signoff-worker.mjs");
@@ -887,7 +1237,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
         }
       }
       const compilations = [];
-      for (const entry of units) {
+      for (const entry of units.filter((item) => item.generationUnit.lifecycle === "active")) {
         const generationUnitId = entry.generationUnit.generationUnitId;
         const compilation = await dependencies.cinematic.compileGenerationUnit({ projectId, productionId, generationUnitId });
         const preflight = await dependencies.cinematic.preflightGenerationUnit({ projectId, productionId, generationUnitId });
@@ -911,8 +1261,21 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       if (!units.length) throw new UnuTvError("generation_units_required", "正式视频阶段需要 GenerationUnit；禁止 storyboard batch 冒充 formal 路径", 409);
       const evaluations = await dependencies.cinematic.listEvaluations({ projectId, productionId });
       const latestEvaluations = latestCinematicEvaluationsByUnit(evaluations);
-      const pendingUnits = units.filter((entry) => latestEvaluations.get(entry.generationUnit.generationUnitId)?.decision !== "ACCEPT");
+      const activeUnits = units.filter((entry) => entry.generationUnit.lifecycle === "active");
+      const pendingUnits = activeUnits.filter((entry) => latestEvaluations.get(entry.generationUnit.generationUnitId)?.decision !== "ACCEPT");
       if (!pendingUnits.length) {
+        const waitingUnits = units.filter((entry) => entry.generationUnit.lifecycle === "waiting_for_previous_accept");
+        if (waitingUnits.length) {
+          throw new UnuTvError(
+            "cinematic_previous_take_acceptance_required",
+            "后续镜头正在等待紧邻上一镜的真实候选、完整审片与正典对账；不得并行生成成互不相干的视频。",
+            409,
+            {
+              generationUnitIds: waitingUnits.map((entry) => entry.generationUnit.generationUnitId),
+              sourceGenerationUnitIds: waitingUnits.map((entry) => entry.generationUnit.sequenceState?.parentGenerationUnitId).filter(Boolean)
+            }
+          );
+        }
         return { reused: true, output: output(units.map((entry) => {
           const accepted = latestEvaluations.get(entry.generationUnit.generationUnitId);
           return artifact("cinematic_evaluation", accepted?.evaluationId || entry.generationUnit.generationUnitId, `已验收 ${entry.generationUnit.generationUnitId}`, { mediaId: accepted?.mediaId, versionId: accepted ? `r${accepted.revision}` : undefined });
@@ -1027,7 +1390,9 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       const budgetless = isBudgetlessWorkflow(resolved);
       const boards = await dependencies.storyboards.listStoryboards({ projectId, productionId });
       const mediaField = task.stage === "image_generation" ? "imageMediaId" : "videoMediaId";
-      const missing = boards.flatMap((board) => board.shots.filter((shot) => !shot[mediaField]).map((shot) => ({ storyboardId: board.storyboardId, storyboardShotId: shot.storyboardShotId })));
+      const missing = boards.flatMap((board) => board.shots
+        .filter((shot) => !hasCurrentStoryboardMedia(shot, task.stage === "image_generation" ? "image" : "video"))
+        .map((shot) => ({ storyboardId: board.storyboardId, storyboardShotId: shot.storyboardShotId })));
       if (missing.length) {
         const budgetInput = generationStrategy(resolved, task.stage);
         const units = await dependencies.cinematic.listGenerationUnits({ projectId, productionId });
@@ -1048,7 +1413,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
         const executionNodeIdByStoryboardShotId = {};
         if (task.stage === "image_generation") {
           for (const board of boards) {
-            for (const shot of board.shots.filter((entry) => !entry.imageMediaId)) {
+            for (const shot of board.shots.filter((entry) => !hasCurrentStoryboardMedia(entry, "image"))) {
               const node = await ensureNode(projectId, {
                 kind: "image",
                 title: `${shot.title} · 视觉预演`,
@@ -1056,6 +1421,8 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
                 y: 5900 + Math.floor((shot.order - 1) / 4) * 470,
                 resourceType: "storyboard_image_execution",
                 resourceId: shot.storyboardShotId,
+                size: { width: 559, height: 372 },
+                preserveExistingPosition: true,
                 payload: {
                   productionId,
                   storyboardId: board.storyboardId,
@@ -1064,7 +1431,8 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
                   provider: workflowStrategy.provider,
                   modelId: workflowStrategy.model,
                   stage: "image_generation",
-                  stageStatus: "ready"
+                  stageStatus: "ready",
+                  canvasSizePolicy: "stable_execution_frame_v1"
                 }
               });
               executionNodeIdByStoryboardShotId[shot.storyboardShotId] = node.id;
@@ -1080,7 +1448,7 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
         const kind = task.stage === "image_generation" ? "image" : "video";
         if (task.stage === "image_generation" && resolved.configuration?.workflowManifest) {
           const missingShotIds = [...new Set(boards.flatMap((board) => (
-            board.shots.filter((shot) => !shot.imageMediaId).map((shot) => shot.shotId)
+            board.shots.filter((shot) => !hasCurrentStoryboardMedia(shot, "image")).map((shot) => shot.shotId)
           )))];
           if (missingShotIds.length) {
             await requireCinematicVisualProductionOwnerAcceptance({
@@ -1096,8 +1464,16 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
           }
         }
         const jobs = [];
+        const storyboardImageReferences = task.stage === "image_generation"
+          ? await prepareStoryboardImageReferencePlans({
+            authoritiesApi: dependencies.authorities, boards, composeGridNode: dependencies.composeGridNode,
+            ensureEdge, ensureNode, listAssets: dependencies.listAssets, liveCanvas, ports, productionId, projectId
+          })
+          : null;
         for (const board of boards) {
-          const missingShotIds = board.shots.filter((shot) => !shot[mediaField]).map((shot) => shot.storyboardShotId);
+          const missingShotIds = board.shots
+            .filter((shot) => !hasCurrentStoryboardMedia(shot, task.stage === "image_generation" ? "image" : "video"))
+            .map((shot) => shot.storyboardShotId);
           if (!missingShotIds.length) continue;
           const existing = (await dependencies.storyboards.listStoryboardBatchJobs({ projectId, productionId, storyboardId: board.storyboardId }))
             .find((job) => (
@@ -1119,8 +1495,26 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
               }),
               executionNodeId: workflowStrategy.executionNodeId,
               ...(Object.keys(executionNodeIdByStoryboardShotId).length ? { executionNodeIdByStoryboardShotId } : {}),
-              aspectRatio: resolved.configuration?.aspectRatio || "9:16",
-              resolution: task.stage === "image_generation" ? "1024x1536" : (workflowStrategy.resolution || "720p"),
+              ...(storyboardImageReferences ? {
+                clearStaleCurrentMediaOnStart: true,
+                referenceBindingsByStoryboardShotId: storyboardImageReferences.referenceBindingsByStoryboardShotId,
+                referenceMediaIdsByStoryboardShotId: storyboardImageReferences.referenceMediaIdsByStoryboardShotId,
+                referencePlansByStoryboardShotId: storyboardImageReferences.referencePlansByStoryboardShotId
+              } : {}),
+              aspectRatio: resolved.configuration?.aspectRatio || resolved.configuration?.workflowManifest?.aspectRatio || "9:16",
+              ...(task.stage === "image_generation" ? (() => {
+                const formatProfile = resolveCinematicFormatProfile({
+                  aspectRatio: resolved.configuration?.aspectRatio || resolved.configuration?.workflowManifest?.aspectRatio || "9:16"
+                });
+                return {
+                  resolution: formatProfile.imageProviderResolution,
+                  imageFrameResolution: formatProfile.imageFrameResolution,
+                  imageFrameFit: formatProfile.imageFrameFit,
+                  formatProfileId: formatProfile.profileId
+                };
+              })() : {
+                resolution: workflowStrategy.resolution || "480p"
+              }),
               automationTaskId: task.id
             },
             operationContext
@@ -1189,294 +1583,30 @@ export function createAutomationStageExecutor({ ports, dependencies, isBudgetles
       return { reused: missing.length === 0, output: output(refreshedBoards.flatMap((board) => board.shots.map((shot) => artifact(mediaField === "imageMediaId" ? "storyboard_image" : "shot_video", shot.storyboardShotId, shot.title, { mediaId: shot[mediaField] })))) };
     }
     if (task.stage === "sound_design") {
-      const budgetless = isBudgetlessWorkflow(resolved);
-      // Native-audio formal units already carry dialogue/ambience; soft-pass separate sound stage.
-      if (resolved.configuration?.workflowManifest) {
-        const units = await dependencies.cinematic.listGenerationUnits({ projectId, productionId });
-        const nativeAudio = units.some((entry) => entry.generationUnit?.generationParameters?.generateAudio !== false);
-        if (nativeAudio) {
-          return {
-            reused: true,
-            output: output([artifact("native_audio", productionId, "视频原生音频，跳过独立 sound_design")])
-          };
-        }
-      }
-      const timelines = await dependencies.timeline.listTimelines({ projectId });
-      const audioClips = [];
-      for (const summary of timelines) {
-        const timeline = await dependencies.timeline.getTimeline({ projectId, timelineId: summary.id });
-        audioClips.push(...timeline.clips.filter((clip) => clip.track === 1 && clip.mediaId));
-      }
-      const audioNodes = resolved.canvas?.nodes.filter((node) => node.kind === "audio" && node.payload?.currentMediaId) ?? [];
-      if (!audioClips.length && !audioNodes.length) {
-        const budgetInput = generationStrategy(resolved, "sound_design");
-        if (!budgetInput?.provider || !budgetInput?.model || !budgetInput?.executionNodeId) {
-          throw new UnuTvError(
-            "automation_sound_generation_strategy_required",
-            "声音资产缺失；请在工作流策略中绑定声音 Provider、模型和音频执行节点，或导入现有音频",
-            409,
-            { stage: task.stage }
-          );
-        }
-        if (!budgetless && !(Number(budgetInput.amount ?? budgetInput.perItemAmount) > 0)) {
-          throw new UnuTvError("automation_generation_strategy_required", "legacy_budget 自动声音生成还需要预留金额", 409, { stage: task.stage });
-        }
-        const node = resolved.canvas?.nodes.find((entry) => entry.id === budgetInput.executionNodeId && entry.kind === "audio");
-        if (!node) throw new UnuTvError("automation_audio_execution_node_invalid", "声音生成必须选择当前画布中的音频节点", 409);
-        const idempotencyKey = `${task.idempotencyKey}:attempt:${task.attempt}:provider:v1`;
-        let run = (await ports.projects.listRuns(projectId)).find((entry) => entry.nodeId === node.id && entry.request?.idempotencyKey === idempotencyKey) ?? null;
-        if (run?.status === "queued") throw new UnuTvError("paid_submission_outcome_unknown", "检测到未确认结果的声音 Provider 提交；为避免重复提交，已停止自动重发", 409, { runId: run.id, idempotencyKey });
-        if (!run) run = await dependencies.runNode({
-          projectId,
-          nodeId: node.id,
-          provider: budgetInput.provider,
-          request: {
-            ...(budgetInput.configuration?.request ?? {}),
-            billingMode: budgetless ? "provider_account" : "legacy_budget",
-            idempotencyKey,
-            model: budgetInput.model,
-            text: budgetInput.configuration?.text ?? node.payload?.prompt ?? node.title
-          }
-        });
-        else if (run.status === "running") run = await dependencies.pollRun({ projectId, runId: run.id });
-        if (["queued", "running"].includes(run.status)) return { waiting: true, output: output([artifact("provider_run", run.id, "声音 Provider 任务")], { providerRunId: run.id }) };
-        if (run.status !== "succeeded") throw new UnuTvError(run.result?.code ?? "automation_sound_provider_failed", run.result?.message ?? "声音 Provider 任务失败", 409, { runId: run.id });
-        const generated = (run.result?.artifacts ?? []).filter((entry) => entry.kind === "audio");
-        if (!generated.length) throw new UnuTvError("automation_sound_artifact_missing", "声音 Provider 未返回音频产物", 502, { runId: run.id });
-        return { output: output(generated.map((entry) => artifact("audio_node", node.id, node.title, { mediaId: entry.id, providerRunId: run.id }))) };
-      }
-      return { reused: true, output: output([
-        ...audioClips.map((clip) => artifact("timeline_audio", clip.id, "时间线音频", { mediaId: clip.mediaId })),
-        ...audioNodes.map((node) => artifact("audio_node", node.id, node.title, { mediaId: node.payload.currentMediaId }))
-      ]) };
+      return executeAutomationSoundStage({
+        artifact, dependencies, isBudgetlessWorkflow, liveCanvas, output, ports,
+        productionId, projectId, resolved, task
+      });
     }
     if (task.stage === "continuity_qa") {
-      const evaluations = await dependencies.cinematic.listEvaluations({ projectId, productionId });
-      const units = await dependencies.cinematic.listGenerationUnits({ projectId, productionId });
-      const activeUnits = units.filter((entry) => entry.generationUnit.lifecycle !== "archived");
-      const latestEvaluations = latestCinematicEvaluationsByUnit(evaluations);
-      if (!activeUnits.length) throw new UnuTvError("generation_unit_required", "连续性审片需要至少一个有效 GenerationUnit。", 409);
-      const accepted = [];
-      for (const entry of activeUnits) {
-        const generationUnitId = entry.generationUnit.generationUnitId;
-        const evaluation = latestEvaluations.get(generationUnitId);
-        if (!evaluation) {
-          throw new UnuTvError("continuity_evaluation_required", `${generationUnitId} 缺少最新 CinematicEvaluationRecord，不能进入剪辑。`, 409, { generationUnitId });
-        }
-        if (evaluation?.decision !== "ACCEPT") {
-          throw new UnuTvError("latest_cinematic_evaluation_rejected", `${generationUnitId} 的最新审片结论不是 ACCEPT，不能进入剪辑。`, 409, {
-            decision: evaluation?.decision ?? null,
-            evaluationId: evaluation?.evaluationId ?? null,
-            generationUnitId
-          });
-        }
-        if (!evaluation?.takeObservation || evaluation?.canonReconciliation?.status !== "accepted") {
-          throw new UnuTvError("structured_continuity_evaluation_required", `${generationUnitId} 缺少真实起止状态观察或正典对账，不能进入剪辑。`, 409, { generationUnitId });
-        }
-        if (entry.generationUnit.executionGates?.requireContinuityStateAudit === true && !evaluation?.actualContinuityState) {
-          throw new UnuTvError("structured_continuity_state_required", `${generationUnitId} 缺少结构化实际连续性状态，不能进入剪辑。`, 409, { generationUnitId });
-        }
-        const preflight = await dependencies.cinematic.preflightGenerationUnit({ projectId, productionId, generationUnitId, recompile: true });
-        if (!preflight.ready) throw new UnuTvError("continuity_chain_preflight_failed", `${generationUnitId} 的相邻镜连续性链在审片后失效。`, 409, preflight);
-        accepted.push(evaluation);
-      }
-      return { reused: true, output: output(accepted.map((entry) => artifact("cinematic_evaluation", entry.evaluationId, "连续性审片", { versionId: `r${entry.revision}`, mediaId: entry.mediaId }))) };
+      return executeAutomationContinuityQaStage({ artifact, dependencies, output, productionId, projectId });
     }
     if (task.stage === "timeline_edit") {
-      const boards = await dependencies.storyboards.listStoryboards({ projectId, productionId });
-      const board = boards.find((entry) => entry.shots.some((shot) => shot.videoMediaId));
-      if (!board) throw new UnuTvError("storyboard_video_required", "没有可进入时间线的故事板视频版本", 409);
-      const aspectRatio = resolved.configuration.aspectRatio
-        || resolved.configuration.workflowManifest?.aspectRatio
-        || "16:9";
-      const [width, height] = aspectRatio === "9:16"
-        ? [720, 1280]
-        : aspectRatio === "1:1"
-          ? [1080, 1080]
-          : [1920, 1080];
-      const receipt = await dependencies.storyboards.importStoryboardToTimeline({
-        projectId,
-        productionId,
-        storyboardId: board.storyboardId,
-        timelineId: resolved.configuration.timelineId,
-        timelineTitle: `${resolved.configuration.episodeId ? "EP01 · " : ""}主时间线`,
-        frameRate: 24,
-        width,
-        height,
-        colorSpace: "Rec.709"
+      return executeAutomationTimelineEditStage({
+        artifact, dependencies, ensureEdge, ensureNode, liveCanvas, output,
+        ports, productionId, projectId, resolved, task
       });
-      if (receipt.status === "failed" || receipt.status === "empty") throw new UnuTvError("timeline_import_failed", "故事板未能进入时间线", 409, receipt);
-      const timelineNode = await ensureNode(projectId, {
-        kind: "compose",
-        title: "EP01 · 120秒主时间线",
-        x: 1342,
-        y: 11648,
-        resourceType: "timeline",
-        resourceId: receipt.timelineId,
-        payload: {
-          productionId,
-          timelineId: receipt.timelineId,
-          frameRate: 24,
-          width,
-          height,
-          aspectRatio,
-          clipCount: receipt.added,
-          durationSeconds: resolved.configuration.targetDurationSeconds
-            || resolved.configuration.workflowManifest?.targetDurationSeconds
-            || null,
-          stage: "timeline_edit",
-          stageStatus: "ready"
-        }
-      });
-      const canvas = await liveCanvas(projectId);
-      const evidenceNodes = canvas.nodes.filter((node) => (
-        node.payload?.resourceType === "cinematic_evaluation_evidence"
-        && node.payload?.evaluationDecision === "ACCEPT"
-      ));
-      for (const evidenceNode of evidenceNodes) {
-        await ensureEdge(projectId, evidenceNode.id, timelineNode.id, "cinematic_stage:accepted_take");
-      }
-      return {
-        output: output([artifact("timeline", receipt.timelineId, "主时间线", { nodeId: timelineNode.id })], {
-          importReceipt: receipt,
-          timelineNodeId: timelineNode.id
-        })
-      };
     }
     if (task.stage === "candidate_render") {
-      const timelines = await dependencies.timeline.listTimelines({ projectId });
-      const automationTasks = await dependencies.automationTasks.listAutomationTasks({
-        projectId,
-        automationRunId: task.automationRunId
+      return executeAutomationCandidateRenderStage({
+        artifact, dependencies, output, ports, productionId, projectId, resolved, task
       });
-      const timelineTask = automationTasks.find((entry) => entry.stage === "timeline_edit");
-      const timelineId = resolved.configuration.timelineId
-        ?? timelineTask?.output?.importReceipt?.timelineId
-        ?? timelines[0]?.id;
-      if (!timelineId) throw new UnuTvError("timeline_required", "候选渲染需要主时间线", 409);
-      const timeline = await dependencies.timeline.getTimeline({ projectId, timelineId });
-      const expectedAspectRatio = resolved.configuration.aspectRatio
-        || resolved.configuration.workflowManifest?.aspectRatio
-        || null;
-      const actualAspectRatio = Number(timeline.width) / Number(timeline.height);
-      const expectedRatio = expectedAspectRatio === "9:16"
-        ? 9 / 16
-        : expectedAspectRatio === "1:1"
-          ? 1
-          : expectedAspectRatio === "16:9"
-            ? 16 / 9
-            : null;
-      if (expectedRatio && Math.abs(actualAspectRatio - expectedRatio) > 0.01) {
-        throw new UnuTvError(
-          "timeline_aspect_ratio_mismatch",
-          `主时间线 ${timeline.width}×${timeline.height} 与交付画幅 ${expectedAspectRatio} 不一致。`,
-          409,
-          { timelineId, width: timeline.width, height: timeline.height, expectedAspectRatio }
-        );
-      }
-      const evaluations = await dependencies.cinematic.listEvaluations({ projectId, productionId });
-      const postRepairs = [...latestCinematicEvaluationsByUnit(evaluations).values()]
-        .filter((entry) => entry.decision === "ACCEPT" && entry.retakeDisposition?.type === "FIX_IN_POST");
-      const completedRepairs = new Set((timeline.markers ?? [])
-        .filter((marker) => marker.payload?.repairStatus === "completed")
-        .map((marker) => marker.payload?.evaluationId));
-      const missingRepairs = postRepairs.filter((entry) => !completedRepairs.has(entry.evaluationId));
-      if (missingRepairs.length) {
-        throw new UnuTvError(
-          "timeline_post_repairs_required",
-          "存在已接受但要求后期修复的镜头，必须先在时间线完成并记录修复再渲染。",
-          409,
-          {
-            timelineId,
-            repairs: missingRepairs.map((entry) => ({
-              evaluationId: entry.evaluationId,
-              generationUnitId: entry.generationUnitId,
-              mediaId: entry.mediaId,
-              repairSuggestions: entry.repairSuggestions
-            }))
-          }
-        );
-      }
-      const project = await ports.projects.open(projectId);
-      const canvas = project?.rootCanvasId ? await ports.projects.openCanvas(projectId, project.rootCanvasId) : null;
-      let outputNode = (canvas?.nodes ?? []).find((node) => (
-        node.kind === "compose"
-        && node.payload?.auditOnly !== true
-        && node.payload?.productionId === productionId
-        && node.payload?.stage === "candidate_render"
-        && node.payload?.timelineId === timelineId
-      ));
-      if (!outputNode) {
-        if (typeof dependencies.createNode !== "function" || !project?.rootCanvasId) {
-          throw new UnuTvError("render_canvas_node_required", "候选渲染需要画布上的合成输出节点", 409);
-        }
-        outputNode = await dependencies.createNode({
-          projectId,
-          canvasId: project.rootCanvasId,
-          kind: "compose",
-          title: "候选母版",
-          x: 2160,
-          y: 120,
-          payload: {
-            productionId,
-            stage: "candidate_render",
-            resourceType: "candidate_master",
-            resourceId: `${timelineId}:candidate_master`,
-            generationPhase: "candidate_render",
-            generationStatus: "ready",
-            timelineId
-          }
-        });
-      }
-      const jobs = await dependencies.render.listRenderJobs({ projectId, timelineId });
-      let job = jobs.find((entry) => entry.idempotencyKey === `${task.automationRunId}:candidate_render:v1`);
-      if (!job) job = await dependencies.render.createRenderJob({ projectId, timelineId, outputNodeId: outputNode.id, preset: resolved.configuration.renderPreset ?? "h264_review", idempotencyKey: `${task.automationRunId}:candidate_render:v1` });
-      if (["queued", "running"].includes(job.status)) return { waiting: true, output: output([artifact("render_job", job.id, "候选母版渲染")], { renderJobId: job.id }) };
-      if (job.status !== "succeeded") throw new UnuTvError("candidate_render_failed", job.error?.message ?? "候选母版渲染失败", 409, job.error);
-      return { output: output([artifact("render_job", job.id, "候选母版", { mediaId: job.outputMediaId })], { renderJobId: job.id }) };
     }
     if (task.stage === "delivery_qc") {
-      const automationTasks = await dependencies.automationTasks.listAutomationTasks({
-        projectId,
-        automationRunId: task.automationRunId
+      return executeAutomationDeliveryQcStage({
+        artifact, dependencies, ensureEdge, ensureNode, output, ports,
+        productionId, projectId, resolved, task
       });
-      const renderTask = automationTasks.find((entry) => entry.stage === "candidate_render");
-      const renderJobId = renderTask?.output?.renderJobId;
-      const jobs = await dependencies.render.listRenderJobs({ projectId });
-      const job = renderJobId
-        ? jobs.find((entry) => entry.id === renderJobId && entry.status === "succeeded")
-        : [...jobs].sort((left, right) => Date.parse(right.createdAt || "") - Date.parse(left.createdAt || ""))
-          .find((entry) => entry.status === "succeeded");
-      if (!job) throw new UnuTvError("successful_render_required", "没有成功的候选母版可做交付 QC", 409);
-      const manifest = await dependencies.render.createDeliveryPackage({ projectId, renderJobId: job.id, acceptWarnings: resolved.configuration.acceptQcWarnings === true });
-      const deliveryNode = await ensureNode(projectId, {
-        kind: "qa",
-        title: "EP01 · 交付 QC 与清单",
-        x: 2160,
-        y: 11648,
-        resourceType: "delivery_package",
-        resourceId: manifest.id,
-        payload: {
-          productionId,
-          stage: "delivery_qc",
-          deliveryPackageId: manifest.id,
-          renderJobId: job.id,
-          mediaId: manifest.mediaId,
-          checksum: manifest.checksum,
-          qcStatus: manifest.qcStatus ?? manifest.technicalQc?.status ?? "passed",
-          stageStatus: "succeeded"
-        }
-      });
-      if (job.outputNodeId) await ensureEdge(projectId, job.outputNodeId, deliveryNode.id, "cinematic_stage:delivery_qc");
-      return {
-        output: output([
-          artifact("delivery_package", manifest.id, "交付清单", {
-            mediaId: manifest.mediaId,
-            versionId: manifest.checksum,
-            nodeId: deliveryNode.id
-          })
-        ], { deliveryNodeId: deliveryNode.id })
-      };
     }
     throw new UnuTvError("automation_stage_unimplemented", `Automation stage is not implemented: ${task.stage}`, 500);
   }

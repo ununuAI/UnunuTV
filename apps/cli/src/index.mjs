@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { parseJson, UnuTvError } from "@ununu/unutv-contracts";
 import { createLocalRuntime } from "@ununu/unutv-local-runtime";
 import { executeCinematicSequenceCommand } from "./cinematic-sequence-commands.mjs";
+import { executeScreenplayAuthoringCommand } from "./screenplay-authoring-command.mjs";
+import { executeScreenplayReviewCommand } from "./screenplay-review-command.mjs";
+import { executeScreenplayRevisionCommand } from "./screenplay-revision-command.mjs";
 
 function parseArguments(argv) {
   const positionals = [];
@@ -108,11 +111,13 @@ Usage:
   ununu-unutv media import --project ID --file /absolute/path [--node ID --kind image|video|audio|world --generated]
   ununu-unutv media extract-frame --project ID --media ID --seconds 3.9 [--node ID --title 标题]
   ununu-unutv media qa-sheet --project ID --media ID --node ID [--data '{"times":[0.5,6,11.5]}' --title 标题]
+  ununu-unutv media separate-audio --project ID --media ID --node ID [--title 标题]
   ununu-unutv media publish --project ID --media ID [--provider ark --expires 86400]
   ununu-unutv media prepare|preparation --project ID --media ID [--force]
   ununu-unutv asset create|list ...
   ununu-unutv asset version --project ID --asset ID --media ID [--payload '{}']
   ununu-unutv production create|list|get|update|reset|plan-script|breakdowns --project ID [--production ID --source-node ID --data '{}']
+  ununu-unutv script get|row-add|row-update|row-delete --project ID --node ID [--row ID --data '{}']
   ununu-unutv story get|save --project ID --production ID [--data '{}']
   ununu-unutv bible get|save --project ID --production ID [--data '{}']
   ununu-unutv contribution add|list --project ID --production ID [--target-type TYPE --target ID --data '{}']
@@ -123,7 +128,7 @@ Usage:
   ununu-unutv shot list|add|update --project ID --production ID [--shot ID --data '{}']
   ununu-unutv unit list|create|update|compile|preflight|run --project ID --production ID [--unit ID --data '{}']
   ununu-unutv evaluation list|add --project ID --production ID [--data '{}']
-  ununu-unutv sequence-previs create|list|get|update|versions|review --project ID --production ID [--previs ID --revision N --state accepted|rejected --data '{}']
+  ununu-unutv sequence-previs create|list|get|update|versions|playback-receipt|playback-receipts|review --project ID --production ID [--previs ID --revision N --state accepted|rejected --data '{}']
   ununu-unutv visual-context compile|list --project ID --production ID [--previs ID --shot ID]
   ununu-unutv take-memory add|list --project ID --production ID [--unit ID --data '{}']
   ununu-unutv decision-trace add|list --project ID --production ID [--target-type TYPE --target ID --data '{}']
@@ -137,6 +142,9 @@ Usage:
   ununu-unutv workflow cinematic-start --project ID --production ID --source-node ID [--target-duration 30] [--series ID --episode N] [--data '{}']
   ununu-unutv workflow cinematic-status --project ID [--automation-run ID]
   ununu-unutv workflow cinematic-author --project ID [--automation-run ID] --file /absolute/episode-package.json
+  ununu-unutv workflow cinematic-author-screenplay --project ID --automation-run ID --screenplay-file /absolute/screenplay.md
+  ununu-unutv workflow cinematic-review-screenplay --project ID --automation-run ID --review-file /absolute/reviews.json
+  ununu-unutv workflow cinematic-revise-screenplay --project ID --automation-run ID --expected-document ID --expected-revision N --expected-checksum SHA256 --reason TEXT
   ununu-unutv workflow canvas-reflow --project ID [--automation-run ID]
   ununu-unutv workflow provider-reconcile --project ID [--automation-run ID]
   ununu-unutv workflow cinematic-advance --project ID [--automation-run ID]
@@ -191,7 +199,6 @@ async function execute(app, positionals, flags) {
     });
   }
   if (area === "workflow" && action === "one-shot") {
-    // Compatibility alias: use the canonical cinematic workflow, never the legacy canvas pipeline.
     const data = objectFlag(flags, "data");
     const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true" || data.dryRun === true;
     return app.startShortDramaWorkflow({
@@ -226,6 +233,9 @@ async function execute(app, positionals, flags) {
     automationRunId: flags["automation-run"] || undefined,
     package: objectFileOrFlag(flags)
   });
+  if (area === "workflow" && action === "cinematic-author-screenplay") return executeScreenplayAuthoringCommand(app, flags);
+  if (area === "workflow" && action === "cinematic-review-screenplay") return executeScreenplayReviewCommand(app, flags);
+  if (area === "workflow" && action === "cinematic-revise-screenplay") return executeScreenplayRevisionCommand(app, flags);
   if (area === "workflow" && action === "canvas-reflow") return app.reflowCinematicCanvas({
     projectId: required(flags, "project"),
     automationRunId: flags["automation-run"] || undefined
@@ -297,6 +307,7 @@ async function execute(app, positionals, flags) {
   if (area === "media" && action === "import") return app.importMedia({ projectId: required(flags, "project"), filePath: required(flags, "file"), nodeId: flags.node, kind: flags.kind, generated: Boolean(flags.generated), title: flags.title });
   if (area === "media" && action === "extract-frame") return app.extractMediaFrame({ projectId: required(flags, "project"), mediaId: required(flags, "media"), seconds: numeric(flags, "seconds"), nodeId: flags.node, title: flags.title });
   if (area === "media" && action === "qa-sheet") return app.createVideoQaContactSheet({ projectId: required(flags, "project"), mediaId: required(flags, "media"), nodeId: required(flags, "node"), title: flags.title, ...objectFlag(flags, "data") });
+  if (area === "media" && action === "separate-audio") return app.separateMediaAudio({ projectId: required(flags, "project"), mediaId: required(flags, "media"), sourceNodeId: required(flags, "node"), title: flags.title });
   if (area === "media" && action === "publish") return app.publishMedia({ projectId: required(flags, "project"), mediaId: required(flags, "media"), provider: flags.provider, expiresInSeconds: numeric(flags, "expires", 86400) });
   if (area === "media" && action === "prepare") return app.prepareMedia({ projectId: required(flags, "project"), mediaId: required(flags, "media"), force: booleanFlag(flags, "force") });
   if (area === "media" && action === "preparation") return app.getMediaPreparation({ projectId: required(flags, "project"), mediaId: required(flags, "media") });
@@ -314,6 +325,10 @@ async function execute(app, positionals, flags) {
   if (area === "production" && action === "reset") return app.resetCinematicProduction({ projectId: required(flags, "project"), productionId: required(flags, "production"), sourceNodeId: flags["source-node"] || undefined });
   if (area === "production" && action === "plan-script") return app.planCinematicFromScript({ projectId: required(flags, "project"), productionId: required(flags, "production"), sourceNodeId: required(flags, "source-node"), ...objectFlag(flags, "data") });
   if (area === "production" && action === "breakdowns") return { breakdowns: await app.listScriptBreakdowns({ projectId: required(flags, "project"), productionId: required(flags, "production") }) };
+  if (area === "script" && action === "get") return app.getScriptDocument({ projectId: required(flags, "project"), nodeId: required(flags, "node") });
+  if (area === "script" && action === "row-add") return app.createScriptRow({ projectId: required(flags, "project"), nodeId: required(flags, "node"), ...objectFlag(flags, "data") });
+  if (area === "script" && action === "row-update") return app.updateScriptRow({ projectId: required(flags, "project"), nodeId: required(flags, "node"), rowId: required(flags, "row"), ...objectFlag(flags, "data") });
+  if (area === "script" && action === "row-delete") return app.deleteScriptRow({ projectId: required(flags, "project"), nodeId: required(flags, "node"), rowId: required(flags, "row") });
   if (area === "story" && action === "get") return { storyPacket: await app.getStoryPacket({ projectId: required(flags, "project"), productionId: required(flags, "production") }) };
   if (area === "story" && action === "save") return app.saveStoryPacket({ projectId: required(flags, "project"), productionId: required(flags, "production"), storyPacket: objectFlag(flags, "data") });
   if (area === "bible" && action === "get") return { visualBible: await app.getVisualBible({ projectId: required(flags, "project"), productionId: required(flags, "production") }) };
@@ -402,7 +417,7 @@ async function execute(app, positionals, flags) {
   });
   if (area === "panorama" && action === "set") return app.setPanorama({ projectId: required(flags, "project"), nodeId: required(flags, "node"), mediaId: required(flags, "media"), metadata: objectFlag(flags, "metadata") });
   if (area === "panorama" && action === "get") return { panorama: await app.getPanorama({ projectId: required(flags, "project"), nodeId: required(flags, "node") }) };
-  if (area === "review" && action === "add") return app.reviewTarget({ projectId: required(flags, "project"), targetType: flags.type, targetId: required(flags, "target"), state: required(flags, "state"), note: flags.note });
+  if (area === "review" && action === "add") return app.reviewTarget({ projectId: required(flags, "project"), targetType: flags.type, targetId: required(flags, "target"), state: required(flags, "state"), note: flags.note, ...(flags.reviewId ? { reviewId: flags.reviewId } : {}), ...(flags.evidence ? { evidence: objectFlag(flags, "evidence") } : {}) });
   if (area === "timeline" && action === "create") return app.createTimeline({
     projectId: required(flags, "project"),
     title: flags.title,
@@ -468,8 +483,6 @@ if (parsed.positionals[0] === "serve") {
   console.log(JSON.stringify({ ok: true, url: `http://127.0.0.1:${address.port}`, dataRoot: service.runtime.dataRoot }, null, 2));
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, async () => { await service.close(); process.exit(0); });
 } else {
-  // The CLI is a command boundary, not a background automation worker.
-  // Re-enabling recovery/execution here races the long-lived local service:
   // a freshly cancelled run could be revived by the next read-only CLI
   // command before the owner can inspect or edit its persisted state.
   const runtime = createLocalRuntime({ recoverAutomation: false, runAutomationExecutor: false });

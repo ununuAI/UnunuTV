@@ -48,6 +48,87 @@ test("nested performance-contract failures produce an episode-authoring repair a
   assert.match(nextAction.command.cli, /workflow cinematic-author/u);
 });
 
+test("shot-formation failures return cinematic-author instead of retrying the blocked stage", () => {
+  const nextAction = deriveNextActionFromTasks({
+    projectId: "project-1",
+    automationRunId: "run-1",
+    screenplayAuthority: {
+      targetType: "structured_script",
+      targetId: "script-node-1",
+      revision: 7,
+      contentChecksum: "a".repeat(64)
+    },
+    tasks: [{
+      id: "task-shot-design",
+      stage: "shot_design",
+      status: "blocked",
+      error: {
+        code: "cinematic_shot_formation_required",
+        message: "Shot rows need structural repair",
+        details: {
+          errors: [{
+            code: "shot_formation_row_incomplete",
+            rowId: "row-1",
+            issues: ["generation_segment_duration_4_to_15_required"]
+          }]
+        }
+      }
+    }]
+  });
+
+  assert.equal(nextAction.type, "author_episode");
+  assert.equal(nextAction.phase, "shot_design");
+  assert.equal(nextAction.worker, "episode-authoring");
+  assert.equal(nextAction.blocker.code, "cinematic_shot_formation_required");
+  assert.equal(nextAction.blocker.targetType, "structured_script");
+  assert.equal(nextAction.blocker.targetId, "script-node-1");
+  assert.equal(nextAction.blocker.revision, 7);
+  assert.equal(nextAction.blocker.taskId, "task-shot-design");
+  assert.equal(nextAction.blocker.details.contentChecksum, "a".repeat(64));
+  assert.equal(nextAction.blocker.details.errors[0].rowId, "row-1");
+  assert.deepEqual(nextAction.command.body.requiredRepairContract, {
+    blockerCode: "cinematic_shot_formation_required",
+    targetType: "structured_script",
+    targetId: "script-node-1",
+    expectedRevision: 7,
+    expectedContentChecksum: "a".repeat(64)
+  });
+  assert.match(nextAction.idempotencyKey, /script-node-1:r7:aaaaaaaaaaaa$/u);
+  assert.match(nextAction.command.cli, /workflow cinematic-author/u);
+  assert.doesNotMatch(nextAction.command.cli, /cinematic-advance/u);
+});
+
+test("an explicit screenplay revision contract overrides downstream blockers with one exact authoring action", () => {
+  const screenplayRevisionContract = {
+    format: "ScreenplayRevisionContractV1",
+    contractId: "run-1:screenplay-revision:script-node-1:r7:aaaaaaaaaaaa",
+    automationRunId: "run-1",
+    sourceNodeId: "script-node-1",
+    screenplayDocumentId: "script-node-1",
+    expectedRevision: 7,
+    expectedContentChecksum: "a".repeat(64),
+    reason: "Rewrite the complete screenplay before shot formation"
+  };
+  const nextAction = deriveNextActionFromTasks({
+    projectId: "project-1",
+    automationRunId: "run-1",
+    screenplayRevisionContract,
+    tasks: [{
+      id: "task-shot-design",
+      stage: "shot_design",
+      status: "blocked",
+      error: { code: "cinematic_shot_formation_required", message: "Old rows are blocked" }
+    }]
+  });
+
+  assert.equal(nextAction.type, "author_episode");
+  assert.equal(nextAction.phase, "screenplay_development");
+  assert.equal(nextAction.blocker.code, "screenplay_revision_authoring_required");
+  assert.equal(nextAction.blocker.targetId, "script-node-1");
+  assert.deepEqual(nextAction.command.body.requiredScreenplayRevisionContract, screenplayRevisionContract);
+  assert.equal(nextAction.idempotencyKey, screenplayRevisionContract.contractId);
+});
+
 test("nested owner gates expose the exact review target after contracts are valid", () => {
   const nextAction = deriveNextActionFromTasks({
     projectId: "project-1",

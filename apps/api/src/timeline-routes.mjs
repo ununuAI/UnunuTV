@@ -4,10 +4,16 @@ export async function handleTimelineRoutes({ body, json, method, pathname, reque
     json(response, 201, await runtime.app.createTimeline({ ...params, ...(await body(request)) })); return true;
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/timelines"))) {
-    json(response, 200, { timelines: await runtime.app.listTimelines(params) }); return true;
+    json(response, 200, { timelines: await runtime.app.listTimelines({
+      ...params,
+      includeStale: new URL(request.url, "http://127.0.0.1").searchParams.get("includeStale") === "true"
+    }) }); return true;
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/timelines/:timelineId"))) {
-    json(response, 200, await runtime.app.getTimeline(params)); return true;
+    json(response, 200, await runtime.app.getTimeline({
+      ...params,
+      includeStale: new URL(request.url, "http://127.0.0.1").searchParams.get("includeStale") === "true"
+    })); return true;
   }
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/timelines/:timelineId/clips"))) {
     json(response, 201, await runtime.app.addTimelineClip({ ...params, ...(await body(request)) })); return true;

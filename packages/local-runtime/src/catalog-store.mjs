@@ -2,12 +2,13 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { CATALOG_SCHEMA } from "./schema.mjs";
+import { configureSqliteConnection } from "./sqlite-connection-policy.mjs";
 
 export class CatalogStore {
   constructor(dataRoot) {
     this.dataRoot = dataRoot;
     mkdirSync(dataRoot, { recursive: true });
-    this.database = new DatabaseSync(path.join(dataRoot, "catalog.sqlite"));
+    this.database = configureSqliteConnection(new DatabaseSync(path.join(dataRoot, "catalog.sqlite")));
     this.database.exec(CATALOG_SCHEMA);
   }
 

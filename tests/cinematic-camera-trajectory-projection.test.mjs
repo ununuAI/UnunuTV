@@ -5,6 +5,11 @@ import {
   deriveCameraTrajectoryPlan
 } from "../packages/core/src/cinematic-camera-trajectory-projection.mjs";
 import { renderCleanPrevisFrameSvg } from "../packages/core/src/previs-svg-renderer.mjs";
+import {
+  bindDirectorRoutesToPrevisShot,
+  directorActorRoutesHaveTopologyCollision,
+  spreadCollocatedDirectorActorRoutes
+} from "../packages/core/src/director-previs-render-policy.mjs";
 
 const shot = {
   shotId: "shot-phone-boundary",
@@ -62,8 +67,78 @@ test("accepted Director route projects into a valid compound camera contract", (
   assert.equal(cameraTrajectoryNeedsProjection({ ...shot, cameraTrajectoryPlan: plan }), false);
 });
 
+test("episode-absolute Director route times are normalized to shot-local focus times", () => {
+  const plan = deriveCameraTrajectoryPlan({
+    shot: {
+      ...shot,
+      durationSeconds: 8
+    },
+    camera: {
+      id: "camera-episode-absolute",
+      position: { x: 6.8, y: 1.35, z: 2.1 },
+      target: { x: 6.8, y: 1.35, z: 4.1 },
+      fov: 54
+    },
+    route: {
+      id: "camera-route-episode-absolute",
+      startMs: 79000,
+      endMs: 87000,
+      points: [
+        { x: 6.8, y: 1.35, z: 2.1, atMs: 79000 },
+        { x: 6.8, y: 1.35, z: 1.3, atMs: 87000 }
+      ]
+    },
+    cleanCaptures: {
+      startCaptureId: "capture-start",
+      midCaptureId: "capture-mid",
+      endCaptureId: "capture-end"
+    }
+  });
+  assert.deepEqual(plan.focusDistancePlan.map((entry) => entry.atSeconds), [0, 8]);
+  assert.match(plan.directionDefinition, /@0\.00秒.+@8\.00秒/u);
+});
+
 test("clean previs frame has no route overlays, arrows, labels or timing text", () => {
   const svg = renderCleanPrevisFrameSvg({ shot, phase: "mid" }).toString("utf8");
   assert.match(svg, /^<\?xml/);
   assert.doesNotMatch(svg, /marker-end|摄影机轨迹|TOP 2\.5D|CAMERA POV|<text/u);
+});
+
+test("clean previs frame preserves route-bound ensemble topology when shot blocking is narrative text", () => {
+  const routeBoundShot = bindDirectorRoutesToPrevisShot({
+    shot: {
+      ...shot,
+      shotId: "shot-ensemble",
+      blocking: { actors: ["八人按分工协作"] }
+    },
+    routes: [
+      {
+        id: "actor-route-shot-ensemble-1",
+        type: "character",
+        label: "许岚 · S09",
+        points: [{ x: 4, y: 0, z: 2 }, { x: 4.5, y: 0, z: 3 }]
+      },
+      {
+        id: "actor-route-shot-ensemble-2",
+        type: "character",
+        label: "陆星野 · S09",
+        points: [{ x: 7, y: 0, z: 2 }, { x: 6.5, y: 0, z: 3 }]
+      }
+    ]
+  });
+  const svg = renderCleanPrevisFrameSvg({ shot: routeBoundShot, phase: "start" }).toString("utf8");
+  assert.equal((svg.match(/<circle /g) || []).length, 2);
+});
+
+test("collocated Director actor routes are spread without changing route membership", () => {
+  const routes = [1, 2].map((index) => ({
+    id: `actor-route-shot-overlap-${index}`,
+    type: "character",
+    label: `人物${index}`,
+    points: [{ x: 9.5, y: 0, z: 2.3 }, { x: 9.5, y: 0, z: 2.3 }]
+  }));
+  assert.equal(directorActorRoutesHaveTopologyCollision({ routes, shotId: "shot-overlap" }), true);
+  const spread = spreadCollocatedDirectorActorRoutes({ routes, shotId: "shot-overlap" });
+  assert.equal(spread.length, 2);
+  assert.equal(directorActorRoutesHaveTopologyCollision({ routes: spread, shotId: "shot-overlap" }), false);
 });

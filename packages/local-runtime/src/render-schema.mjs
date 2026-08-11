@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS render_jobs (
   output_media_id TEXT,
   error_json TEXT,
   idempotency_key TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   started_at TEXT,
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS export_masters (
   preset TEXT NOT NULL,
   checksum TEXT NOT NULL,
   lineage_json TEXT NOT NULL DEFAULT '{}',
+  is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS technical_qc_reports (
@@ -36,6 +38,7 @@ CREATE TABLE IF NOT EXISTS technical_qc_reports (
   media_id TEXT NOT NULL,
   status TEXT NOT NULL,
   report_json TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_technical_qc_render ON technical_qc_reports(render_job_id, created_at DESC);
@@ -47,6 +50,7 @@ CREATE TABLE IF NOT EXISTS delivery_packages (
   kind TEXT NOT NULL,
   status TEXT NOT NULL,
   manifest_json TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   UNIQUE(project_id, render_job_id, kind)
 );

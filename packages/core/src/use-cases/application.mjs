@@ -6,6 +6,7 @@ import { createScriptUseCases } from "./script-use-cases.mjs";
 import { createCinematicProductionUseCases } from "./cinematic-production-use-cases.mjs";
 import { createCinematicProductionResetUseCase } from "./cinematic-production-reset-use-case.mjs";
 import { createCinematicAssetAuthorityUseCases } from "./cinematic-asset-authority-use-cases.mjs";
+import { createCinematicAssetAuthorityAggregateUseCases } from "./cinematic-asset-authority-aggregate-use-cases.mjs";
 import { createCharacterVoiceAuthorityUseCases } from "./character-voice-authority-use-cases.mjs";
 import { createProjectControlUseCases } from "./project-control-use-cases.mjs";
 import { createStoryboardUseCases } from "./storyboard-use-cases.mjs";
@@ -45,8 +46,14 @@ export function createApplication(ports) {
     openCanvas, openProject, pollRun, restoreNode, runNode, saveDirectorStage, setPanorama, setWorkflowLayer,
     updateNode, updateProject, updateProviderSettings
   } = foundation;
-  const { createScriptRow, deleteScriptRow, getScriptDocument, updateScriptRow } = createScriptUseCases(ports);
-  const { createVideoQaContactSheet, extractMediaFrame, getMediaPreparation, importDataMedia, importMedia, prepareMedia, publishMedia } = createMediaUseCases(ports, {
+  const {
+    createScriptRow,
+    deleteScriptRow,
+    getScriptDocument,
+    saveScreenplayDocument,
+    updateScriptRow
+  } = createScriptUseCases(ports);
+  const { createVideoQaContactSheet, extractMediaFrame, getMediaPreparation, importDataMedia, importMedia, prepareMedia, publishMedia, separateMediaAudio } = createMediaUseCases(ports, {
     createNode: (input) => createNode(input),
     updateNode: (input) => updateNode(input),
     connectEdge: (input) => connectEdge(input)
@@ -57,6 +64,8 @@ export function createApplication(ports) {
   const sequenceWorkspace = createCinematicSequenceWorkspaceUseCases(ports);
   const cinematicProduction = createCinematicProductionUseCases(ports, {
     budget,
+    connectEdge: (input) => connectEdge(input),
+    createNode: (input) => createNode(input),
     knowledge: ports.knowledge ?? null,
     pollRun: (input) => pollRun(input),
     runNode: (input) => runNode(input),
@@ -68,11 +77,19 @@ export function createApplication(ports) {
   const cinematicAssetAuthority = createCinematicAssetAuthorityUseCases(ports, {
     addAssetVersion,
     budget,
+    getMedia: (projectId, mediaId) => ports.media.open(projectId, mediaId),
+    importAuthorityImage: (input) => ports.media.importBytes(input),
     listAssets,
+    prepareMedia: (input) => prepareMedia(input),
     runNode: (input) => runNode(input),
     updateNode: (input) => updateNode(input)
   });
-  const characterVoiceAuthority = createCharacterVoiceAuthorityUseCases(ports, { updateNode: (input) => updateNode(input) }), storyboard = createStoryboardUseCases(ports, {
+  const cinematicAssetAuthorityAggregate = createCinematicAssetAuthorityAggregateUseCases(ports, cinematicAssetAuthority);
+  const characterVoiceAuthority = createCharacterVoiceAuthorityUseCases(ports, {
+    connectEdge: (input) => connectEdge(input),
+    createNode: (input) => createNode(input),
+    updateNode: (input) => updateNode(input)
+  }), storyboard = createStoryboardUseCases(ports, {
     budget,
     compileStoryboardPrompt: cinematicAssetAuthority.compileStoryboardPrompt,
     pollRun: (input) => pollRun(input),
@@ -99,6 +116,7 @@ export function createApplication(ports) {
     getDirectorStage: (input) => getDirectorStage(input),
     directorCinematic,
     sequenceWorkspace,
+    composeGridNode: (input) => grid.composeGridNode(input),
     listAssets, pollRun: (input) => pollRun(input), projectControl, render: renderJobs, runNode: (input) => runNode(input), scriptPlanning, storyboards: storyboard, timeline
   });
   const cinematicWorkflow = createCinematicWorkflowUseCases(ports, {
@@ -112,8 +130,13 @@ export function createApplication(ports) {
     series,
     storyboards: storyboard,
     skillContext: ports.skillContext,
+    runProjectTransaction: typeof ports.projects.runInTransaction === "function"
+      ? (input) => ports.projects.runInTransaction(input.projectId, input.work, { operation: input.operation })
+      : null,
     createScriptRow,
+    deleteScriptRow,
     getScriptDocument,
+    saveScreenplayDocument,
     updateScriptRow,
     scriptPlanning,
     createNode: (input) => createNode(input),
@@ -249,6 +272,7 @@ export function createApplication(ports) {
     ...cinematicProduction, ...characterVoiceAuthority,
     ...cinematicProductionReset,
     ...cinematicAssetAuthority,
+    ...cinematicAssetAuthorityAggregate,
     ...storyboard,
     ...timeline,
     ...budget,
@@ -279,6 +303,7 @@ export function createApplication(ports) {
     createGroup,
     createNode,
     restoreNode,
+    separateMediaAudio,
     createProject,
     createScriptRow,
     createVideoQaContactSheet,
@@ -309,6 +334,7 @@ export function createApplication(ports) {
     runNode,
     saveDirectorStage,
     saveNodePrompt,
+    saveScreenplayDocument,
     setPanorama,
     setWorkflowLayer,
     updateNode,

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.mjs",
   "dependencies": {
-    "@ununu/unutv-contracts": "0.1.0"
+    "@ununu/unutv-contracts": "0.1.0",
+    "sharp": "^0.34.5"
   }
 }

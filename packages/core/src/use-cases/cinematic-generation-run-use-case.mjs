@@ -1,48 +1,71 @@
-import { assertCinematicPromptDraft, assertFormalGenerationIntent, createBoundPromptDocumentV1, promptDocumentReferenceBindings, UnuTvError, nowIso, requireObject, requireText } from "@ununu/unutv-contracts";
+import { assertCinematicPromptDraft, assertFormalGenerationIntent, UnuTvError, nowIso, requireObject, requireText } from "@ununu/unutv-contracts";
 import { FORMAL_GENERATION_UNIT_RUN } from "../cinematic-workflow-policy.mjs";
-
+import {
+  assessGenerationUnitCharacterIdentityBindings,
+  cinematicCharacterIdentitySourceVersions,
+  deriveCinematicCharacterIdentityBindings
+} from "../cinematic-character-identity-policy.mjs";
+import {
+  CINEMATIC_VIRTUAL_AUTHORITY_EDGE_ROLE,
+  cinematicReferenceEdgeRole,
+  createCinematicCanvasPromptDocument,
+  normalizeCinematicInputDecision
+} from "../cinematic-canvas-prompt-graph-policy.mjs";
+import { CINEMATIC_SCENE_AUTHORITY_EDGE_ROLE } from "../cinematic-scene-authority-policy.mjs";
+import {
+  auditCompiledProviderReferenceSet,
+  requireGenerationExecutionDependencies,
+  syncGenerationNode
+} from "./cinematic-generation-run-helpers.mjs";
+export { auditCompiledProviderReferenceSet } from "./cinematic-generation-run-helpers.mjs";
 const VIDEO_NODE_KINDS = new Set(["video", "videoShot", "video-clip"]);
 
-export function auditCompiledProviderReferenceSet(envelope, parameters) {
-  const bindings = Array.isArray(envelope?.referenceBindings) ? envelope.referenceBindings : [];
-  const providerMediaIds = Array.isArray(parameters?.referenceMediaIds) ? parameters.referenceMediaIds.filter(Boolean) : [];
-  const frameIds = new Set([parameters?.firstFrameMediaId, parameters?.lastFrameMediaId].filter(Boolean));
-  const expected = bindings
-    .filter((binding) => binding?.providerEligible !== false && !frameIds.has(binding?.mediaId))
-    .sort((left, right) => Number(left.providerIndex || 0) - Number(right.providerIndex || 0));
-  const expectedMediaIds = expected.map((binding) => binding.mediaId).filter(Boolean);
-  const errors = [];
-  if (expectedMediaIds.length !== providerMediaIds.length || expectedMediaIds.some((mediaId, index) => mediaId !== providerMediaIds[index])) {
-    errors.push({ code: "compiled_provider_reference_manifest_mismatch", message: "Compiled reference bindings and generationParameters.referenceMediaIds differ", expectedMediaIds, providerMediaIds });
-  }
-  expected.forEach((binding, index) => {
-    if (Number(binding.providerIndex) !== index + 1) errors.push({ code: "compiled_provider_reference_index_mismatch", message: `Reference ${binding.mediaId} providerIndex is not ${index + 1}`, mediaId: binding.mediaId, providerIndex: binding.providerIndex });
-  });
-  return { ok: errors.length === 0, errors, bindings: expected, expectedMediaIds, providerMediaIds };
-}
-
-function requireExecutionDependencies(dependencies) {
-  if (typeof dependencies.runNode !== "function"
-    || typeof dependencies.pollRun !== "function"
-    || typeof dependencies.updateNode !== "function"
-    || typeof dependencies.saveNodePrompt !== "function") {
-    throw new TypeError("Missing generation unit execution dependencies");
-  }
-}
-
-async function syncNode(projects, updateNode, projectId, nodeId, payload) {
-  const current = await projects.getNode(projectId, nodeId);
-  return updateNode({ projectId, nodeId, expectedRevision: current.revision, payload: { ...current.payload, ...payload } });
-}
-
-async function auditLiveCanvasProductionGraph({ compilation, node, projectId, projects }) {
+export async function auditLiveCanvasProductionGraph({ compilation, node, projectId, projects }) {
   const prompt = await projects.getNodePrompt(projectId, node.id);
   const canvas = await projects.openCanvas(projectId, node.canvasId);
   const nodes = new Map((canvas?.nodes || []).map((entry) => [entry.id, entry]));
   const edges = canvas?.edges || [];
   const errors = [];
+  const virtualAuthorityReferences = compilation.envelope.sourceVersions?.canvasProductionGraph?.virtualAuthorityReferences;
+  if (!Array.isArray(virtualAuthorityReferences)) {
+    errors.push({
+      code: "canvas_virtual_authority_receipt_required",
+      message: "编译 sourceVersions 缺少 canonical virtualAuthorityReferences receipt。"
+    });
+  }
+  const expectedVirtualAuthorityReferences = Array.isArray(virtualAuthorityReferences)
+    ? virtualAuthorityReferences
+    : [];
+  const expectedDocument = createCinematicCanvasPromptDocument(compilation, {
+    audit: { virtualAuthorityReferences: expectedVirtualAuthorityReferences }
+  });
+  const referenceNodeIds = [...new Set((compilation.envelope.referenceBindings || [])
+    .map((binding) => binding.sourceNodeId)
+    .filter(Boolean))];
+  const expectedInputDecision = normalizeCinematicInputDecision(compilation, {
+    audit: { referenceNodeIds, virtualAuthorityReferences: expectedVirtualAuthorityReferences }
+  });
+  const expectedSourceVersions = compilation.envelope.sourceVersions ?? {};
   if (!prompt?.text?.trim() || prompt.text !== compilation.envelope.compiledContentPrompt) {
     errors.push({ code: "canvas_compiled_prompt_required", message: "正式生成节点必须显示当前编译版本的完整 Prompt。" });
+  }
+  if (JSON.stringify(prompt?.document ?? null) !== JSON.stringify(expectedDocument)) {
+    errors.push({ code: "canvas_prompt_document_mismatch", message: "画布 PromptDocument 与编译时完整参考 token 不一致；禁止在 run 阶段用更少 bindings 覆盖。" });
+  }
+  if (JSON.stringify(prompt?.parameters?.inputDecision ?? null) !== JSON.stringify(expectedInputDecision)) {
+    errors.push({ code: "canvas_input_decision_mismatch", message: "画布 normalized inputDecision 与编译版本不一致，必须重新编译而不是在 run 阶段修写。" });
+  }
+  if (JSON.stringify(prompt?.parameters?.sourceVersions ?? null) !== JSON.stringify(expectedSourceVersions)) {
+    errors.push({ code: "canvas_prompt_source_versions_mismatch", message: "画布 Prompt sourceVersions 与编译版本不一致。" });
+  }
+  if (node.payload?.cinematicPayloadHash !== compilation.envelope.payloadHash) {
+    errors.push({ code: "canvas_payload_hash_mismatch", message: "画布节点 payloadHash 与编译版本不一致。" });
+  }
+  if (JSON.stringify(node.payload?.cinematicInputDecision ?? null) !== JSON.stringify(expectedInputDecision)) {
+    errors.push({ code: "canvas_node_input_decision_mismatch", message: "画布节点 inputDecision 与编译版本不一致。" });
+  }
+  if (JSON.stringify(node.payload?.cinematicSourceVersions ?? null) !== JSON.stringify(expectedSourceVersions)) {
+    errors.push({ code: "canvas_node_source_versions_mismatch", message: "画布节点 sourceVersions 与编译版本不一致。" });
   }
   for (const binding of compilation.envelope.referenceBindings || []) {
     if (binding.required === false) continue;
@@ -55,7 +78,15 @@ async function auditLiveCanvasProductionGraph({ compilation, node, projectId, pr
       });
       continue;
     }
-    const role = `cinematic_reference:${binding.role || "reference"}`;
+    if (source.id === node.id) {
+      errors.push({
+        code: "canvas_reference_source_must_be_distinct",
+        message: `${binding.displayName || binding.mediaId || binding.assetId || "参考资产"} 的来源节点不能与正式生成执行节点相同。`,
+        sourceNodeId: source.id
+      });
+      continue;
+    }
+    const role = cinematicReferenceEdgeRole(binding);
     if (!edges.some((edge) => edge.fromNodeId === source.id && edge.toNodeId === node.id && edge.role === role)) {
       errors.push({
         code: "canvas_reference_edge_required",
@@ -63,8 +94,136 @@ async function auditLiveCanvasProductionGraph({ compilation, node, projectId, pr
         sourceNodeId: source.id
       });
     }
+    if (binding.role === "scene_authority") {
+      const mismatches = [
+        role !== CINEMATIC_SCENE_AUTHORITY_EDGE_ROLE && "typed_edge_role",
+        source.kind !== "asset" && "source_kind",
+        source.payload?.authorityId !== binding.authorityId && "authority_id",
+        Number(source.payload?.authorityRevision) !== Number(binding.sceneAuthorityRevision ?? binding.authorityRevision) && "authority_revision",
+        source.payload?.assetId !== binding.assetId && "asset_id",
+        (source.payload?.currentVersionId ?? source.payload?.assetVersionId) !== (binding.assetVersionId ?? binding.versionId) && "asset_version_id",
+        source.payload?.currentMediaId !== binding.mediaId && "media_id",
+        source.payload?.currentMediaChecksum !== (binding.mediaChecksum ?? binding.checksum) && "media_checksum",
+        source.payload?.sceneTopologyRevision !== binding.topologyRevision && "topology_revision"
+      ].filter(Boolean);
+      if (mismatches.length) {
+        errors.push({
+          code: "canvas_scene_authority_version_mismatch",
+          message: `${binding.displayName || binding.authorityId || "场景 Authority"} 的 live asset 节点与编译时拓扑/媒体/checksum 不一致。`,
+          authorityId: binding.authorityId ?? null,
+          mismatches,
+          sourceNodeId: source.id
+        });
+      }
+    }
   }
-  return { ok: errors.length === 0, errors, canvasId: node.canvasId };
+  const seenAuthorityIds = new Set();
+  const seenSourceNodeIds = new Set();
+  expectedVirtualAuthorityReferences.forEach((receipt, appearanceIndex) => {
+    if (
+      Number(receipt?.appearanceIndex) !== appearanceIndex
+      || typeof receipt?.authorityId !== "string"
+      || !receipt.authorityId.trim()
+      || !Number.isInteger(receipt?.authorityRevision)
+      || receipt.authorityRevision < 1
+      || typeof receipt?.virtualPersonAssetId !== "string"
+      || !receipt.virtualPersonAssetId.trim()
+      || typeof receipt?.provider !== "string"
+      || !receipt.provider.trim()
+      || typeof receipt?.source !== "string"
+      || !receipt.source.trim()
+      || typeof receipt?.sourceNodeId !== "string"
+      || !receipt.sourceNodeId.trim()
+      || receipt?.edgeRole !== CINEMATIC_VIRTUAL_AUTHORITY_EDGE_ROLE
+    ) {
+      errors.push({
+        code: "canvas_virtual_authority_receipt_mismatch",
+        message: `第 ${appearanceIndex + 1} 个 virtual Authority receipt 缺失或顺序/字段不完整。`,
+        appearanceIndex,
+        receipt
+      });
+      return;
+    }
+    if (seenAuthorityIds.has(receipt.authorityId) || seenSourceNodeIds.has(receipt.sourceNodeId)) {
+      errors.push({
+        code: "canvas_virtual_authority_receipt_not_one_to_one",
+        message: "virtual Authority receipt 必须按出场顺序一一对应独立 Authority 与独立源节点。",
+        appearanceIndex,
+        authorityId: receipt.authorityId,
+        sourceNodeId: receipt.sourceNodeId
+      });
+      return;
+    }
+    seenAuthorityIds.add(receipt.authorityId);
+    seenSourceNodeIds.add(receipt.sourceNodeId);
+    const source = nodes.get(receipt.sourceNodeId);
+    if (!source || source.payload?.auditOnly === true || source.payload?.canvasHidden === true || source.kind !== "asset") {
+      errors.push({
+        code: "canvas_virtual_authority_node_required",
+        message: `${receipt.authorityId} 缺少编译 receipt 指定的独立、可见 Authority asset 节点。`,
+        appearanceIndex,
+        authorityId: receipt.authorityId,
+        sourceNodeId: receipt.sourceNodeId
+      });
+      return;
+    }
+    if (source.id === node.id) {
+      errors.push({
+        code: "canvas_reference_source_must_be_distinct",
+        message: `${receipt.authorityId} 的 virtual Authority 节点不能与正式生成执行节点自引用。`,
+        appearanceIndex,
+        authorityId: receipt.authorityId,
+        sourceNodeId: source.id
+      });
+      return;
+    }
+    const identity = source.payload?.externalProviderIdentity
+      ?? source.payload?.identityProvenance
+      ?? source.payload?.currentIdentityProvenance
+      ?? {};
+    const sourceVirtualPersonAssetIds = new Set([
+      source.payload?.virtualPersonAssetId,
+      identity.assetId,
+      identity.virtualPersonAssetId,
+      ...(Array.isArray(source.payload?.virtualPersonAssetIds) ? source.payload.virtualPersonAssetIds : [])
+    ].filter(Boolean));
+    if (
+      source.payload?.authorityId !== receipt.authorityId
+      || Number(source.payload?.authorityRevision) !== Number(receipt.authorityRevision)
+      || identity.provider !== receipt.provider
+      || identity.source !== receipt.source
+      || !sourceVirtualPersonAssetIds.has(receipt.virtualPersonAssetId)
+    ) {
+      errors.push({
+        code: "canvas_virtual_authority_node_version_mismatch",
+        message: `${receipt.authorityId} 的 live Authority node 与编译 receipt 的 provider/source/revision/virtual person ID 不一致。`,
+        appearanceIndex,
+        authorityId: receipt.authorityId,
+        authorityRevision: receipt.authorityRevision,
+        sourceNodeId: source.id,
+        virtualPersonAssetId: receipt.virtualPersonAssetId
+      });
+      return;
+    }
+    const identityEdges = edges.filter((edge) => (
+      edge.fromNodeId === source.id
+      && edge.toNodeId === node.id
+      && edge.role === CINEMATIC_VIRTUAL_AUTHORITY_EDGE_ROLE
+    ));
+    if (identityEdges.length !== 1) {
+      errors.push({
+        code: identityEdges.length
+          ? "canvas_virtual_authority_edge_ambiguous"
+          : "canvas_virtual_authority_edge_required",
+        message: `${receipt.authorityId} 必须以唯一 typed semantic identity edge 连接到正式生成节点。`,
+        appearanceIndex,
+        authorityId: receipt.authorityId,
+        edgeRole: CINEMATIC_VIRTUAL_AUTHORITY_EDGE_ROLE,
+        sourceNodeId: source.id
+      });
+    }
+  });
+  return { ok: errors.length === 0, errors, canvasId: node.canvasId, expectedInputDecision, prompt };
 }
 
 export function createCinematicGenerationRunUseCase({
@@ -74,13 +233,13 @@ export function createCinematicGenerationRunUseCase({
   getGenerationUnit,
   linkGenerationUnitRun,
   listProviderRuns,
+  listAssetAuthorities,
   pollRun,
   projects,
   runNode,
-  saveNodePrompt,
   updateNode
 }) {
-  const dependencies = { budget, pollRun, runNode, saveNodePrompt, updateNode };
+  const dependencies = { budget, pollRun, runNode, updateNode };
 
   return async function runGenerationUnit(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
@@ -89,11 +248,85 @@ export function createCinematicGenerationRunUseCase({
     const billingMode = input.billingMode ?? "provider_account";
     const budgetless = billingMode !== "legacy_budget";
     const unitRecord = await getGenerationUnit({ projectId, productionId, generationUnitId });
-    const compilation = await getCompilationRecord(projectId, productionId, generationUnitId);
+    if (!unitRecord.generationUnit.sequenceWorkspaceBinding) {
+      throw new UnuTvError(
+        "sequence_previs_required",
+        "正式视频提交前必须绑定已接受的连续预演与本镜视觉上下文",
+        409,
+        { generationUnitId }
+      );
+    }
+    const requestedCompilationId = typeof input.formalGenerationIntent?.compilationId === "string"
+      ? input.formalGenerationIntent.compilationId.trim()
+      : "";
+    const compilation = await getCompilationRecord(
+      projectId,
+      productionId,
+      generationUnitId,
+      requestedCompilationId
+        ? { compilationId: requestedCompilationId, includeInactive: true }
+        : false
+    );
     if (!compilation) throw new UnuTvError("prompt_compilation_required", "Compile and preflight this generation unit before formal generation", 409);
     const staleSources = await findCompilationStaleness(projectId, productionId, unitRecord, compilation);
     if (staleSources.length > 0) {
       throw new UnuTvError("stale_prompt_compilation", "A Prompt source changed after compilation; recompile before generation", 409, { staleSources });
+    }
+    const authorities = typeof listAssetAuthorities === "function"
+      ? await listAssetAuthorities(projectId, productionId)
+      : [];
+    const characterAuthorityIds = Array.isArray(unitRecord.generationUnit.characterAuthorityIds)
+      ? unitRecord.generationUnit.characterAuthorityIds
+      : [];
+    const identityAudit = assessGenerationUnitCharacterIdentityBindings({
+      authorities,
+      characterAuthorityIds,
+      generationUnit: unitRecord.generationUnit
+    });
+    const derivedIdentity = deriveCinematicCharacterIdentityBindings({ authorities, characterAuthorityIds });
+    const currentIdentitySourceVersions = cinematicCharacterIdentitySourceVersions(derivedIdentity.bindings);
+    const compiledIdentitySourceVersions = compilation.envelope.sourceVersions?.characterIdentityBindings ?? null;
+    const compiledVirtualPersonAssetIds = compilation.envelope.generationParameters?.virtualPersonAssetIds ?? [];
+    const compiledCanvasVirtualAuthorityVersions = (
+      compilation.envelope.sourceVersions?.canvasProductionGraph?.virtualAuthorityReferences ?? []
+    ).map((receipt) => ({
+      authorityId: receipt.authorityId,
+      authorityRevision: receipt.authorityRevision,
+      provider: receipt.provider,
+      source: receipt.source,
+      virtualPersonAssetId: receipt.virtualPersonAssetId
+    }));
+    if (!identityAudit.ok
+      || JSON.stringify(compiledIdentitySourceVersions) !== JSON.stringify(currentIdentitySourceVersions)
+      || JSON.stringify(compiledVirtualPersonAssetIds) !== JSON.stringify(derivedIdentity.virtualPersonAssetIds)
+      || JSON.stringify(compiledCanvasVirtualAuthorityVersions) !== JSON.stringify(currentIdentitySourceVersions)) {
+      throw new UnuTvError(
+        "stale_character_identity_binding",
+        "正式生成前人物 Authority、虚拟人物 ID 或 identity sourceVersions 已不一致；必须修正 GenerationUnit 并重新编译。",
+        409,
+        {
+          errors: identityAudit.errors,
+          compiledIdentitySourceVersions,
+          compiledCanvasVirtualAuthorityVersions,
+          currentIdentitySourceVersions,
+          compiledVirtualPersonAssetIds,
+          currentVirtualPersonAssetIds: derivedIdentity.virtualPersonAssetIds
+        }
+      );
+    }
+    if (compilation.envelope.manualOverride === true
+      || compilation.envelope.manualPromptProvided === true
+      || compilation.envelope.promptSource === "manual_preview") {
+      throw new UnuTvError(
+        "manual_prompt_formal_generation_forbidden",
+        "人工自由文本预览不得提交正式视频；请修改结构化字段并重新编译生成新的 payloadHash",
+        409,
+        {
+          compilationId: compilation.compilationId,
+          payloadHash: compilation.envelope.payloadHash,
+          promptSource: compilation.envelope.promptSource ?? null
+        }
+      );
     }
     if (!compilation.envelope.lint?.ok || !compilation.envelope.preflight?.ok) {
       throw new UnuTvError("cinematic_preflight_failed", "Prompt lint and model capability preflight must pass before formal generation", 409, {
@@ -141,18 +374,16 @@ export function createCinematicGenerationRunUseCase({
         { mismatches: intentMismatches }
       );
     }
-    if (unitRecord.generationUnit.canvasGraphPolicy === "required") {
-      const canvasGraph = await auditLiveCanvasProductionGraph({ compilation, node, projectId, projects });
-      if (!canvasGraph.ok) {
-        throw new UnuTvError(
-          "canvas_production_graph_not_ready",
-          "正式生成只能执行画布上已填写完整 Prompt 且参考资产连线齐全的节点",
-          409,
-          canvasGraph
-        );
-      }
+    const canvasGraph = await auditLiveCanvasProductionGraph({ compilation, node, projectId, projects });
+    if (!canvasGraph.ok) {
+      throw new UnuTvError(
+        "canvas_production_graph_not_ready",
+        "正式生成无条件要求画布上当前编译 Prompt、完整参考 token、typed edges、inputDecision 与 sourceVersions 一致。",
+        409,
+        canvasGraph
+      );
     }
-    requireExecutionDependencies(dependencies);
+    requireGenerationExecutionDependencies(dependencies);
     const parameters = compilation.envelope.generationParameters;
     const provider = requireText(parameters.provider, "generationParameters.provider");
     const model = requireText(parameters.model, "generationParameters.model");
@@ -189,43 +420,13 @@ export function createCinematicGenerationRunUseCase({
       cinematicPayloadHash: compilation.envelope.payloadHash,
       formalGenerationIntent,
       generationUnitId,
-      ...(parameters.firstFrameMediaId ? { firstFrameMediaId: parameters.firstFrameMediaId } : {}),
-      ...(parameters.lastFrameMediaId ? { lastFrameMediaId: parameters.lastFrameMediaId } : {}),
-      ...(parameters.referenceMediaIds?.length ? { referenceMediaIds: parameters.referenceMediaIds } : {}),
-      ...(parameters.virtualPersonAssetIds?.length ? { virtualPersonAssetIds: parameters.virtualPersonAssetIds } : {})
+      ...(canvasGraph.expectedInputDecision.firstFrameMediaId ? { firstFrameMediaId: canvasGraph.expectedInputDecision.firstFrameMediaId } : {}),
+      ...(canvasGraph.expectedInputDecision.lastFrameMediaId ? { lastFrameMediaId: canvasGraph.expectedInputDecision.lastFrameMediaId } : {}),
+      ...(canvasGraph.expectedInputDecision.ordinaryReferenceMediaIds.length ? { referenceMediaIds: canvasGraph.expectedInputDecision.ordinaryReferenceMediaIds } : {}),
+      ...(canvasGraph.expectedInputDecision.virtualPersonAssetIds.length ? { virtualPersonAssetIds: canvasGraph.expectedInputDecision.virtualPersonAssetIds } : {})
     };
-    const referenceMediaIds = Array.isArray(parameters.referenceMediaIds) ? parameters.referenceMediaIds : [];
-    const promptDocument = createBoundPromptDocumentV1(compilation.envelope.compiledContentPrompt, referenceAudit.bindings);
-    const documentMediaIds = promptDocumentReferenceBindings(promptDocument).map((binding) => binding.mediaId).filter(Boolean);
-    if (documentMediaIds.length !== referenceAudit.expectedMediaIds.length || documentMediaIds.some((mediaId, index) => mediaId !== referenceAudit.expectedMediaIds[index])) {
-      throw new UnuTvError("compiled_prompt_reference_manifest_mismatch", "Compiled prompt reference placeholders do not match the Provider reference manifest", 409, {
-        expectedMediaIds: referenceAudit.expectedMediaIds,
-        documentMediaIds
-      });
-    }
-    await saveNodePrompt({
-      projectId,
-      nodeId,
-      text: compilation.envelope.compiledContentPrompt,
-      document: promptDocument,
-      preserveText: true,
-      provider: parameters.provider,
-      modelId: parameters.model,
-      mode: parameters.mode,
-      parameters: {
-        mode: parameters.mode,
-        duration: parameters.duration,
-        ratio: parameters.aspectRatio,
-        resolution: parameters.resolution,
-        n: parameters.count,
-        generateAudio: parameters.generateAudio,
-        ...(parameters.firstFrameMediaId ? { firstFrameMediaId: parameters.firstFrameMediaId } : {}),
-        ...(parameters.lastFrameMediaId ? { lastFrameMediaId: parameters.lastFrameMediaId } : {}),
-        ...(parameters.virtualPersonAssetIds?.length ? { virtualPersonAssetIds: parameters.virtualPersonAssetIds } : {})
-      },
-      referenceMediaIds
-    });
-    await syncNode(projects, updateNode, projectId, nodeId, {
+    const referenceMediaIds = canvasGraph.expectedInputDecision.ordinaryReferenceMediaIds;
+    await syncGenerationNode(projects, updateNode, projectId, nodeId, {
       prompt: compilation.envelope.compiledContentPrompt,
       provider: parameters.provider,
       modelId: parameters.model,
@@ -266,7 +467,7 @@ export function createCinematicGenerationRunUseCase({
       run = await pollRun({ projectId, runId: run.id });
     }
     if (["queued", "running"].includes(run.status)) {
-      const canvasNode = await syncNode(projects, updateNode, projectId, nodeId, {
+      const canvasNode = await syncGenerationNode(projects, updateNode, projectId, nodeId, {
         generationStatus: "running",
         generationPhase: "provider_running",
         generationMessage: `Provider 正在生成 ${generationUnitId}，未重复提交`,
@@ -280,7 +481,7 @@ export function createCinematicGenerationRunUseCase({
       if (!outcomeUnknown && reservation?.status === "reserved") {
         settledReservation = await budget.releaseBudgetReservation({ projectId, reservationId: reservation.id });
       }
-      const canvasNode = await syncNode(projects, updateNode, projectId, nodeId, {
+      const canvasNode = await syncGenerationNode(projects, updateNode, projectId, nodeId, {
         generationStatus: outcomeUnknown ? "running" : "failed",
         generationPhase: outcomeUnknown ? "outcome_unknown" : "failed",
         generationMessage: outcomeUnknown ? "Provider 结果待确认，未重复提交" : (run.result?.message || "视频生成失败"),

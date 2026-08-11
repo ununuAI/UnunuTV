@@ -21,11 +21,17 @@ Manifest 固定保存：
 - `skillId` / `skillVersion` / `contractVersion`；
 - production 与剧本源节点 ID；
 - 目标总时长；
-- 13 个有序阶段：剧本分析、块规划、视觉圣经、资产设计、分镜设计、Prompt 编译、生图、生视频、声音、连续性 QA、时间线剪辑、候选渲染、交付 QA；
+- 14 个有序阶段：剧本分析、块规划、视觉圣经、资产设计、分镜设计、低模预演、生图、Prompt 编译、生视频、连续性 QA、时间线粗剪、声音后期、候选渲染、交付 QA；
 - 语义参考与首尾帧互斥、标注冲突阻断、局部镜头必须有全景定位图等参考策略；
 - `previs_accept_then_single_formal_intent` 执行边界与 `provider_account`
   计费模式；图片可在画布中多轮探索，正式视频在接受低模预演与当前精确预检后
   记录一次提交意图，不读取项目预算，也不显示第二个计费确认表单。
+
+最终交付使用独立于审看件的硬锁合同：主时间线和 `h264_vertical`
+渲染必须为 `480×854`、`24fps`、H.264、AAC、双声道 stereo。`h264_review`
+仍可用于内部审看，但 `delivery_qc` 和交付清单只接受
+`delivery/delivery_ready`；无音频、mono、错误 codec、错误 raster/fps
+以及 review preset 都是不可由 `acceptWarnings` 绕过的阻塞项。
 
 ## “一次生成几十秒”的真实含义
 

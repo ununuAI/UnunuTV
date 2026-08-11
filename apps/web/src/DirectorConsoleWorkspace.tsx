@@ -15,12 +15,15 @@ import {
   Map,
   Move3d,
   Package,
+  Pause,
+  Play,
   Refrigerator,
   Rotate3d,
   RotateCcw,
   RotateCw,
   Save,
   Scaling,
+  SkipBack,
   Trash2,
   Upload,
   UserRound,
@@ -37,7 +40,12 @@ import {
   useState,
 } from "react";
 import * as THREE from "three";
-import { directorObjectRequiresFullFrame } from "@ununu/unutv-contracts";
+import {
+  applyDirectorCompositionAtTime,
+  createDirectorArcRoutePoints,
+  directorObjectRequiresFullFrame,
+  normalizeDirectorCompositionV1,
+} from "@ununu/unutv-contracts";
 import { OldSparkRenderer, SplatFileType, SplatMesh } from "@sparkjsdev/spark";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { resolveWorkbenchMediaUrl } from "./workbench-api";
@@ -54,7 +62,7 @@ import type {
 } from "./director-types";
 
 type Selection = { kind: "environment" | "object" | "camera" | "route"; id: string };
-type ViewMode = "edit" | "camera";
+type ViewMode = "edit" | "top_2_5d" | "camera_first_person";
 type TranslationAxis = "x" | "y" | "z";
 
 interface DirectorViewportHandle {
@@ -262,7 +270,14 @@ const POSE_PRESETS: Array<{
 ];
 
 function cloneStage(stage: DirectorStageDocument) {
-  return JSON.parse(JSON.stringify(stage)) as DirectorStageDocument;
+  const cloned = JSON.parse(JSON.stringify(stage)) as DirectorStageDocument;
+  if (cloned.compositionData) {
+    cloned.compositionData = normalizeDirectorCompositionV1(
+      cloned.compositionData,
+      cloned,
+    ) as DirectorStageDocument["compositionData"];
+  }
+  return cloned;
 }
 
 /** Standard blocking mannequin. Identity stays explicit through a stable label. */
@@ -978,7 +993,8 @@ const DirectorViewport = forwardRef<
       const objectTargetGroup = environment && isStructuralProxy
         ? semanticGeometryHelpers
         : objectHelpers;
-      const isCameraControlOverlay = viewMode === "camera" && showShotControls;
+      const isCameraControlOverlay =
+        viewMode === "camera_first_person" && showShotControls;
       const isSelected =
         selected?.kind === "object" && selected.id === object.id;
       const material = new THREE.MeshStandardMaterial({
@@ -1111,7 +1127,10 @@ const DirectorViewport = forwardRef<
       }
     }
 
-    if (viewMode === "edit" && selected?.kind === "object") {
+    if (
+      (viewMode === "edit" || viewMode === "top_2_5d") &&
+      selected?.kind === "object"
+    ) {
       const object = stage.objects.find((candidate) => candidate.id === selected.id);
       const objectState = object ? selectedObjectStates.get(object.id) : undefined;
       if (
@@ -1132,7 +1151,7 @@ const DirectorViewport = forwardRef<
         ? selectedObjectStates.get(route.objectId)
         : undefined;
       if (
-        viewMode === "camera" &&
+        viewMode === "camera_first_person" &&
         route.objectId &&
         routeObjectState?.visible === false
       )
@@ -1167,9 +1186,11 @@ const DirectorViewport = forwardRef<
         );
         routeGroup.add(arrow);
       }
-      if (viewMode === "camera" && route.type === "camera") continue;
+      if (viewMode === "camera_first_person" && route.type === "camera")
+        continue;
       for (const point of route.points) {
-        const markerRadius = viewMode === "camera" ? 0.035 : 0.1;
+        const markerRadius =
+          viewMode === "camera_first_person" ? 0.035 : 0.1;
         const marker = new THREE.Mesh(
           new THREE.SphereGeometry(markerRadius, 12, 8),
           new THREE.MeshBasicMaterial({ color: route.color }),
@@ -1195,7 +1216,7 @@ const DirectorViewport = forwardRef<
       // The large frustum lines are visual only. Making the whole CameraHelper
       // pickable causes ordinary empty-space orbit drags to move the shot camera
       // whenever the pointer happens to cross one of its long guide lines.
-      helper.visible = viewMode === "edit";
+      helper.visible = viewMode !== "camera_first_person";
       helper.material.transparent = true;
       helper.material.opacity = isActiveHelper ? 0.82 : 0.2;
       helper.renderOrder = isActiveHelper ? 72 : 68;
@@ -1218,6 +1239,18 @@ const DirectorViewport = forwardRef<
     }
 
     const editCamera = new THREE.PerspectiveCamera(52, 1, 0.05, 500);
+    const topCamera = new THREE.OrthographicCamera(-8, 8, 8, -8, 0.05, 500);
+    topCamera.position.set(
+      stage.dimensions.width / 2,
+      Math.max(stage.dimensions.width, stage.dimensions.depth) * 2.2,
+      stage.dimensions.depth * 1.05,
+    );
+    topCamera.lookAt(
+      stage.dimensions.width / 2,
+      0,
+      stage.dimensions.depth / 2,
+    );
+    topCamera.updateProjectionMatrix();
     const savedEditView = editViewRef.current;
     if (savedEditView) {
       editCamera.position.copy(savedEditView.position);
@@ -1254,20 +1287,39 @@ const DirectorViewport = forwardRef<
     controls.addEventListener("change", markGaussianViewDirty);
     rememberEditView();
 
-    let activeCamera: THREE.PerspectiveCamera =
-      viewMode === "camera" && selectedCameraSpec
+    let activeCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera =
+      viewMode === "camera_first_person" && selectedCameraSpec
         ? stageCamera(
             selectedCameraSpec,
-            16 / 9,
+            captureDimensions(selectedCameraSpec.aspectRatio).width /
+              captureDimensions(selectedCameraSpec.aspectRatio).height,
             showShotControls ? undefined : environment,
           )
-        : editCamera;
+        : viewMode === "top_2_5d"
+          ? topCamera
+          : editCamera;
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
       const width = Math.max(320, Math.floor(rect.width));
       const height = Math.max(220, Math.floor(rect.height));
       renderer.setSize(width, height, false);
-      activeCamera.aspect = width / height;
+      if (activeCamera instanceof THREE.PerspectiveCamera) {
+        activeCamera.aspect =
+          viewMode === "camera_first_person" && selectedCameraSpec
+            ? captureDimensions(selectedCameraSpec.aspectRatio).width /
+              captureDimensions(selectedCameraSpec.aspectRatio).height
+            : width / height;
+      } else {
+        const halfDepth = Math.max(
+          stage.dimensions.width,
+          stage.dimensions.depth,
+        ) * 0.62;
+        const aspect = width / height;
+        activeCamera.left = -halfDepth * aspect;
+        activeCamera.right = halfDepth * aspect;
+        activeCamera.top = halfDepth;
+        activeCamera.bottom = -halfDepth;
+      }
       activeCamera.updateProjectionMatrix();
     };
     resize();
@@ -1338,7 +1390,7 @@ const DirectorViewport = forwardRef<
         : undefined;
     };
     const pointerDown = (event: PointerEvent) => {
-      if (viewMode !== "edit") return;
+      if (viewMode === "camera_first_person") return;
       const gizmoMatch = gizmoHitAt(event);
       const objectMatch = gizmoMatch ? undefined : objectHitAt(event);
       const targetMatch = objectMatch ? undefined : cameraTargetHitAt(event);
@@ -1585,10 +1637,13 @@ const DirectorViewport = forwardRef<
         !draggingCameraId &&
         !draggingCameraTargetId;
       if (controls.enabled) controls.update();
-      const controlsVisible = viewMode === "edit" || showShotControls;
+      const controlsVisible =
+        viewMode !== "camera_first_person" || showShotControls;
       const equirectMetricControlView =
         environment?.projection === "equirectangular" &&
-        (viewMode === "edit" || showShotControls || showSemanticGeometry);
+        (viewMode !== "camera_first_person" ||
+          showShotControls ||
+          showSemanticGeometry);
       // A pure 3D director stage has no panorama behind it. In camera mode its
       // semantic room and mannequins are the actual storyboard plate, so they
       // must remain visible even when route/control overlays are hidden.
@@ -1597,12 +1652,47 @@ const DirectorViewport = forwardRef<
       panoramaHelpers.visible = !equirectMetricControlView;
       routeHelpers.visible = controlsVisible;
       semanticGeometryHelpers.visible = !environment || showSemanticGeometry || equirectMetricControlView;
-      cameraHelpers.visible = viewMode === "edit";
+      cameraHelpers.visible = viewMode !== "camera_first_person";
       if (sparkRenderer && splatMesh?.isInitialized && gaussianViewDirty) {
         scene.updateMatrixWorld(true);
         activeCamera.updateMatrixWorld(true);
         sparkRenderer.update({ scene, viewToWorld: activeCamera.matrixWorld });
         gaussianViewDirty = false;
+      }
+      if (
+        viewMode === "camera_first_person" &&
+        selectedCameraSpec
+      ) {
+        const rect = canvas.getBoundingClientRect();
+        const canvasWidth = Math.max(320, Math.floor(rect.width));
+        const canvasHeight = Math.max(220, Math.floor(rect.height));
+        const ratio =
+          captureDimensions(selectedCameraSpec.aspectRatio).width /
+          captureDimensions(selectedCameraSpec.aspectRatio).height;
+        const viewportWidth = Math.min(canvasWidth, canvasHeight * ratio);
+        const viewportHeight = viewportWidth / ratio;
+        const viewportX = Math.floor((canvasWidth - viewportWidth) / 2);
+        const viewportY = Math.floor((canvasHeight - viewportHeight) / 2);
+        renderer.setScissorTest(true);
+        renderer.setScissor(0, 0, canvasWidth, canvasHeight);
+        renderer.setViewport(0, 0, canvasWidth, canvasHeight);
+        renderer.clear();
+        renderer.setScissor(
+          viewportX,
+          viewportY,
+          Math.floor(viewportWidth),
+          Math.floor(viewportHeight),
+        );
+        renderer.setViewport(
+          viewportX,
+          viewportY,
+          Math.floor(viewportWidth),
+          Math.floor(viewportHeight),
+        );
+      } else {
+        renderer.setScissorTest(false);
+        const size = renderer.getSize(new THREE.Vector2());
+        renderer.setViewport(0, 0, size.x, size.y);
       }
       renderer.render(scene, activeCamera);
       frame = window.requestAnimationFrame(render);
@@ -2012,10 +2102,14 @@ function emptyRoute(index: number): DirectorStageRoute {
     label: `人物路线 ${index + 1}`,
     type: "character",
     color: "#52d6ff",
+    pathMode: "polyline",
+    speedCurve: "linear",
+    startMs: 0,
+    endMs: 2000,
     points: [
-      { x: 1, y: 0, z: 1 },
-      { x: 4, y: 0, z: 5 },
-      { x: 8, y: 0, z: 10 },
+      { x: 1, y: 0, z: 1, atMs: 0 },
+      { x: 4, y: 0, z: 5, atMs: 1000 },
+      { x: 8, y: 0, z: 10, atMs: 2000 },
     ],
   };
 }
@@ -2029,6 +2123,16 @@ export function DirectorConsoleWorkspace({
   node: CanvasNode;
   onClose: () => void;
 }) {
+  type CompletePlaybackEvidence = {
+    playbackSessionId: string;
+    startedAt: string;
+    completedAt: string;
+    sampleCount: number;
+    maxObservedStepMs: number;
+    manualSeekCount: number;
+    intervals: Array<{ startSeconds: number; endSeconds: number }>;
+  };
+  type ActivePlaybackSession = Omit<CompletePlaybackEvidence, "completedAt" | "intervals">;
   const viewportRef = useRef<DirectorViewportHandle>(null);
   const panoramaInputRef = useRef<HTMLInputElement>(null);
   const sourceStage = node.directorStage;
@@ -2037,14 +2141,17 @@ export function DirectorConsoleWorkspace({
   );
   const draftRef = useRef<DirectorStageDocument | undefined>(draft);
   const [selection, setSelection] = useState<Selection>();
-  const [viewMode, setViewMode] = useState<ViewMode>("camera");
+  const [viewMode, setViewMode] = useState<ViewMode>("camera_first_person");
   const [showSemanticGeometry, setShowSemanticGeometry] = useState(
     () => sourceStage?.environment?.semanticGeometryVisibility === "always",
   );
   const [showShotControls, setShowShotControls] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [timelineCursorMs, setTimelineCursorMs] = useState(0);
+  const [completePlaybackEvidence, setCompletePlaybackEvidence] = useState<CompletePlaybackEvidence>();
+  const activePlaybackSessionRef = useRef<ActivePlaybackSession>();
   const historyRef = useRef<DirectorStageDocument[]>([]);
   const futureRef = useRef<DirectorStageDocument[]>([]);
   const [message, setMessage] = useState(() =>
@@ -2080,10 +2187,56 @@ export function DirectorConsoleWorkspace({
     draft && selection?.kind === "environment"
       ? draft.environment?.anchors.find((anchor) => anchor.id === selection.id)
       : undefined;
-  const activeCamera =
-    draft?.cameras.find((camera) => camera.id === draft.selectedCameraId) ??
-    draft?.cameras[0];
   const composition = draft?.compositionData;
+  const evaluatedStage = useMemo(
+    () => draft
+      ? (draft.compositionData
+          ? applyDirectorCompositionAtTime(draft, timelineCursorMs)
+          : draft) as DirectorStageDocument
+      : undefined,
+    [draft, timelineCursorMs],
+  );
+  const activeCamera =
+    evaluatedStage?.cameras.find(
+      (camera) => camera.id === evaluatedStage.selectedCameraId,
+    ) ?? evaluatedStage?.cameras[0];
+
+  useEffect(() => {
+    if (!isPlaying || !composition) return;
+    const durationMs = Math.max(0, composition.playback.durationSeconds * 1000);
+    if (!durationMs || !composition.readiness.playable) {
+      setIsPlaying(false);
+      return;
+    }
+    let frame = 0;
+    let previous = performance.now();
+    let cursor = timelineCursorMs;
+    const advance = (now: number) => {
+      const delta = Math.min(250, Math.max(0, now - previous));
+      previous = now;
+      cursor = Math.min(durationMs, cursor + delta);
+      const activeSession = activePlaybackSessionRef.current;
+      if (activeSession) {
+        activeSession.sampleCount += 1;
+        activeSession.maxObservedStepMs = Math.max(activeSession.maxObservedStepMs, delta);
+      }
+      setTimelineCursorMs(cursor);
+      if (cursor >= durationMs) {
+        if (activeSession && activeSession.manualSeekCount === 0) {
+          setCompletePlaybackEvidence({
+            ...activeSession,
+            completedAt: new Date().toISOString(),
+            intervals: [{ startSeconds: 0, endSeconds: durationMs / 1000 }],
+          });
+        }
+        activePlaybackSessionRef.current = undefined;
+        setIsPlaying(false);
+      }
+      else frame = window.requestAnimationFrame(advance);
+    };
+    frame = window.requestAnimationFrame(advance);
+    return () => window.cancelAnimationFrame(frame);
+  }, [composition, isPlaying]);
 
   const updateDraft = (
     updater: (current: DirectorStageDocument) => DirectorStageDocument,
@@ -2289,10 +2442,25 @@ export function DirectorConsoleWorkspace({
     }
   };
 
-  const exportCamera = async () => {
+  const exportCamera = async (
+    captureVariant:
+      | "blocking_plate"
+      | "composited_previs_frame" = "blocking_plate",
+  ) => {
     if (!draft || !activeCamera) return;
+    if (
+      captureVariant === "composited_previs_frame" &&
+      !composition?.readiness.playable
+    ) {
+      setMessage("当前 composition 缺少完整真实路径，禁止导出伪合成预演帧。");
+      return;
+    }
     setBusy(true);
-    setMessage("正在导出米制人物、机位与站位调度底图…");
+    setMessage(
+      captureVariant === "composited_previs_frame"
+        ? `正在导出 ${(timelineCursorMs / 1000).toFixed(2)}s 的逐帧合成预演…`
+        : "正在导出米制人物、机位与站位调度底图…",
+    );
     try {
       if (dirty)
         await Promise.resolve(
@@ -2311,11 +2479,16 @@ export function DirectorConsoleWorkspace({
           capture.dataUrl,
           capture.width,
           capture.height,
-          activeCamera.captureTimeMs ?? 0,
+          activeCamera.captureTimeMs ?? timelineCursorMs,
+          captureVariant,
         ),
       );
       setDirty(false);
-      setMessage(`已导出 ${activeCamera.label} 的米制调度底图；全景外观参考将独立绑定，不能把两者伪合成为视频首帧。`);
+      setMessage(
+        captureVariant === "composited_previs_frame"
+          ? `已导出 ${activeCamera.label} · ${(timelineCursorMs / 1000).toFixed(2)}s 合成预演帧。`
+          : `已导出 ${activeCamera.label} 的米制调度底图；全景外观参考将独立绑定，不能把两者伪合成为视频首帧。`,
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "机位导出失败");
     } finally {
@@ -2403,14 +2576,24 @@ export function DirectorConsoleWorkspace({
             编辑视角
           </button>
           <button
-            className={viewMode === "camera" ? "active" : ""}
-            onClick={() => setViewMode("camera")}
+            className={viewMode === "top_2_5d" ? "active" : ""}
+            onClick={() => setViewMode("top_2_5d")}
+            type="button"
+          >
+            <Map size={15} />
+            2.5D 俯视
+          </button>
+          <button
+            className={
+              viewMode === "camera_first_person" ? "active" : ""
+            }
+            onClick={() => setViewMode("camera_first_person")}
             type="button"
           >
             <Video size={15} />
-            机位视角
+            摄影机第一视角
           </button>
-          {viewMode === "camera" ? (
+          {viewMode === "camera_first_person" ? (
             <button
               className={showShotControls ? "active" : ""}
               onClick={() => setShowShotControls((current) => !current)}
@@ -2459,11 +2642,28 @@ export function DirectorConsoleWorkspace({
           <button
             className="primary"
             disabled={!activeCamera || busy}
-            onClick={() => void exportCamera()}
+            onClick={() => void exportCamera("blocking_plate")}
             type="button"
           >
             <Download size={15} />
             导出3D调度底图
+          </button>
+          <button
+            disabled={
+              !activeCamera ||
+              !composition?.readiness.playable ||
+              busy
+            }
+            onClick={() => void exportCamera("composited_previs_frame")}
+            title={
+              composition?.readiness.playable
+                ? "导出当前逐帧求值后的相机、人物、道具与环境合成预演帧"
+                : "缺少完整真实路径，禁止导出"
+            }
+            type="button"
+          >
+            <Film size={15} />
+            导出当前合成预演帧
           </button>
           <button
             disabled={draft.cameras.length === 0 || busy}
@@ -2703,6 +2903,73 @@ export function DirectorConsoleWorkspace({
             </div>
           </section>
         ) : null}
+        {node.boundaryFacts?.length ? (
+          <section className="director-boundary-facts">
+            <header>
+              <strong>段间接缝 / Boundary</strong>
+              <span>{node.boundaryFacts.length}</span>
+            </header>
+            <div className="director-boundary-list">
+              {node.boundaryFacts.map((boundary) => (
+                <article key={boundary.boundaryId}>
+                  <div>
+                    <strong>
+                      {boundary.fromLabel} → {boundary.toLabel}
+                    </strong>
+                    <span
+                      className={
+                        boundary.blockers.length ? "is-blocked" : "is-ready"
+                      }
+                    >
+                      {boundary.acceptanceStatus}
+                    </span>
+                  </div>
+                  <dl>
+                    <div>
+                      <dt>Segment decision</dt>
+                      <dd>{boundary.segmentDecision}</dd>
+                    </div>
+                    <div>
+                      <dt>剪辑语义</dt>
+                      <dd>
+                        {boundary.isAutomaticCutPoint
+                          ? `${boundary.cutType}${boundary.hiddenCut === true ? " · hidden cut" : boundary.hiddenCut === false ? " · visible cut" : " · hidden 未声明"}`
+                          : "模型分段边界，不是自动剪辑点"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Stable tail / rollback</dt>
+                      <dd>
+                        {boundary.stableTailFrameId || "未绑定"} /{" "}
+                        {boundary.rollbackFrameId || "未绑定"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Bridge segment</dt>
+                      <dd>{boundary.bridgeSegmentId || "无/未声明"}</dd>
+                    </div>
+                    <div>
+                      <dt>H0 / H1 / overlap</dt>
+                      <dd>
+                        {boundary.handoffMode} ·{" "}
+                        {boundary.h0MediaId || "H0未绑定"} /{" "}
+                        {boundary.h1MediaId || "H1未绑定"} ·{" "}
+                        {boundary.overlap}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Trim point</dt>
+                      <dd>{boundary.trimPoint}</dd>
+                    </div>
+                  </dl>
+                  {boundary.blockers.length ? (
+                    <p>{boundary.blockers.join("；")}</p>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
         {composition ? (
           <section className="director-composition-environment">
             <header>
@@ -2833,6 +3100,10 @@ export function DirectorConsoleWorkspace({
               onChange={(duration) =>
                 updateComposition((current) => ({
                   ...current,
+                  playback: {
+                    ...current.playback,
+                    durationSeconds: Math.max(0.1, duration),
+                  },
                   animation: {
                     ...current.animation,
                     duration: Math.max(0.1, duration),
@@ -2840,6 +3111,78 @@ export function DirectorConsoleWorkspace({
                 }))
               }
             />
+            <div className="director-timeline-playback">
+              <button
+                aria-label="回到预演起点"
+                onClick={() => {
+                  setIsPlaying(false);
+                  setTimelineCursorMs(0);
+                  activePlaybackSessionRef.current = undefined;
+                  setCompletePlaybackEvidence(undefined);
+                }}
+                type="button"
+              >
+                <SkipBack size={13} />
+                回到起点
+              </button>
+              <button
+                className="primary"
+                disabled={!composition.readiness.playable}
+                onClick={() => {
+                  if (isPlaying) {
+                    setIsPlaying(false);
+                    activePlaybackSessionRef.current = undefined;
+                    setCompletePlaybackEvidence(undefined);
+                    return;
+                  }
+                  const durationMs =
+                    composition.playback.durationSeconds * 1000;
+                  const startsAtZero = timelineCursorMs <= 1 || timelineCursorMs >= durationMs;
+                  if (timelineCursorMs >= durationMs) setTimelineCursorMs(0);
+                  activePlaybackSessionRef.current = startsAtZero
+                    ? {
+                        playbackSessionId: `director-playback-${Date.now()}`,
+                        startedAt: new Date().toISOString(),
+                        sampleCount: 1,
+                        maxObservedStepMs: 0,
+                        manualSeekCount: 0,
+                      }
+                    : undefined;
+                  setCompletePlaybackEvidence(undefined);
+                  setViewMode("camera_first_person");
+                  setIsPlaying(true);
+                }}
+                title={
+                  composition.readiness.playable
+                    ? "从当前时间连续逐帧播放"
+                    : "缺少真实摄影机路径或完整时间覆盖，禁止伪播放"
+                }
+                type="button"
+              >
+                {isPlaying ? <Pause size={13} /> : <Play size={13} />}
+                {isPlaying ? "暂停" : "播放预演"}
+              </button>
+              <span>
+                {composition.readiness.playable
+                  ? `${composition.playback.frameRate}fps · 连续求值`
+                  : `阻塞 ${composition.readiness.issues.length} 项`}
+              </span>
+            </div>
+            {completePlaybackEvidence ? (
+              <output
+                data-playback-receipt={JSON.stringify(completePlaybackEvidence)}
+                data-testid="director-playback-evidence"
+              >
+                完整播放已完成 · 0–{composition.playback.durationSeconds}s · 无手动跳转
+              </output>
+            ) : null}
+            {!composition.readiness.playable ? (
+              <ul className="director-composition-readiness">
+                {composition.readiness.issues.slice(0, 4).map((entry) => (
+                  <li key={`${entry.code}:${entry.path}`}>{entry.message}</li>
+                ))}
+              </ul>
+            ) : null}
             <label className="director-timeline-cursor">
               <span>时间指针（秒）</span>
               <input
@@ -2851,9 +3194,13 @@ export function DirectorConsoleWorkspace({
                   composition.animation.duration,
                   timelineCursorMs / 1000,
                 )}
-                onChange={(event) =>
-                  setTimelineCursorMs(Number(event.target.value) * 1000)
-                }
+                onChange={(event) => {
+                  if (activePlaybackSessionRef.current) activePlaybackSessionRef.current.manualSeekCount += 1;
+                  setIsPlaying(false);
+                  activePlaybackSessionRef.current = undefined;
+                  setCompletePlaybackEvidence(undefined);
+                  setTimelineCursorMs(Number(event.target.value) * 1000);
+                }}
               />
               <code>{(timelineCursorMs / 1000).toFixed(1)}s</code>
             </label>
@@ -2903,9 +3250,9 @@ export function DirectorConsoleWorkspace({
       <main className="director-console-main">
         <DirectorViewport
           ref={viewportRef}
-          stage={draft}
+          stage={evaluatedStage ?? draft}
           selected={selection}
-          selectedCameraId={draft.selectedCameraId}
+          selectedCameraId={(evaluatedStage ?? draft).selectedCameraId}
           showSemanticGeometry={showSemanticGeometry}
           showShotControls={showShotControls}
           viewMode={viewMode}
@@ -3347,22 +3694,150 @@ export function DirectorConsoleWorkspace({
                 <option value="action">动作路径</option>
               </select>
             </label>
-            <div className="director-route-points">
-              {selectedRoute.points.map((point, index) => (
-                <VectorFields
-                  key={index}
-                  label={`点 ${index + 1}`}
-                  value={point}
-                  onChange={(next) =>
+            <label className="director-text-field">
+              <span>绑定目标</span>
+              <select
+                value={selectedRoute.objectId ?? ""}
+                onChange={(event) =>
+                  updateRoute({
+                    ...selectedRoute,
+                    objectId: event.target.value || undefined,
+                  })
+                }
+              >
+                <option value="">未绑定（阻塞可播放）</option>
+                {(selectedRoute.type === "camera"
+                  ? draft.cameras
+                  : draft.objects
+                ).map((target) => (
+                  <option key={target.id} value={target.id}>
+                    {target.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="director-text-field">
+              <span>路径几何</span>
+              <select
+                value={selectedRoute.pathMode ?? "polyline"}
+                onChange={(event) => {
+                  const pathMode = event.target
+                    .value as NonNullable<DirectorStageRoute["pathMode"]>;
+                  const first = selectedRoute.points[0];
+                  const last = selectedRoute.points.at(-1);
+                  const startMs =
+                    selectedRoute.startMs ?? Number(first?.atMs ?? 0);
+                  const endMs =
+                    selectedRoute.endMs ??
+                    Number(
+                      last?.atMs ??
+                        composition?.playback.durationSeconds * 1000 ??
+                        1000,
+                    );
+                  const points =
+                    pathMode !== "polyline" && first && last
+                      ? createDirectorArcRoutePoints({
+                          direction: pathMode,
+                          durationMs: Math.max(1, endMs - startMs),
+                          start: first,
+                          end: last,
+                        }).map((point: DirectorStageRoute["points"][number]) => ({
+                          ...point,
+                          atMs: Number(point.atMs ?? 0) + startMs,
+                        }))
+                      : selectedRoute.points;
+                  updateRoute({
+                    ...selectedRoute,
+                    pathMode,
+                    startMs,
+                    endMs,
+                    points,
+                  });
+                }}
+              >
+                <option value="polyline">多节点折线</option>
+                <option value="arc_left">左弧线</option>
+                <option value="arc_right">右弧线</option>
+              </select>
+            </label>
+            <label className="director-text-field">
+              <span>速度曲线</span>
+              <select
+                value={selectedRoute.speedCurve ?? "linear"}
+                onChange={(event) =>
+                  updateRoute({
+                    ...selectedRoute,
+                    speedCurve: event.target
+                      .value as NonNullable<DirectorStageRoute["speedCurve"]>,
+                  })
+                }
+              >
+                <option value="linear">线性</option>
+                <option value="ease_in">缓入</option>
+                <option value="ease_out">缓出</option>
+                <option value="ease_in_out">缓入缓出</option>
+                <option value="step">阶跃</option>
+                <option value="hold">保持</option>
+              </select>
+            </label>
+            {selectedRoute.type === "camera" ? (
+              <label className="director-text-field">
+                <span>主体跟随</span>
+                <select
+                  value={selectedRoute.subjectFollowObjectId ?? ""}
+                  onChange={(event) =>
                     updateRoute({
                       ...selectedRoute,
-                      points: selectedRoute.points.map(
-                        (candidate, candidateIndex) =>
-                          candidateIndex === index ? next : candidate,
-                      ),
+                      subjectFollowObjectId: event.target.value || undefined,
                     })
                   }
-                />
+                >
+                  <option value="">固定注视目标</option>
+                  {draft.objects
+                    .filter((object) => object.type === "character")
+                    .map((object) => (
+                      <option key={object.id} value={object.id}>
+                        {object.label}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : null}
+            <div className="director-route-points">
+              {selectedRoute.points.map((point, index) => (
+                <div key={index}>
+                  <VectorFields
+                    label={`点 ${index + 1}`}
+                    value={point}
+                    onChange={(next) =>
+                      updateRoute({
+                        ...selectedRoute,
+                        points: selectedRoute.points.map(
+                          (candidate, candidateIndex) =>
+                            candidateIndex === index
+                              ? { ...candidate, ...next }
+                              : candidate,
+                        ),
+                      })
+                    }
+                  />
+                  <NumberField
+                    label={`点 ${index + 1} 时间（ms）`}
+                    value={Number(point.atMs ?? 0)}
+                    step={40}
+                    onChange={(atMs) =>
+                      updateRoute({
+                        ...selectedRoute,
+                        points: selectedRoute.points.map(
+                          (candidate, candidateIndex) =>
+                            candidateIndex === index
+                              ? { ...candidate, atMs: Math.max(0, atMs) }
+                              : candidate,
+                        ),
+                      })
+                    }
+                  />
+                </div>
               ))}
             </div>
             <button

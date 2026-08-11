@@ -8,6 +8,7 @@ export async function requireCinematicVisualProductionOwnerAcceptance({
   listShots,
   productionId,
   projectId,
+  requireShotAcceptance = true,
   shotIds,
   storyPacketId
 }) {
@@ -22,13 +23,17 @@ export async function requireCinematicVisualProductionOwnerAcceptance({
   const shots = requestedShotIds
     ? productionShots.filter((shot) => requestedShotIds.has(shot.shotId))
     : productionShots;
-  const audit = assessCinematicStoryShotOwnerReviews({ reviews, shots, storyPacket });
+  const audit = assessCinematicStoryShotOwnerReviews({
+    reviews,
+    shots: requireShotAcceptance ? shots : [],
+    storyPacket
+  });
   const errors = [...audit.errors];
-  if (!shots.length) errors.push({
+  if (requireShotAcceptance && !shots.length) errors.push({
     code: "shot_script_owner_acceptance_required",
     message: "正式视觉生产前必须先建立并接受当前分镜脚本 revision。"
   });
-  if (requestedShotIds && shots.length !== requestedShotIds.size) errors.push({
+  if (requireShotAcceptance && requestedShotIds && shots.length !== requestedShotIds.size) errors.push({
     code: "shot_script_owner_acceptance_required",
     message: "正式视觉生产引用了不存在或已失效的当前分镜脚本。"
   });

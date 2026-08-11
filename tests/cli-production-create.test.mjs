@@ -147,7 +147,7 @@ test("generation sequence state survives the official CLI create and list path",
     "--production", production.productionId,
     "--data", JSON.stringify({
       generationUnit: {
-        strategy: "single_shot", shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [], sequenceState,
+        strategy: "single_shot", segmentDecision: "new_shot", shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [], sequenceState,
         generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 4, aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: [] }
       },
       referenceBindings: []

@@ -205,9 +205,39 @@ export function auditCinematicContinuity({ generationUnit, shots = [], sourceEva
   const warnings = [];
   const boundaryType = generationUnit?.continuitySource?.boundaryType || "initial";
   const orderedShots = list(shots);
+  const sequenceState = generationUnit?.sequenceState;
+  const sequenceWorkspace = generationUnit?.sequenceWorkspaceBinding;
+  const sceneAuthority = generationUnit?.sceneAuthorityBinding;
+  const sequenceBoundaryReady = Boolean(
+    sequenceState
+    && typeof sequenceState === "object"
+    && text(sequenceState.sceneId)
+    && sequenceState.plannedStartState
+    && typeof sequenceState.plannedStartState === "object"
+    && Object.keys(sequenceState.plannedStartState).length
+    && sequenceState.plannedEndState
+    && typeof sequenceState.plannedEndState === "object"
+    && Object.keys(sequenceState.plannedEndState).length
+    && text(sequenceWorkspace?.sequencePrevisId)
+    && Number.isInteger(sequenceWorkspace?.sequencePrevisRevision)
+    && text(sequenceWorkspace?.visualContextBundleId)
+    && text(sceneAuthority?.authorityId)
+    && Number.isInteger(sceneAuthority?.authorityRevision)
+    && text(sceneAuthority?.topologyRevision)
+  );
+  let sequenceBoundaryShots = 0;
   for (const shot of orderedShots) {
     if (!shot?.continuityPlan?.entry || !shot?.continuityPlan?.exit) {
-      pushError(errors, "continuity_plan_required", `${shot?.shotId || "未命名镜头"} 缺少结构化入口/出口连续性状态。`, { shotId: shot?.shotId });
+      if (orderedShots.length === 1 && sequenceBoundaryReady) {
+        sequenceBoundaryShots += 1;
+        warnings.push({
+          code: "continuity_sequence_workspace_boundary_used",
+          message: `${shot?.shotId || "未命名镜头"} 的入口/出口由当前 Sequence Previs、VisualContext、场景拓扑与 GenerationUnit sequenceState 联合承载。`,
+          shotId: shot?.shotId
+        });
+      } else {
+        pushError(errors, "continuity_plan_required", `${shot?.shotId || "未命名镜头"} 缺少结构化入口/出口连续性状态。`, { shotId: shot?.shotId });
+      }
       continue;
     }
     validateScreenDirection(shot, errors);
@@ -247,7 +277,8 @@ export function auditCinematicContinuity({ generationUnit, shots = [], sourceEva
       sourceEvaluationId: sourceEvaluation?.evaluationId ?? null,
       sourceMediaId: sourceEvaluation?.mediaId ?? null,
       sourceChecksum: sourceEvaluation?.checksum ?? null,
-      structuredShots: orderedShots.filter((shot) => shot?.continuityPlan?.entry && shot?.continuityPlan?.exit).length
+      structuredShots: orderedShots.filter((shot) => shot?.continuityPlan?.entry && shot?.continuityPlan?.exit).length,
+      sequenceBoundaryShots
     },
     errors,
     ok: errors.length === 0,

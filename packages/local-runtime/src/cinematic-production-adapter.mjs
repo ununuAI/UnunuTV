@@ -1,66 +1,12 @@
-import { UnuTvError, nowIso } from "@ununu/unutv-contracts";
-
-function parse(value, fallback) {
-  if (value === null || value === undefined || value === "") return fallback;
-  return typeof value === "string" ? JSON.parse(value) : value;
-}
-
-function transaction(database, work) {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const result = work();
-    database.exec("COMMIT");
-    return result;
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function revisionConflict(entity, expected, actual) {
-  if (expected !== undefined && Number(expected) !== actual) {
-    throw new UnuTvError("revision_conflict", `Expected ${entity} revision ${expected}, found ${actual}`, 409);
-  }
-}
-
-function currentVersion(database, table, idColumn, id) {
-  return database.prepare(`SELECT current_version AS currentVersion FROM ${table} WHERE ${idColumn}=?`).get(id)?.currentVersion;
-}
-
-function hydrateProduction(database, row) {
-  if (!row) return undefined;
-  const version = database.prepare(`
-    SELECT team_manifest_ids_json, legacy_extensions_json
-    FROM cinematic_production_versions WHERE production_id=? AND version=?
-  `).get(row.id, row.current_version);
-  return {
-    productionId: row.id,
-    projectType: row.project_type,
-    productionMode: row.production_mode,
-    storyPacketIds: database.prepare("SELECT id FROM story_packets WHERE production_id=? ORDER BY is_primary DESC, created_at").all(row.id).map((entry) => entry.id),
-    visualBibleId: database.prepare("SELECT id FROM visual_bibles WHERE production_id=? ORDER BY updated_at DESC LIMIT 1").get(row.id)?.id ?? null,
-    shotIds: database.prepare("SELECT id FROM cinematic_shots WHERE production_id=? AND is_active=1 ORDER BY order_index, created_at").all(row.id).map((entry) => entry.id),
-    generationUnitIds: database.prepare("SELECT id FROM generation_units WHERE production_id=? AND is_active=1 ORDER BY created_at").all(row.id).map((entry) => entry.id),
-    assetAuthorityIds: database.prepare("SELECT id FROM cinematic_asset_authorities WHERE production_id=? AND is_active=1 ORDER BY authority_type, created_at").all(row.id).map((entry) => entry.id),
-    teamManifestIds: parse(version?.team_manifest_ids_json, []),
-    reviewState: row.review_state,
-    revision: row.current_version,
-    title: row.title,
-    sourceNodeId: row.source_node_id,
-    legacyExtensions: parse(version?.legacy_extensions_json, {}),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-function readVersionedJson(database, { currentTable, id, idColumn = "id", productionId, versionColumn, versionIdColumn, versionTable }) {
-  const row = database.prepare(`SELECT * FROM ${currentTable} WHERE ${idColumn}=?${productionId ? " AND production_id=?" : ""}`)
-    .get(...(productionId ? [id, productionId] : [id]));
-  if (!row) return undefined;
-  const version = database.prepare(`SELECT ${versionColumn} AS payload FROM ${versionTable} WHERE ${versionIdColumn}=? AND version=?`)
-    .get(id, row.current_version);
-  return parse(version?.payload, undefined);
-}
+import { nowIso } from "@ununu/unutv-contracts";
+import {
+  assertCinematicStorageRevision as revisionConflict,
+  hydrateCinematicProduction as hydrateProduction,
+  parseCinematicStorageValue as parse,
+  readCinematicCurrentVersion as currentVersion,
+  readCinematicVersionedJson as readVersionedJson,
+  runCinematicStorageTransaction as transaction
+} from "./cinematic-production-storage-helpers.mjs";
 
 export function attachCinematicProductionMethods(prototype, recordEvent) {
   prototype.createCinematicProduction = function createCinematicProduction(projectId, production) {
@@ -257,9 +203,13 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     return compilation;
   };
 
-  prototype.getCinematicImagePromptCompilation = function getCinematicImagePromptCompilation(projectId, productionId, targetType, targetId) {
-    const row = this.database(projectId).prepare("SELECT * FROM cinematic_image_prompt_compilations WHERE production_id=? AND target_type=? AND target_id=? ORDER BY created_at DESC LIMIT 1")
-      .get(productionId, targetType, targetId);
+  prototype.getCinematicImagePromptCompilation = function getCinematicImagePromptCompilation(projectId, productionId, targetType, targetId, includeInactive = false) {
+    const row = this.database(projectId).prepare(`
+      SELECT * FROM cinematic_image_prompt_compilations
+      WHERE production_id=? AND target_type=? AND target_id=?
+        ${includeInactive ? "" : "AND is_active=1"}
+      ORDER BY created_at DESC LIMIT 1
+    `).get(productionId, targetType, targetId);
     return row ? { compilationId: row.id, productionId, targetType, targetId, envelope: parse(row.envelope_json, {}), createdAt: row.created_at } : undefined;
   };
 
@@ -283,17 +233,25 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     });
   };
 
-  prototype.getCinematicShot = function getCinematicShot(projectId, productionId, shotId) {
-    return readVersionedJson(this.database(projectId), {
+  prototype.getCinematicShot = function getCinematicShot(projectId, productionId, shotId, includeInactive = false) {
+    const database = this.database(projectId);
+    if (!includeInactive && !database.prepare(
+      "SELECT 1 FROM cinematic_shots WHERE id=? AND production_id=? AND is_active=1"
+    ).get(shotId, productionId)) return undefined;
+    return readVersionedJson(database, {
       currentTable: "cinematic_shots", id: shotId, productionId, versionTable: "cinematic_shot_versions",
       versionIdColumn: "shot_id", versionColumn: "spec_json"
     });
   };
 
-  prototype.listCinematicShots = function listCinematicShots(projectId, productionId) {
+  prototype.listCinematicShots = function listCinematicShots(projectId, productionId, includeInactive = false) {
     const database = this.database(projectId);
-    return database.prepare("SELECT id FROM cinematic_shots WHERE production_id=? AND is_active=1 ORDER BY order_index, created_at").all(productionId)
-      .map((row) => this.getCinematicShot(projectId, productionId, row.id));
+    return database.prepare(`
+      SELECT id FROM cinematic_shots
+      WHERE production_id=? ${includeInactive ? "" : "AND is_active=1"}
+      ORDER BY order_index, created_at
+    `).all(productionId)
+      .map((row) => this.getCinematicShot(projectId, productionId, row.id, includeInactive));
   };
 
   prototype.saveCinematicScriptBreakdown = function saveCinematicScriptBreakdown(projectId, breakdown, expectedRevision) {
@@ -304,10 +262,10 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
       const version = (current?.current_version ?? 0) + 1;
       const saved = { ...breakdown, revision: version };
       database.prepare(`
-        INSERT INTO cinematic_script_breakdowns (id, production_id, source_node_id, source_document_revision, current_version, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO cinematic_script_breakdowns (id, production_id, source_node_id, source_document_revision, current_version, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
         ON CONFLICT(id) DO UPDATE SET source_document_revision=excluded.source_document_revision,
-          current_version=excluded.current_version, updated_at=excluded.updated_at
+          current_version=excluded.current_version, is_active=1, updated_at=excluded.updated_at
       `).run(saved.breakdownId, saved.productionId, saved.sourceNodeId, saved.sourceDocumentRevision, version, saved.createdAt, saved.updatedAt);
       database.prepare("INSERT INTO cinematic_script_breakdown_versions (breakdown_id, version, breakdown_json, created_at) VALUES (?, ?, ?, ?)")
         .run(saved.breakdownId, version, JSON.stringify(saved), saved.updatedAt);
@@ -316,10 +274,12 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     });
   };
 
-  prototype.getCinematicScriptBreakdown = function getCinematicScriptBreakdown(projectId, productionId, sourceNodeId) {
+  prototype.getCinematicScriptBreakdown = function getCinematicScriptBreakdown(projectId, productionId, sourceNodeId, includeInactive = false) {
     const database = this.database(projectId);
     const row = database.prepare(`
-      SELECT id, current_version FROM cinematic_script_breakdowns WHERE production_id=? AND source_node_id=?
+      SELECT id, current_version FROM cinematic_script_breakdowns
+      WHERE production_id=? AND source_node_id=?
+        ${includeInactive ? "" : "AND is_active=1"}
     `).get(productionId, sourceNodeId);
     if (!row) return undefined;
     const version = database.prepare("SELECT breakdown_json FROM cinematic_script_breakdown_versions WHERE breakdown_id=? AND version=?")
@@ -327,9 +287,17 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     return version ? JSON.parse(version.breakdown_json) : undefined;
   };
 
-  prototype.listCinematicScriptBreakdowns = function listCinematicScriptBreakdowns(projectId, productionId) {
-    return this.database(projectId).prepare("SELECT source_node_id AS sourceNodeId FROM cinematic_script_breakdowns WHERE production_id=? ORDER BY created_at")
-      .all(productionId).map((row) => this.getCinematicScriptBreakdown(projectId, productionId, row.sourceNodeId));
+  prototype.listCinematicScriptBreakdowns = function listCinematicScriptBreakdowns(projectId, productionId, includeInactive = false) {
+    return this.database(projectId).prepare(`
+      SELECT source_node_id AS sourceNodeId FROM cinematic_script_breakdowns
+      WHERE production_id=? ${includeInactive ? "" : "AND is_active=1"}
+      ORDER BY created_at
+    `).all(productionId).map((row) => this.getCinematicScriptBreakdown(
+      projectId,
+      productionId,
+      row.sourceNodeId,
+      includeInactive
+    ));
   };
 
   prototype.saveGenerationUnit = function saveGenerationUnit(projectId, productionId, unit, referenceBindings, expectedRevision) {
@@ -375,8 +343,11 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     });
   };
 
-  prototype.getGenerationUnit = function getGenerationUnit(projectId, productionId, generationUnitId) {
+  prototype.getGenerationUnit = function getGenerationUnit(projectId, productionId, generationUnitId, includeInactive = false) {
     const database = this.database(projectId);
+    if (!includeInactive && !database.prepare(
+      "SELECT 1 FROM generation_units WHERE id=? AND production_id=? AND is_active=1"
+    ).get(generationUnitId, productionId)) return undefined;
     const generationUnit = readVersionedJson(database, {
       currentTable: "generation_units", id: generationUnitId, productionId, versionTable: "generation_unit_versions",
       versionIdColumn: "generation_unit_id", versionColumn: "spec_json"
@@ -384,7 +355,7 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     if (!generationUnit) return undefined;
     const referenceBindings = database.prepare(`
       SELECT id, current_version FROM reference_bindings
-      WHERE generation_unit_id=? AND is_active=1 ORDER BY provider_index
+      WHERE generation_unit_id=? ${includeInactive ? "" : "AND is_active=1"} ORDER BY provider_index
     `).all(generationUnitId).map((row) => {
       const version = database.prepare("SELECT binding_json FROM reference_binding_versions WHERE reference_binding_id=? AND version=?")
         .get(row.id, row.current_version);
@@ -393,10 +364,14 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     return { generationUnit, referenceBindings };
   };
 
-  prototype.listGenerationUnits = function listGenerationUnits(projectId, productionId) {
+  prototype.listGenerationUnits = function listGenerationUnits(projectId, productionId, includeInactive = false) {
     const database = this.database(projectId);
-    return database.prepare("SELECT id FROM generation_units WHERE production_id=? AND is_active=1 ORDER BY created_at").all(productionId)
-      .map((row) => this.getGenerationUnit(projectId, productionId, row.id));
+    return database.prepare(`
+      SELECT id FROM generation_units
+      WHERE production_id=? ${includeInactive ? "" : "AND is_active=1"}
+      ORDER BY created_at
+    `).all(productionId)
+      .map((row) => this.getGenerationUnit(projectId, productionId, row.id, includeInactive));
   };
 
   prototype.saveProfessionalContribution = function saveProfessionalContribution(projectId, productionId, contribution) {
@@ -410,12 +385,13 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     return contribution;
   };
 
-  prototype.listProfessionalContributions = function listProfessionalContributions(projectId, productionId, targetType, targetId) {
+  prototype.listProfessionalContributions = function listProfessionalContributions(projectId, productionId, targetType, targetId, includeInactive = false) {
     const database = this.database(projectId);
     const clauses = ["production_id=?"];
     const parameters = [productionId];
     if (targetType) { clauses.push("target_type=?"); parameters.push(targetType); }
     if (targetId) { clauses.push("target_id=?"); parameters.push(targetId); }
+    if (!includeInactive) clauses.push("is_active=1");
     return database.prepare(`SELECT contribution_json FROM professional_contributions WHERE ${clauses.join(" AND ")} ORDER BY created_at`).all(...parameters)
       .map((row) => parse(row.contribution_json, {}));
   };
@@ -432,13 +408,46 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     return compilation;
   };
 
-  prototype.getPromptCompilation = function getPromptCompilation(projectId, productionId, generationUnitId) {
+  prototype.getPromptCompilation = function getPromptCompilation(projectId, productionId, generationUnitId, selection = false) {
+    const options = typeof selection === "object" && selection !== null
+      ? selection
+      : { includeInactive: selection === true };
+    const compilationId = typeof options.compilationId === "string"
+      ? options.compilationId.trim()
+      : "";
+    const includeInactive = options.includeInactive === true || Boolean(compilationId);
+    const clauses = ["production_id=?", "generation_unit_id=?"];
+    const parameters = [productionId, generationUnitId];
+    if (compilationId) {
+      clauses.push("id=?");
+      parameters.push(compilationId);
+    }
+    if (!includeInactive) clauses.push("is_active=1");
     const row = this.database(projectId).prepare(`
       SELECT id, production_id, generation_unit_id, envelope_json, created_at
-      FROM prompt_compilations WHERE production_id=? AND generation_unit_id=? ORDER BY created_at DESC LIMIT 1
-    `).get(productionId, generationUnitId);
+      FROM prompt_compilations
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY created_at DESC LIMIT 1
+    `).get(...parameters);
     if (!row) return undefined;
     return { compilationId: row.id, productionId: row.production_id, generationUnitId: row.generation_unit_id, envelope: parse(row.envelope_json, {}), createdAt: row.created_at };
+  };
+
+  prototype.getPromptCompilationById = function getPromptCompilationById(projectId, productionId, generationUnitId, compilationId) {
+    const row = this.database(projectId).prepare(`
+      SELECT id, production_id, generation_unit_id, envelope_json, created_at
+      FROM prompt_compilations
+      WHERE id=? AND production_id=? AND generation_unit_id=?
+      LIMIT 1
+    `).get(compilationId, productionId, generationUnitId);
+    if (!row) return undefined;
+    return {
+      compilationId: row.id,
+      productionId: row.production_id,
+      generationUnitId: row.generation_unit_id,
+      envelope: parse(row.envelope_json, {}),
+      createdAt: row.created_at
+    };
   };
 
   prototype.linkGenerationUnitRun = function linkGenerationUnitRun(projectId, generationUnitId, runId, compilationId, createdAt) {
@@ -461,8 +470,12 @@ export function attachCinematicProductionMethods(prototype, recordEvent) {
     return evaluation;
   };
 
-  prototype.listCinematicEvaluations = function listCinematicEvaluations(projectId, productionId) {
-    return this.database(projectId).prepare("SELECT evaluation_json FROM cinematic_evaluations WHERE production_id=? ORDER BY created_at DESC").all(productionId)
+  prototype.listCinematicEvaluations = function listCinematicEvaluations(projectId, productionId, includeInactive = false) {
+    return this.database(projectId).prepare(`
+      SELECT evaluation_json FROM cinematic_evaluations
+      WHERE production_id=? ${includeInactive ? "" : "AND is_active=1"}
+      ORDER BY created_at DESC
+    `).all(productionId)
       .map((row) => parse(row.evaluation_json, {}));
   };
 }

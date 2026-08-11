@@ -3,7 +3,11 @@ import { stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { UnuTvError } from "@ununu/unutv-contracts";
+import {
+  UnuTvError,
+  canonicalProjectId,
+  isCanonicalProjectId
+} from "@ununu/unutv-contracts";
 import { createLocalRuntime } from "@ununu/unutv-local-runtime";
 import { handleBudgetRoutes } from "./budget-routes.mjs";
 import { handleCinematicRoutes } from "./cinematic-routes.mjs";
@@ -17,15 +21,16 @@ import { handleTimelineRoutes } from "./timeline-routes.mjs";
 const DEFAULT_WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
 
 function json(response, status, value) {
-  const payload = JSON.stringify(value);
+  const payload = Buffer.from(JSON.stringify(value), "utf8");
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(payload),
+    "content-length": payload.byteLength,
     "access-control-allow-origin": "*",
     "access-control-allow-headers": "content-type",
     "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS"
   });
   response.end(payload);
+  return true;
 }
 
 async function body(request, maxBytes = 2_000_000) {
@@ -56,7 +61,14 @@ function match(pathname, pattern) {
 }
 
 function route(method, pathname, expectedMethod, pattern) {
-  return method === expectedMethod ? match(pathname, pattern) : undefined;
+  if (method !== expectedMethod) return undefined;
+  const params = match(pathname, pattern);
+  if (!params?.projectId) return params;
+  const projectId = canonicalProjectId(params.projectId);
+  if (!isCanonicalProjectId(projectId)) {
+    throw new UnuTvError("invalid_project_id", "projectId must be a canonical project UUID or its bare route UUID", 400);
+  }
+  return { ...params, projectId };
 }
 
 function isLoopbackRequest(request) {
@@ -277,6 +289,9 @@ async function dispatch(request, response, runtime, webRoot) {
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/media/:mediaId/qa-sheet"))) {
     return json(response, 201, await runtime.app.createVideoQaContactSheet({ ...params, ...(await body(request)) }));
   }
+  if ((params = route(method, pathname, "POST", "/api/projects/:projectId/media/:mediaId/separate-audio"))) {
+    return json(response, 201, await runtime.app.separateMediaAudio({ ...params, ...(await body(request)) }));
+  }
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/edges"))) {
     return json(response, 201, await runtime.app.connectEdge({ ...params, ...(await body(request)) }));
   }
@@ -358,7 +373,10 @@ async function dispatch(request, response, runtime, webRoot) {
     return json(response, 201, await runtime.app.planCinematicFromScript({ ...params, ...(await body(request)) }));
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/script-breakdowns"))) {
-    return json(response, 200, { breakdowns: await runtime.app.listScriptBreakdowns(params) });
+    return json(response, 200, { breakdowns: await runtime.app.listScriptBreakdowns({
+      ...params,
+      includeStale: url.searchParams.get("includeStale") === "true"
+    }) });
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/panoramas/:nodeId"))) {
     return json(response, 200, { panorama: await runtime.app.getPanorama(params) });

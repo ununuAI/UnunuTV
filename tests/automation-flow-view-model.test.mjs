@@ -7,7 +7,9 @@ test("full-auto task flow is visible as a 14-step plan before a run starts", () 
   assert.equal(tasks.length, 14);
   assert.equal(tasks[0].stage, "script_analysis");
   assert.equal(tasks[0].status, "planned");
-  assert.deepEqual(tasks.find((task) => task.stage === "continuity_qa").dependencies, ["video_generation", "sound_design"]);
+  assert.deepEqual(tasks.find((task) => task.stage === "continuity_qa").dependencies, ["video_generation"]);
+  assert.deepEqual(tasks.find((task) => task.stage === "sound_design").dependencies, ["timeline_edit"]);
+  assert.deepEqual(tasks.find((task) => task.stage === "candidate_render").dependencies, ["sound_design"]);
 });
 
 test("full-auto summary exposes parallel agents, current work, completion and failures", () => {

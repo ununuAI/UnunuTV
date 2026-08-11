@@ -8,9 +8,9 @@ import {
   videoModelDurationRange
 } from "../packages/contracts/src/index.mjs";
 
-test("Seedance 2.0 Mini exposes the verified cost-saving 480p mode", () => {
+test("Seedance 2.0 Mini is owner-locked to 480p", () => {
   const profile = getVideoModelCapability({ provider: "ark", model: ARK_SEEDANCE_2_MINI_MODEL_ID });
-  assert.deepEqual(profile.supportedResolutions, ["480p", "720p", "1080p"]);
+  assert.deepEqual(profile.supportedResolutions, ["480p"]);
   const preflight = preflightVideoModelCapability({
     generationParameters: {
       provider: "ark",
@@ -28,7 +28,7 @@ test("Seedance 2.0 Mini exposes the verified cost-saving 480p mode", () => {
   assert.equal(preflight.ok, true, JSON.stringify(preflight.errors));
 });
 
-test("Seedance 2.0 Mini blocks 1080p on reference-to-video before paid submission", () => {
+test("Seedance 2.0 Mini blocks non-480p requests before paid submission", () => {
   const preflight = preflightVideoModelCapability({
     generationParameters: {
       provider: "ark",
@@ -36,7 +36,7 @@ test("Seedance 2.0 Mini blocks 1080p on reference-to-video before paid submissio
       mode: "image_reference",
       duration: 12,
       aspectRatio: "9:16",
-      resolution: "1080p",
+      resolution: "720p",
       generateAudio: true,
       referenceMediaIds: ["media-storyboard"]
     },
@@ -136,8 +136,16 @@ test("Seedance virtual-person capability blocks missing IDs and accepts an expli
   assert.equal(missing.ok, false);
   assert.equal(missing.errors.some((entry) => entry.code === "missing_virtual_person_asset"), true);
 
-  const bound = preflightVideoModelCapability({
+  const wrongMode = preflightVideoModelCapability({
     generationParameters: { ...generationParameters, virtualPersonAssetIds: ["asset-20260310030618-88hlb"] },
+    generationUnit,
+    promptBytes: 100,
+    referenceBindings: []
+  });
+  assert.equal(wrongMode.errors.some((entry) => entry.code === "virtual_person_requires_image_reference"), true);
+
+  const bound = preflightVideoModelCapability({
+    generationParameters: { ...generationParameters, mode: "image_reference", virtualPersonAssetIds: ["asset-20260310030618-88hlb"] },
     generationUnit,
     promptBytes: 100,
     referenceBindings: []

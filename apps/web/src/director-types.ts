@@ -33,6 +33,11 @@ export interface DirectorStageRoute {
   type: DirectorStageRouteType;
   color: string;
   objectId?: string;
+  pathMode?: "polyline" | "arc_left" | "arc_right";
+  speedCurve?: "linear" | "ease" | "ease_in" | "ease_out" | "ease_in_out" | "step" | "hold";
+  subjectFollowObjectId?: string;
+  startMs?: number;
+  endMs?: number;
   points: DirectorStageRoutePoint[];
 }
 
@@ -111,8 +116,14 @@ export interface DirectorCompositionTrack {
   id: string;
   name?: string;
   targetId?: string;
+  pathMode?: "polyline" | "arc_left" | "arc_right";
+  speedCurve?: string;
+  subjectFollowObjectId?: string;
+  startMs?: number;
+  endMs?: number;
+  shotIds?: string[];
   keyframes: DirectorCompositionKeyframe[];
-  interpolation?: "linear" | "step" | "ease" | string;
+  interpolation?: "linear" | "step" | "ease" | "ease_in" | "ease_out" | "ease_in_out" | "hold" | string;
 }
 
 export interface DirectorCompositionAnimation {
@@ -127,6 +138,14 @@ export interface DirectorCompositionAnimation {
 }
 
 export interface DirectorCompositionData {
+  version: "director_composition_v1";
+  views: Array<"top_2_5d" | "camera_first_person" | "timeline">;
+  playback: {
+    frameRate: number;
+    durationSeconds: number;
+    interpolation: string;
+  };
+  axis: string;
   characters: DirectorStageObject[];
   characterGroups: Array<Record<string, unknown>>;
   cameras: DirectorStageCamera[];
@@ -151,6 +170,14 @@ export interface DirectorCompositionData {
     gaussianSplatScale: DirectorStageVector3;
     gaussianGroundSnapEnabled: boolean;
   };
+  readiness: {
+    playable: boolean;
+    issues: Array<{ code: string; message: string; path: string }>;
+  };
+  migration?: {
+    fromVersion: string;
+    normalizedAtRuntime: boolean;
+  };
 }
 
 export interface DirectorStageDocument {
@@ -172,11 +199,32 @@ export interface CanvasNode {
   id: string;
   title: string;
   directorStage?: DirectorStageDocument;
+  boundaryFacts?: DirectorBoundaryFact[];
+}
+
+export interface DirectorBoundaryFact {
+  boundaryId: string;
+  fromLabel: string;
+  toLabel: string;
+  segmentDecision: "new_shot" | "continuation_segment" | "one_take_segment" | "undeclared";
+  isAutomaticCutPoint: boolean;
+  cutType: string;
+  hiddenCut: boolean | null;
+  stableTailFrameId: string;
+  rollbackFrameId: string;
+  bridgeSegmentId: string;
+  handoffMode: string;
+  h0MediaId: string;
+  h1MediaId: string;
+  overlap: string;
+  trimPoint: string;
+  acceptanceStatus: string;
+  blockers: string[];
 }
 
 export interface VideoP0Actions {
   updateDirectorStage: (nodeId: string, directorStage: DirectorStageDocument, expectedRevision: number) => Promise<void> | void;
   updateDirectorEnvironment: (nodeId: string, environment: DirectorStageEnvironment, expectedRevision: number) => Promise<DirectorStageDocument>;
   importDirectorStagePanorama: (nodeId: string, directorStage: DirectorStageDocument, expectedRevision: number, dataUrl: string, title: string) => Promise<void> | void;
-  exportDirectorStageCamera: (nodeId: string, cameraId: string, dataUrl: string, width: number, height: number, captureTimeMs?: number, captureVariant?: "blocking_plate" | "context_wide") => Promise<void> | void;
+  exportDirectorStageCamera: (nodeId: string, cameraId: string, dataUrl: string, width: number, height: number, captureTimeMs?: number, captureVariant?: "blocking_plate" | "context_wide" | "composited_previs_frame") => Promise<void> | void;
 }

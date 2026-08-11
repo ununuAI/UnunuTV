@@ -28,6 +28,7 @@ export const STORYBOARD_VIDEO_REFERENCE_ROLES = Object.freeze([
 export const STORYBOARD_BATCH_KINDS = Object.freeze(["image", "video"]);
 export const STORYBOARD_BATCH_STATES = Object.freeze(["queued", "running", "partial", "succeeded", "failed", "blocked", "cancelled"]);
 export const STORYBOARD_BATCH_ITEM_STATES = Object.freeze(["queued", "running", "succeeded", "reused", "failed", "blocked", "cancelled"]);
+export const STORYBOARD_BATCH_SOURCE_LINEAGE_VERSION = "StoryboardBatchSourceLineageV1";
 
 function issue(path, message, code = "invalid_field") {
   return { code, message, path };
@@ -43,6 +44,31 @@ function text(value) {
 
 function result(issues) {
   return Object.freeze({ issues: Object.freeze(issues), ok: issues.length === 0 });
+}
+
+export function validateStoryboardBatchSourceLineage(value) {
+  const issues = [];
+  if (!record(value)) return result([issue("sourceLineage", "sourceLineage must be an object", "invalid_type")]);
+  if (value.version !== STORYBOARD_BATCH_SOURCE_LINEAGE_VERSION) issues.push(issue("version", "unsupported storyboard batch source lineage", "invalid_enum"));
+  for (const field of ["storyboardId", "storyPacketId", "visualBibleId", "capturedAt"]) {
+    if (!text(value[field])) issues.push(issue(field, `${field} is required`, "required"));
+  }
+  for (const field of ["storyboardRevision", "storyPacketRevision", "visualBibleRevision"]) {
+    if (!Number.isInteger(value[field]) || value[field] < 1) issues.push(issue(field, `${field} must be a positive integer`, "invalid_number"));
+  }
+  if (value.sequencePrevis !== null) {
+    if (!record(value.sequencePrevis) || !text(value.sequencePrevis.sequencePrevisId) || !Number.isInteger(value.sequencePrevis.revision) || value.sequencePrevis.revision < 1) {
+      issues.push(issue("sequencePrevis", "sequencePrevis must be null or an id/revision binding", "invalid_type"));
+    }
+  }
+  if (!Array.isArray(value.shots) || !value.shots.length) issues.push(issue("shots", "shots must be a non-empty ordered array", "required"));
+  else for (const [index, shot] of value.shots.entries()) {
+    for (const field of ["storyboardShotId", "shotId"]) if (!text(shot?.[field])) issues.push(issue(`shots[${index}].${field}`, `${field} is required`, "required"));
+    for (const field of ["order", "storyboardShotRevision", "shotRevision"]) {
+      if (!Number.isInteger(shot?.[field]) || shot[field] < 1) issues.push(issue(`shots[${index}].${field}`, `${field} must be a positive integer`, "invalid_number"));
+    }
+  }
+  return result(issues);
 }
 
 export function defaultStoryboardVideoReference() {
@@ -94,6 +120,11 @@ export function validateStoryboardShotV2(value) {
   if (!Number.isInteger(value.order) || value.order < 1) issues.push(issue("order", "order must be an integer >= 1", "invalid_number"));
   if (!STORYBOARD_SHOT_STATES.includes(value.status)) issues.push(issue("status", `status must be one of: ${STORYBOARD_SHOT_STATES.join(", ")}`, "invalid_enum"));
   if (!Array.isArray(value.requiredAssetAuthorityIds)) issues.push(issue("requiredAssetAuthorityIds", "requiredAssetAuthorityIds must be an array", "invalid_type"));
+  for (const field of ["imageSourceShotRevision", "videoSourceShotRevision"]) {
+    if (value[field] !== null && value[field] !== undefined && (!Number.isInteger(value[field]) || value[field] < 1)) {
+      issues.push(issue(field, `${field} must be null or a positive integer`, "invalid_number"));
+    }
+  }
   if (!record(value.videoReference)) issues.push(issue("videoReference", "videoReference must be an object", "invalid_type"));
   else {
     if (typeof value.videoReference.selected !== "boolean") issues.push(issue("videoReference.selected", "selected must be boolean", "invalid_type"));
@@ -159,6 +190,9 @@ export function assertStoryboardBatchItem(value) {
   if (!STORYBOARD_BATCH_ITEM_STATES.includes(value?.status)) issues.push(issue("status", "invalid storyboard batch item status", "invalid_enum"));
   if (!Number.isInteger(value?.attempt) || value.attempt < 0) issues.push(issue("attempt", "attempt must be a non-negative integer", "invalid_number"));
   if (!Number.isInteger(value?.order) || value.order < 1) issues.push(issue("order", "order must be a positive integer", "invalid_number"));
+  if (value?.sourceLineage !== null && value?.sourceLineage !== undefined) {
+    for (const entry of validateStoryboardBatchSourceLineage(value.sourceLineage).issues) issues.push({ ...entry, path: `sourceLineage.${entry.path}` });
+  }
   if (issues.length) throw Object.assign(new Error(`StoryboardBatchItem validation failed: ${issues.map((entry) => entry.message).join("; ")}`), { code: "invalid_storyboard_batch_item", details: issues });
   return value;
 }
@@ -172,6 +206,11 @@ export function assertStoryboardBatchJob(value) {
   if (!STORYBOARD_BATCH_STATES.includes(value?.status)) issues.push(issue("status", "invalid storyboard batch status", "invalid_enum"));
   if (typeof value?.approvedPaid !== "boolean") issues.push(issue("approvedPaid", "approvedPaid must be boolean", "invalid_type"));
   if (!Number.isInteger(value?.revision) || value.revision < 1) issues.push(issue("revision", "revision must be a positive integer", "invalid_number"));
+  for (const field of ["sourceLineage", "currentSourceLineage"]) {
+    if (value?.[field] !== null && value?.[field] !== undefined) {
+      for (const entry of validateStoryboardBatchSourceLineage(value[field]).issues) issues.push({ ...entry, path: `${field}.${entry.path}` });
+    }
+  }
   if (!Array.isArray(value?.items)) issues.push(issue("items", "items must be an array", "invalid_type"));
   else for (const item of value.items) {
     try { assertStoryboardBatchItem(item); }

@@ -26,6 +26,7 @@ function sceneKey(row) {
 
 export function compileCinematicScriptBreakdown({ document, projectId, productionId, storyPacket, visualBible, timestamp, previousRevision = 0 }) {
   if (!document?.rows?.length) throw new UnuTvError("script_rows_required", "At least one structured script row is required", 409);
+  const screenplayDocument = document.screenplayDocument ?? null;
   const groups = [];
   const byKey = new Map();
   for (const row of [...document.rows].sort((left, right) => left.orderIndex - right.orderIndex)) {
@@ -41,6 +42,7 @@ export function compileCinematicScriptBreakdown({ document, projectId, productio
   const shots = [];
   const scenes = groups.map((group, sceneIndex) => {
     const firstPayload = group.rows[0].payload ?? {};
+    const resolvedSceneId = `scene-${stablePart(document.nodeId)}-${stablePart(group.key)}`;
     const beats = group.rows.map((row, beatIndex) => {
       const payload = row.payload ?? {};
       const description = rowDescription(row);
@@ -55,6 +57,10 @@ export function compileCinematicScriptBreakdown({ document, projectId, productio
       const dialogue = normalizeDialogue(payload, storyPacket);
       const shot = {
         shotId,
+        sceneId: resolvedSceneId,
+        sceneOrder: sceneIndex + 1,
+        beatId: `beat-${stablePart(row.id)}`,
+        beatOrder: beatIndex + 1,
         order: shots.length + 1,
         // scenePurpose is the production-wide objective. A shot needs a local,
         // observable narrative job; copying the global objective into every shot
@@ -78,15 +84,28 @@ export function compileCinematicScriptBreakdown({ document, projectId, productio
           ...(text(payload.editIntent) ? { cutIntent: text(payload.editIntent) } : {}),
           ...(text(payload.injuryContinuity) ? { injuryContinuity: text(payload.injuryContinuity) } : {}),
           ...(text(payload.continuityLock) ? { continuityLock: text(payload.continuityLock) } : {}),
+          nextHandoff: text(payload.nextHandoff),
           sourceRowId: row.id
         },
+        constraints: object(payload.constraints),
+        nextHandoff: text(payload.nextHandoff),
         dialogue,
         requiredAssetIds: array(payload.requiredAssetIds),
         mustNotAppearYet: array(payload.mustNotAppearYet).length ? array(payload.mustNotAppearYet) : array(storyPacket.mustNotAppearYet),
         acceptanceCriteria: array(payload.acceptanceCriteria).length ? array(payload.acceptanceCriteria) : [`准确表达剧本节拍：${description}`],
         virtualPersonAssetIds: array(payload.virtualPersonAssetIds),
         generationStrategy: text(payload.generationStrategy, "designed_multi_shot"),
-        sourceScript: { nodeId: document.nodeId, documentRevision: document.revision, rowId: row.id, rowVersion: row.version },
+        sourceScript: {
+          nodeId: document.nodeId,
+          documentRevision: document.revision,
+          rowId: row.id,
+          rowVersion: row.version,
+          ...(screenplayDocument ? {
+            screenplayDocumentId: screenplayDocument.documentId,
+            screenplayDocumentRevision: screenplayDocument.revision,
+            screenplayDocumentChecksum: screenplayDocument.checksum
+          } : {})
+        },
         revision: 1
       };
       shots.push(shot);
@@ -105,7 +124,7 @@ export function compileCinematicScriptBreakdown({ document, projectId, productio
       };
     });
     return {
-      sceneId: `scene-${stablePart(document.nodeId)}-${stablePart(group.key)}`,
+      sceneId: resolvedSceneId,
       order: sceneIndex + 1,
       heading: text(firstPayload.sceneHeading, `场景 ${sceneIndex + 1}`),
       location: text(firstPayload.location, text(firstPayload.sceneDescription, "未标注地点")),
@@ -122,6 +141,11 @@ export function compileCinematicScriptBreakdown({ document, projectId, productio
     productionId,
     sourceNodeId: document.nodeId,
     sourceDocumentRevision: document.revision,
+    ...(screenplayDocument ? {
+      sourceScreenplayDocumentId: screenplayDocument.documentId,
+      sourceScreenplayDocumentRevision: screenplayDocument.revision,
+      sourceScreenplayDocumentChecksum: screenplayDocument.checksum
+    } : {}),
     scenes,
     shotIds: shots.map((shot) => shot.shotId),
     revision: previousRevision + 1,

@@ -11,6 +11,22 @@ export function validateCinematicScriptBreakdownV1(value) {
   for (const field of ["breakdownId", "projectId", "productionId", "sourceNodeId", "createdAt", "updatedAt"]) {
     if (!text(value[field])) issues.push(issue(field, `${field} is required`, "required"));
   }
+  const hasScreenplayAuthority = [
+    value.sourceScreenplayDocumentId,
+    value.sourceScreenplayDocumentRevision,
+    value.sourceScreenplayDocumentChecksum
+  ].some((field) => field !== undefined && field !== null);
+  if (hasScreenplayAuthority) {
+    for (const field of ["sourceScreenplayDocumentId", "sourceScreenplayDocumentChecksum"]) {
+      if (!text(value[field])) issues.push(issue(field, `${field} is required when screenplay authority is present`, "required"));
+    }
+    if (!/^[a-f0-9]{64}$/u.test(value.sourceScreenplayDocumentChecksum ?? "")) {
+      issues.push(issue("sourceScreenplayDocumentChecksum", "sourceScreenplayDocumentChecksum must be a lowercase SHA-256 hash", "invalid_checksum"));
+    }
+    if (!Number.isInteger(value.sourceScreenplayDocumentRevision) || value.sourceScreenplayDocumentRevision < 1) {
+      issues.push(issue("sourceScreenplayDocumentRevision", "sourceScreenplayDocumentRevision must be an integer >= 1", "invalid_number"));
+    }
+  }
   for (const field of ["sourceDocumentRevision", "revision"]) {
     if (!Number.isInteger(value[field]) || value[field] < 1) issues.push(issue(field, `${field} must be an integer >= 1`, "invalid_number"));
   }

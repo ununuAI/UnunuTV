@@ -10,6 +10,16 @@ import { createLocalRuntime } from "@ununu/unutv-local-runtime";
 import { applyProjectMigrations, IMAGE_TEMPLATE_PROMPT_V1_MIGRATION, NODE_SIZE_V2_MIGRATION } from "../packages/local-runtime/src/project-migrations.mjs";
 import { readNodePrompt } from "../packages/local-runtime/src/node-prompt-store.mjs";
 import { PROJECT_SCHEMA } from "../packages/local-runtime/src/schema.mjs";
+import { SQLITE_BUSY_TIMEOUT_MS } from "../packages/local-runtime/src/sqlite-connection-policy.mjs";
+
+test("local SQLite connections wait for bounded concurrent writers", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-sqlite-policy-"));
+  const runtime = createLocalRuntime({ dataRoot, recoverAutomation: false, recoverRenders: false, runAutomationExecutor: false });
+  context.after(() => runtime.close());
+  const { project } = await runtime.app.createProject({ title: "并发写入策略" });
+  const database = runtime.projects.database(project.id);
+  assert.equal(Number(database.prepare("PRAGMA busy_timeout").get().timeout), SQLITE_BUSY_TIMEOUT_MS);
+});
 
 test("node size v2 migration enlarges existing nodes exactly once", () => {
   const database = new DatabaseSync(":memory:");
@@ -115,7 +125,8 @@ test("local runtime covers the video production data loop", async (context) => {
     mustNotAppearYet: [], acceptanceCriteria: ["身份稳定"]
   } });
   await runtime.app.saveGenerationUnit({ projectId: project.id, productionId, generationUnit: {
-    strategy: "single_shot", shotLinks: [{ shotId: cinematicShot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [],
+    strategy: "single_shot", segmentDecision: "new_shot", segmentSeam: { explicitCut: "deliberate_cut" },
+    shotLinks: [{ shotId: cinematicShot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [],
     generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 5,
       aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} }
   }, referenceBindings: [] });

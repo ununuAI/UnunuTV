@@ -1,16 +1,107 @@
 import {
-  CINEMATIC_VISUAL_STATE_DOMAINS,
   createId,
-  latestCinematicMediaReview,
+  latestCinematicEvaluationsByUnit,
+  normalizeCinematicSegmentDecision,
   nowIso,
-  storyboardVideoReferenceSemanticControl,
   UnuTvError
 } from "@ununu/unutv-contracts";
+import {
+  cinematicCharacterIdentitySourceVersions,
+  deriveCinematicCharacterIdentityBindings,
+  orderedCharacterAuthorityIdsForShots
+} from "../cinematic-character-identity-policy.mjs";
+import { materializeVirtualAuthorityGraph } from "./unit-design-canvas-materialization.mjs";
+import {
+  deriveSceneAuthorityBinding,
+  materializeGenerationUnitSceneAuthorityEdge,
+  sceneAuthoritySourceVersion
+} from "../cinematic-scene-authority-policy.mjs";
+import { loadCurrentAssetMediaRecords } from "../use-cases/cinematic-production-use-case-helpers.mjs";
+import {
+  acceptedCleanPrevisBinding,
+  compatibleResolution,
+  deriveVisualInput,
+  normalizeBindings,
+  selectedStoryboardBindings
+} from "./unit-design-visual-input-policy.mjs";
+import { latestSequencePrevis } from "../latest-sequence-previs-policy.mjs";
 
 const DEFAULT_MODEL = "doubao-seedance-2-0-mini-260615";
 
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
+}
+
+export async function synchronizeSceneAuthorityCanvasSource({
+  assets = [],
+  authorities = [],
+  canvas = null,
+  mediaRecords = [],
+  projectId,
+  projects,
+  shot,
+  updateNode
+} = {}) {
+  if (!canvas || typeof updateNode !== "function") return canvas;
+  const sceneAuthorities = authorities.filter((entry) => entry?.authorityType === "scene");
+  const declaredIds = unique([
+    shot?.sceneAuthorityId,
+    ...(Array.isArray(shot?.requiredAssetIds)
+      ? shot.requiredAssetIds.filter((id) => sceneAuthorities.some((authority) => authority.authorityId === id))
+      : [])
+  ]);
+  const authority = declaredIds.length === 1
+    ? sceneAuthorities.find((entry) => entry.authorityId === declaredIds[0])
+    : sceneAuthorities.length === 1 ? sceneAuthorities[0] : null;
+  if (!authority) return canvas;
+  const authorityAssets = assets.filter((asset) => authority.referenceAssetIds?.includes(asset.id));
+  if (authorityAssets.length !== 1) return canvas;
+  const asset = authorityAssets[0];
+  const version = asset.versions?.find((entry) => entry.id === asset.currentVersionId) ?? null;
+  const mediaRecord = mediaRecords.find((entry) => entry?.id === version?.mediaId) ?? null;
+  const topologyRevision = authority.spatialLogic?.topologyRevision
+    ?? authority.spatialLogic?.topologyId
+    ?? authority.topologyRevision
+    ?? null;
+  if (!version?.mediaId || !mediaRecord?.sha256 || !topologyRevision) return canvas;
+  const candidates = canvas.nodes.filter((node) => (
+    node?.kind === "asset"
+    && node?.payload?.auditOnly !== true
+    && node?.payload?.canvasHidden !== true
+    && node?.payload?.resourceType === "project_asset"
+    && (node?.payload?.assetId === asset.id || node?.payload?.resourceId === asset.id)
+  ));
+  if (candidates.length !== 1) return canvas;
+  const node = candidates[0];
+  const payload = {
+    ...node.payload,
+    authorityId: authority.authorityId,
+    authorityRevision: authority.revision,
+    assetId: asset.id,
+    assetVersionId: asset.currentVersionId,
+    currentVersionId: asset.currentVersionId,
+    currentMediaId: version.mediaId,
+    currentMediaChecksum: mediaRecord.sha256,
+    sceneTopologyRevision: topologyRevision
+  };
+  const unchanged = [
+    "authorityId",
+    "authorityRevision",
+    "assetId",
+    "assetVersionId",
+    "currentVersionId",
+    "currentMediaId",
+    "currentMediaChecksum",
+    "sceneTopologyRevision"
+  ].every((key) => node.payload?.[key] === payload[key]);
+  if (unchanged) return canvas;
+  await updateNode({
+    projectId,
+    nodeId: node.id,
+    expectedRevision: node.revision,
+    payload
+  });
+  return projects.openCanvas(projectId, canvas.id);
 }
 
 function reviewCategory(requirement = "") {
@@ -42,200 +133,16 @@ function strategyValue(generationStrategies, key, fallback = null) {
     ?? fallback;
 }
 
-function compatibleResolution({ model, mode, requested }) {
-  // Seedance 2.0 Mini uses Ark's r2v route whenever ordinary reference
-  // images are present. That route rejects 1080p. Use the highest verified
-  // r2v resolution unless the workflow explicitly selected another valid
-  // r2v value.
-  if (model === DEFAULT_MODEL && mode === "image_reference" && requested === "1080p") return "720p";
-  return requested;
-}
-
-function selectedStoryboardBindings(storyboards, projectId, productionId, shotId) {
-  if (!storyboards?.listStoryboards) return [];
-  return storyboards.listStoryboards({ projectId, productionId })
-    .catch(() => [])
-    .then((boards) => boards.flatMap((board) => (board.shots || [])
-      .filter((shot) => shot.shotId === shotId && shot.videoReference?.selected === true && shot.imageMediaId)
-      .map((shot) => ({
-        assetId: `storyboard:${board.storyboardId}:${shot.shotId}`,
-        versionId: shot.imageVersionId || `storyboard-image:${shot.imageChecksum || shot.imageMediaId}`,
-        mediaId: shot.imageMediaId,
-        displayName: shot.title,
-        role: shot.videoReference.role || "storyboard_composition",
-        controls: shot.videoReference.controls || ["人物身份", "场景构图", "空间站位"],
-        doesNotControl: shot.videoReference.doesNotControl || ["动作时序", "运镜轨迹", "表演节奏"],
-        semanticControl: shot.videoReference.semanticControl
-          || storyboardVideoReferenceSemanticControl(shot.videoReference),
-        required: true,
-        authorityRevision: `storyboard-r${board.revision}:shot-r${shot.revision}`,
-        checksum: shot.imageChecksum,
-        storyboardId: board.storyboardId,
-        storyboardShotId: shot.storyboardShotId,
-        shotId,
-        acceptanceProof: shot.videoReference.acceptanceProof ?? null
-      }))));
-}
-
-async function acceptedCleanPrevisBinding({
-  canvas,
-  latestPrevis,
-  media,
-  projectId,
-  projects,
-  shot
-}) {
-  const previsShot = latestPrevis?.shots?.find((entry) => (
-    entry.shotId === shot.shotId
-    && entry.shotRevision === shot.revision
-    && entry.frameMediaId
-    && String(entry.frameSourceRole || "").includes("low_poly_clean")
-  ));
-  if (!previsShot) return null;
-  const sourceNode = canvas?.nodes?.find((node) => (
-    node.payload?.currentMediaId === previsShot.frameMediaId
-    || node.payload?.mediaId === previsShot.frameMediaId
-    || node.payload?.mediaIds?.includes?.(previsShot.frameMediaId)
-  ));
-  const providerMediaId = sourceNode?.payload?.providerReferenceMediaId || previsShot.frameMediaId;
-  const reviews = typeof projects?.listReviews === "function"
-    ? await projects.listReviews(projectId)
-    : [];
-  const review = latestCinematicMediaReview(reviews, providerMediaId);
-  if (!review || review.state !== "accepted") {
-    throw new UnuTvError(
-      "sequence_previs_frame_pixel_acceptance_required",
-      `${shot.shotId} 的 Provider PNG 低模预演干净帧尚未逐像素验收，不能替代含真人故事板参考。`,
-      409,
-      { mediaId: providerMediaId, shotId: shot.shotId, targetType: "media", targetId: providerMediaId }
-    );
-  }
-  const opened = media?.open?.(projectId, providerMediaId);
-  if (!opened?.sha256) {
-    throw new UnuTvError(
-      "sequence_previs_frame_media_required",
-      `${shot.shotId} 的低模预演干净帧缺少本地媒体与 checksum。`,
-      409,
-      { mediaId: providerMediaId, shotId: shot.shotId }
-    );
-  }
-  return {
-    assetId: `sequence-previs:${latestPrevis.sequencePrevisId}:${shot.shotId}:clean-start`,
-    versionId: `sequence-previs:${latestPrevis.sequencePrevisId}:r${latestPrevis.revision}:${opened.sha256}`,
-    mediaId: providerMediaId,
-    displayName: `${shot.narrativeJob || `镜头 ${shot.order}`} · 低模预演空间母版`,
-    promptAlias: `镜头${shot.order}低模空间母版`,
-    role: "director_keyframe",
-    controls: ["场景拓扑", "空间站位", "摄影机构图", "画幅内遮挡关系"],
-    doesNotControl: ["最终人物身份", "最终人物外观", "精细动作", "对白与声音", "低模材质与颜色"],
-    semanticControl: {
-      temporalRole: "static_state",
-      preserve: ["场景拓扑", "空间站位", "摄影机构图", "画幅内遮挡关系"],
-      replace: [],
-      complete: [{
-        missing: "低模空间母版不定义最终人物身份与外观",
-        target: "最终人物身份与外观仅由本镜已绑定的虚拟人物 Asset ID 提供"
-      }],
-      ignore: ["低模代理人物造型", "低模材质与颜色", "控制台视觉语言"],
-      styleOnly: []
-    },
-    required: true,
-    providerEligible: true,
-    authorityRevision: `sequence-previs:${latestPrevis.sequencePrevisId}:r${latestPrevis.revision}:shot-r${shot.revision}`,
-    checksum: opened.sha256,
-    shotId: shot.shotId,
-    sequencePrevisId: latestPrevis.sequencePrevisId,
-    sequencePrevisRevision: latestPrevis.revision,
-    ...(sourceNode ? { sourceNodeId: sourceNode.id } : {}),
-    acceptanceProof: {
-      reviewId: review.id,
-      mediaId: providerMediaId,
-      checksum: opened.sha256,
-      shotId: shot.shotId,
-      shotRevision: shot.revision,
-      pixelReviewed: true,
-      verifiedDomains: [...CINEMATIC_VISUAL_STATE_DOMAINS]
-    }
-  };
-}
-
-function normalizeBindings({ bindings, mediaIds, shotId }) {
-  const matching = (Array.isArray(bindings) ? bindings : [])
-    .filter((binding) => !shotId || !binding.shotId || binding.shotId === shotId);
-  const requested = unique([
-    ...matching.map((binding) => binding.mediaId),
-    ...(Array.isArray(mediaIds) ? mediaIds : [])
-  ]);
-  const byMedia = new Map(matching.map((binding) => [binding.mediaId, binding]));
-  const missing = requested.filter((mediaId) => !byMedia.has(mediaId));
-  if (missing.length) {
-    throw new UnuTvError(
-      "reference_binding_required",
-      `Reference media must have a complete ReferenceBinding before dispatch: ${missing.join(", ")}`,
-      409,
-      { shotId, missingMediaIds: missing }
-    );
-  }
-  return requested.map((mediaId, index) => ({ ...byMedia.get(mediaId), providerIndex: index + 1 }));
-}
-
-function deriveVisualInput({ generationStrategies, configuration, explicitBindings, storyboardBindings }) {
-  const storyboardFirstFrame = storyboardBindings.find((binding) => binding.role === "storyboard_first_frame");
-  const configuredMode = strategyValue(generationStrategies, "mode", configuration?.generationMode) || (storyboardFirstFrame ? "first_frame" : null);
-  const configuredPolicy = strategyValue(generationStrategies, "visualAnchorPolicy", configuration?.visualAnchorPolicy) || (storyboardFirstFrame ? "FIRST_FRAME" : null);
-  const firstFrameMediaId = strategyValue(generationStrategies, "firstFrameMediaId", configuration?.firstFrameMediaId) || storyboardFirstFrame?.mediaId || null;
-  const lastFrameMediaId = strategyValue(generationStrategies, "lastFrameMediaId", configuration?.lastFrameMediaId);
-  const allBindings = [...explicitBindings, ...storyboardBindings];
-  const deduped = [];
-  const seen = new Set();
-  for (const binding of allBindings) {
-    if (!binding?.mediaId || seen.has(binding.mediaId)) continue;
-    seen.add(binding.mediaId);
-    deduped.push({ ...binding, providerIndex: deduped.length + 1 });
-  }
-  const hardFirstFrame = configuredMode === "first_frame" || configuredMode === "first_last_frame"
-    || configuredPolicy === "FIRST_FRAME" || configuredPolicy === "FIRST_LAST_FRAME";
-  if (hardFirstFrame) {
-    if (!firstFrameMediaId || (configuredMode === "first_last_frame" && !lastFrameMediaId)) {
-      throw new UnuTvError("frame_input_required", "首帧/首尾帧模式必须提供对应的真实媒体边界，不能用普通参考图代替", 409);
-    }
-    if (deduped.some((binding) => ![firstFrameMediaId, lastFrameMediaId].includes(binding.mediaId))) {
-      throw new UnuTvError("frame_reference_conflict", "首帧/首尾帧与普通参考图互斥；请把场景参考留在 image_reference 模式", 409);
-    }
-    const frameBindings = [firstFrameMediaId, lastFrameMediaId].filter(Boolean).map((mediaId, index) => {
-      const found = deduped.find((binding) => binding.mediaId === mediaId);
-      if (!found) throw new UnuTvError("frame_binding_required", `首帧媒体 ${mediaId} 缺少完整 ReferenceBinding`, 409);
-      return { ...found, providerIndex: index + 1 };
-    });
-    return {
-      mode: configuredMode || (lastFrameMediaId ? "first_last_frame" : "first_frame"),
-      visualAnchorPolicy: configuredPolicy || (lastFrameMediaId ? "FIRST_LAST_FRAME" : "FIRST_FRAME"),
-      firstFrameMediaId,
-      lastFrameMediaId: lastFrameMediaId || null,
-      referenceMediaIds: [],
-      referenceBindings: frameBindings
-    };
-  }
-  const hasReferences = deduped.length > 0;
-  const policy = configuredPolicy || (hasReferences ? "SHOT_FRAME_SET" : "NONE");
-  if (policy !== "NONE" && !hasReferences) {
-    throw new UnuTvError("visual_anchor_reference_required", `${policy} requires a real bound reference image; UnunuTV will not silently downgrade to text-only`, 409);
-  }
-  return {
-    mode: configuredMode || (hasReferences ? "image_reference" : "text_to_video"),
-    visualAnchorPolicy: policy,
-    firstFrameMediaId: null,
-    lastFrameMediaId: null,
-    referenceMediaIds: deduped.map((binding) => binding.mediaId),
-    referenceBindings: deduped
-  };
-}
-
-function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolution, visualInput, generationStrategies, sequenceWorkspaceBinding = null }) {
+function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolution, visualInput, generationStrategies, identity, sceneAuthorityBinding = null, sequenceWorkspaceBinding = null, sequenceContext = null }) {
   const duration = Number(shot.durationSeconds) > 0 ? Number(shot.durationSeconds) : 5;
-  const strategy = ["single_shot", "designed_multi_shot", "continuous_segment", "storyboard_action_sequence"].includes(shot.generationStrategy)
+  const requestedStrategy = ["single_shot", "designed_multi_shot", "continuous_segment", "storyboard_action_sequence"].includes(shot.generationStrategy)
     ? shot.generationStrategy
     : "single_shot";
+  // This worker intentionally creates one GenerationUnit per approved artistic
+  // shot. A shot may ask the provider to stage internal coverage, but that is
+  // not the same contract as a multi-shot unit linking multiple ShotSpecs.
+  const strategy = requestedStrategy === "designed_multi_shot" ? "single_shot" : requestedStrategy;
+  const segmentDecision = normalizeCinematicSegmentDecision(shot.segmentDecision, strategy);
   const configuredVirtualPersonAssetIds = unique([
     ...(Array.isArray(shot.virtualPersonAssetIds) ? shot.virtualPersonAssetIds : []),
     ...(Array.isArray(generationStrategies.video_generation?.virtualPersonAssetIds) ? generationStrategies.video_generation.virtualPersonAssetIds : []),
@@ -243,30 +150,47 @@ function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolu
       ? generationStrategies.video_generation.virtualPersonAssetIdsByShotId[shot.shotId]
       : [])
   ]);
-  if (generationStrategies.video_generation?.requireVirtualPersonAssets === true && configuredVirtualPersonAssetIds.length === 0) {
+  const expectedVirtualPersonAssetIds = identity.virtualPersonAssetIds;
+  if (configuredVirtualPersonAssetIds.length
+    && JSON.stringify(configuredVirtualPersonAssetIds) !== JSON.stringify(expectedVirtualPersonAssetIds)) {
+    throw new UnuTvError(
+      "generation_unit_virtual_person_binding_mismatch",
+      `Shot ${shot.shotId} 的虚拟人物 ID 必须从当前 Authority 自动派生，禁止使用 generationStrategies 手填覆盖。`,
+      409,
+      { actualVirtualPersonAssetIds: configuredVirtualPersonAssetIds, expectedVirtualPersonAssetIds }
+    );
+  }
+  if (generationStrategies.video_generation?.requireVirtualPersonAssets === true && expectedVirtualPersonAssetIds.length === 0) {
     throw new UnuTvError("virtual_person_asset_required", `Shot ${shot.shotId} requires at least one virtual person asset ID`, 409);
   }
   const movement = shot.cinematography?.movementPath || shot.cameraTrajectoryPlan?.pathDescription || "按分镜镜头合同执行";
   const actionPhases = Array.isArray(shot.actionChain) ? shot.actionChain.join("、") : (shot.actionChain || shot.storyBeat || "按分镜动作合同执行");
   return {
     strategy,
+    segmentDecision,
     shotLinks: [{ shotId: shot.shotId, order: 1, role: "artistic_shot" }],
+    characterAuthorityIds: identity.characterAuthorityIds,
+    characterIdentitySourceVersions: identity.sourceVersions,
     visualAnchorPolicy: visualInput.visualAnchorPolicy,
     reviewRequirements: shotReviewRequirements(shot),
     executionGates: {
       requireContinuityStateAudit: true,
       requirePromptCoverage: true,
-      requireSequenceState: true
+      requireSequenceState: true,
+      ...(sequenceContext?.previousUnit ? { requireSceneAuthorityTopology: true } : {})
     },
     requiredCapabilities: unique([
       ...(Array.isArray(generationStrategies.video_generation?.requiredCapabilities) ? generationStrategies.video_generation.requiredCapabilities : []),
       ...(visualInput.mode === "first_frame" || visualInput.mode === "first_last_frame" ? [visualInput.mode] : []),
       ...(visualInput.referenceMediaIds.length ? ["multi_reference"] : []),
-      ...(["designed_multi_shot", "storyboard_action_sequence"].includes(strategy) ? ["internal_cuts"] : []),
-      ...(configuredVirtualPersonAssetIds.length || generationStrategies.video_generation?.requireVirtualPersonAssets === true ? ["virtual_person_asset"] : [])
+      ...(["designed_multi_shot", "storyboard_action_sequence"].includes(requestedStrategy) ? ["internal_cuts"] : []),
+      ...(expectedVirtualPersonAssetIds.length || generationStrategies.video_generation?.requireVirtualPersonAssets === true ? ["virtual_person_asset"] : [])
     ]),
     executionNodeId,
-    lifecycle: "active",
+    ...(sceneAuthorityBinding ? {
+      sceneAuthorityBinding: sceneAuthoritySourceVersion(sceneAuthorityBinding)
+    } : {}),
+    lifecycle: sequenceContext?.waitingForAccept ? "waiting_for_previous_accept" : "active",
     // Units designed by the canonical Skill are executable canvas objects,
     // not hidden database records. Prompt and reference edges are mandatory.
     canvasGraphPolicy: "required",
@@ -320,8 +244,14 @@ function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolu
     },
     sequenceState: {
       sceneId: shot.sceneId || `scene-${shot.shotId}`,
-      sequenceIndex: Number(shot.order) || 1,
-      relation: "sequence_first",
+      sequenceIndex: sequenceContext?.sequenceIndex ?? 1,
+      relation: sequenceContext?.previousUnit
+        ? (segmentDecision === "new_shot" ? "intentional_next_shot" : "seamless_continuation")
+        : "sequence_first",
+      ...(sequenceContext?.previousUnit ? {
+        parentGenerationUnitId: sequenceContext.previousUnit.generationUnitId,
+        ...(sequenceContext.sourceEvaluation ? { sourceEvaluationId: sequenceContext.sourceEvaluation.evaluationId } : { awaitingAcceptedSource: true })
+      } : {}),
       feltIntent: shot.narrativeJob || shot.storyBeat || "按本镜叙事任务",
       intentCarriers: {
         camera: movement,
@@ -329,10 +259,18 @@ function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolu
         performance: shot.performance?.initialState || "按表演合同",
         sound: shot.sound?.ambience || "继承场景声音世界"
       },
-      alreadyHappened: Array.isArray(shot.alreadyHappened) ? shot.alreadyHappened : [],
+      alreadyHappened: sequenceContext?.sourceEvaluation
+        ? unique([
+            ...(Array.isArray(shot.alreadyHappened) ? shot.alreadyHappened : []),
+            ...(sequenceContext.sourceEvaluation.takeObservation?.completedBeats || []),
+            ...(sequenceContext.sourceEvaluation.takeObservation?.unexpectedCompletedBeats || []),
+            ...(sequenceContext.sourceEvaluation.canonReconciliation?.promotedCompletedBeats || [])
+          ])
+        : (Array.isArray(shot.alreadyHappened) ? shot.alreadyHappened : []),
       thisUnitOnly: [shot.narrativeJob || shot.storyBeat].filter(Boolean),
       reservedForLater: Array.isArray(shot.mustNotAppearYet) ? shot.mustNotAppearYet : [],
-      plannedStartState: { blocking: shot.openingState || "按本镜开场站位" },
+      plannedStartState: sequenceContext?.sourceEvaluation?.canonReconciliation?.carryForwardState
+        || { blocking: shot.openingState || "按本镜开场站位" },
       plannedEndState: { blocking: shot.endingState || "按本镜结束站位" },
       extensionDepth: 0,
       maxExtensionDepth: 3,
@@ -350,8 +288,11 @@ function buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolu
       ...(visualInput.firstFrameMediaId ? { firstFrameMediaId: visualInput.firstFrameMediaId } : {}),
       ...(visualInput.lastFrameMediaId ? { lastFrameMediaId: visualInput.lastFrameMediaId } : {}),
       referenceMediaIds: visualInput.referenceMediaIds,
-      ...(configuredVirtualPersonAssetIds.length ? { virtualPersonAssetIds: configuredVirtualPersonAssetIds } : {}),
-      providerOptions: generationStrategies.video_generation?.providerOptions || {}
+      virtualPersonAssetIds: expectedVirtualPersonAssetIds,
+      providerOptions: {
+        ...(generationStrategies.video_generation?.providerOptions || {}),
+        ...(requestedStrategy !== strategy ? { artisticShotStrategy: requestedStrategy } : {})
+      }
     },
     createdAt: nowIso(),
     updatedAt: nowIso()
@@ -389,6 +330,22 @@ export async function ensureGenerationUnitsForProduction({
   const shots = await cinematic.listShots({ projectId, productionId });
   if (!shots.length) throw new UnuTvError("cinematic_shots_required", "Cannot design generation units without shots", 409);
   const existing = await cinematic.listGenerationUnits({ projectId, productionId });
+  const authorities = typeof cinematic.listAssetAuthorities === "function"
+    ? await cinematic.listAssetAuthorities({ projectId, productionId })
+    : [];
+  const [assets, reviews] = await Promise.all([
+    typeof projects?.listAssets === "function" ? projects.listAssets(projectId) : [],
+    typeof projects?.listReviews === "function" ? projects.listReviews(projectId) : []
+  ]);
+  const mediaRecords = await loadCurrentAssetMediaRecords({
+    assets,
+    getMedia: media?.open?.bind(media),
+    projectId
+  });
+  const evaluations = cinematic.listEvaluations
+    ? await cinematic.listEvaluations({ projectId, productionId })
+    : [];
+  const latestEvaluations = latestCinematicEvaluationsByUnit(evaluations);
 
   const project = projects?.open ? await projects.open(projectId) : null;
   let canvas = project?.rootCanvasId && projects?.openCanvas
@@ -398,7 +355,7 @@ export async function ensureGenerationUnitsForProduction({
 
   const provider = strategyValue(generationStrategies, "provider", "ark");
   const model = strategyValue(generationStrategies, "model", DEFAULT_MODEL);
-  const resolution = strategyValue(generationStrategies, "resolution", "1080p");
+  const resolution = strategyValue(generationStrategies, "resolution", "480p");
   const configured = {
     ...generationStrategies,
     video_generation: {
@@ -410,12 +367,40 @@ export async function ensureGenerationUnitsForProduction({
   const explicitBindings = normalizeBindings({ bindings: referenceBindings, mediaIds: referenceMediaIds, shotId: null });
   const byShot = (shotId) => explicitBindings.filter((binding) => !binding.shotId || binding.shotId === shotId);
   const coveredByShot = new Map(existing.flatMap((entry) => (entry.generationUnit?.shotLinks || []).map((link) => [link.shotId, entry])));
+  const lastUnitByScene = new Map();
   const created = [];
   const updated = [];
   const latestPrevis = sequenceWorkspace?.listSequencePrevis
-    ? (await sequenceWorkspace.listSequencePrevis({ projectId, productionId })).sort((left, right) => right.revision - left.revision)[0] ?? null
+    ? latestSequencePrevis(await sequenceWorkspace.listSequencePrevis({ projectId, productionId }))
     : null;
-  for (const shot of shots) {
+  for (const shot of [...shots].sort((left, right) => left.order - right.order)) {
+    const characterAuthorityIds = orderedCharacterAuthorityIdsForShots({ authorities, shots: [shot] });
+    const derivedIdentity = deriveCinematicCharacterIdentityBindings({ authorities, characterAuthorityIds });
+    if (!derivedIdentity.ok) {
+      const first = derivedIdentity.errors[0];
+      throw new UnuTvError(first?.code || "character_identity_binding_invalid", first?.message || "Shot 角色身份绑定未通过。", 409, { errors: derivedIdentity.errors, shotId: shot.shotId });
+    }
+    const identity = {
+      characterAuthorityIds,
+      sourceVersions: cinematicCharacterIdentitySourceVersions(derivedIdentity.bindings),
+      virtualPersonAssetIds: derivedIdentity.virtualPersonAssetIds
+    };
+    const sceneId = shot.sceneId || `scene-${shot.shotId}`;
+    const previousRecord = lastUnitByScene.get(sceneId) ?? null;
+    const previousUnit = previousRecord?.generationUnit ?? null;
+    const latestPreviousEvaluation = previousUnit
+      ? latestEvaluations.get(previousUnit.generationUnitId) ?? null
+      : null;
+    const sourceEvaluation = latestPreviousEvaluation?.decision === "ACCEPT"
+      && latestPreviousEvaluation?.canonReconciliation?.status === "accepted"
+      ? latestPreviousEvaluation
+      : null;
+    const sequenceContext = {
+      previousUnit,
+      sequenceIndex: previousUnit ? Number(previousUnit.sequenceState?.sequenceIndex ?? 0) + 1 : 1,
+      sourceEvaluation,
+      waitingForAccept: Boolean(previousUnit && !sourceEvaluation)
+    };
     let executionNodeId = generationStrategies.video_generation?.executionNodeIdByShotId?.[shot.shotId]
       || sharedExecutionNodeId
       || null;
@@ -455,6 +440,34 @@ export async function ensureGenerationUnitsForProduction({
       executionNodeId = canvas.nodes.find((entry) => ["video", "videoShot", "video-clip"].includes(entry.kind))?.id ?? null;
     }
     if (!executionNodeId) throw new UnuTvError("video_execution_node_required", `unit-design requires a visible video execution node for ${shot.shotId}`, 409);
+    canvas = await synchronizeSceneAuthorityCanvasSource({
+      assets,
+      authorities,
+      canvas,
+      mediaRecords,
+      projectId,
+      projects,
+      shot,
+      updateNode
+    });
+    const sceneAuthority = deriveSceneAuthorityBinding({
+      assets,
+      authorities,
+      canvasNodes: canvas?.nodes ?? [],
+      mediaRecords,
+      required: Boolean(previousUnit),
+      reviews,
+      shot
+    });
+    if (!sceneAuthority.ok) {
+      const first = sceneAuthority.errors[0];
+      throw new UnuTvError(
+        first?.code || "same_scene_authority_required",
+        first?.message || `${shot.shotId} 缺少当前场景 Authority。`,
+        409,
+        { errors: sceneAuthority.errors, previousGenerationUnitId: previousUnit?.generationUnitId ?? null, shotId: shot.shotId }
+      );
+    }
     const storyboardBindings = await selectedStoryboardBindings(storyboards, projectId, productionId, shot.shotId);
     const cleanPrevisBinding = model === DEFAULT_MODEL
       && configured.video_generation?.requireVirtualPersonAssets === true
@@ -499,8 +512,13 @@ export async function ensureGenerationUnitsForProduction({
     const visualInput = deriveVisualInput({
       generationStrategies: configured,
       configuration: { generationMode, visualAnchorPolicy },
-      explicitBindings: byShot(shot.shotId),
-      storyboardBindings: cleanPrevisBinding ? [cleanPrevisBinding] : storyboardBindings
+      explicitBindings: [
+        ...byShot(shot.shotId),
+        ...(sceneAuthority.binding ? [sceneAuthority.binding] : [])
+      ],
+      storyboardBindings: cleanPrevisBinding ? [cleanPrevisBinding] : storyboardBindings,
+      shot,
+      virtualPersonAssetIds: identity.virtualPersonAssetIds
     });
     const visualContext = latestPrevis && sequenceWorkspace?.listVisualContextBundles
       ? (await sequenceWorkspace.listVisualContextBundles({ projectId, productionId, shotId: shot.shotId }))
@@ -514,10 +532,24 @@ export async function ensureGenerationUnitsForProduction({
         visualContextBundleId: visualContext.visualContextBundleId
       }
       : null;
-    const unit = buildUnit({ shot, executionNodeId, provider, model, aspectRatio, resolution, visualInput, generationStrategies: configured, sequenceWorkspaceBinding });
+    const unit = buildUnit({
+      shot,
+      executionNodeId,
+      provider,
+      model,
+      aspectRatio,
+      resolution,
+      visualInput,
+      generationStrategies: configured,
+      identity,
+      sceneAuthorityBinding: sceneAuthority.binding,
+      sequenceWorkspaceBinding,
+      sequenceContext
+    });
     const current = coveredByShot.get(shot.shotId);
     if (current && cinematic.updateGenerationUnit) {
       const currentUnit = current.generationUnit;
+      let effective = current;
       const currentMediaIds = (current.referenceBindings || []).map((binding) => binding.mediaId).filter(Boolean);
       const desiredMediaIds = visualInput.referenceBindings.map((binding) => binding.mediaId).filter(Boolean);
       const movement = unit.controlIntent.dynamicControl.cameraTrajectory;
@@ -526,6 +558,11 @@ export async function ensureGenerationUnitsForProduction({
         !== JSON.stringify(visualInput.referenceBindings);
       const sourceContractChanged = JSON.stringify(currentUnit.shotLinks || [])
         !== JSON.stringify(unit.shotLinks || [])
+        || JSON.stringify(currentUnit.characterAuthorityIds || [])
+          !== JSON.stringify(unit.characterAuthorityIds || [])
+        || JSON.stringify(currentUnit.characterIdentitySourceVersions || [])
+          !== JSON.stringify(unit.characterIdentitySourceVersions || [])
+        || currentUnit.segmentDecision !== unit.segmentDecision
         || JSON.stringify(currentUnit.sequenceWorkspaceBinding || null)
           !== JSON.stringify(unit.sequenceWorkspaceBinding || null);
       const shouldRefresh = preserveExistingUnitContracts
@@ -546,6 +583,10 @@ export async function ensureGenerationUnitsForProduction({
         const patch = preserveExistingUnitContracts
           ? {
               shotLinks: unit.shotLinks,
+              segmentDecision: unit.segmentDecision,
+              characterAuthorityIds: unit.characterAuthorityIds,
+              characterIdentitySourceVersions: unit.characterIdentitySourceVersions,
+              sceneAuthorityBinding: unit.sceneAuthorityBinding,
               // Prompt compilation deliberately preserves the authored motion,
               // performance and sequence contracts on an existing unit. The
               // visual-input carrier is different: it must always track the
@@ -554,22 +595,29 @@ export async function ensureGenerationUnitsForProduction({
               // referenceBindings and generationParameters in two different
               // orders and the final payload contract becomes invalid.
               visualAnchorPolicy: visualInput.visualAnchorPolicy,
+              lifecycle: unit.lifecycle,
+              sequenceState: unit.sequenceState,
               requiredCapabilities: unit.requiredCapabilities,
               generationParameters: {
                 mode: visualInput.mode,
                 firstFrameMediaId: visualInput.firstFrameMediaId || undefined,
                 lastFrameMediaId: visualInput.lastFrameMediaId || undefined,
-                referenceMediaIds: visualInput.referenceMediaIds
+                referenceMediaIds: visualInput.referenceMediaIds,
+                virtualPersonAssetIds: unit.generationParameters.virtualPersonAssetIds
               },
               ...(unit.sequenceWorkspaceBinding ? { sequenceWorkspaceBinding: unit.sequenceWorkspaceBinding } : {})
             }
           : {
               visualAnchorPolicy: visualInput.visualAnchorPolicy,
+              segmentDecision: unit.segmentDecision,
               requiredCapabilities: unit.requiredCapabilities,
               executionNodeId,
               controlIntent: unit.controlIntent,
               promptCoverage: unit.promptCoverage,
               generationParameters: unit.generationParameters,
+              characterAuthorityIds: unit.characterAuthorityIds,
+              characterIdentitySourceVersions: unit.characterIdentitySourceVersions,
+              sceneAuthorityBinding: unit.sceneAuthorityBinding,
               ...(unit.sequenceWorkspaceBinding ? { sequenceWorkspaceBinding: unit.sequenceWorkspaceBinding } : {})
             };
         const refreshed = await cinematic.updateGenerationUnit({
@@ -580,6 +628,7 @@ export async function ensureGenerationUnitsForProduction({
           referenceBindings: visualInput.referenceBindings
         });
         updated.push(refreshed);
+        effective = refreshed;
         if (updateNode) {
           const node = await projects.getNode(projectId, executionNodeId);
           if (node) {
@@ -592,12 +641,34 @@ export async function ensureGenerationUnitsForProduction({
                 generationUnitId: refreshed.generationUnit.generationUnitId,
                 generationUnitRevision: refreshed.generationUnit.revision,
                 virtualPersonAssetIds: refreshed.generationUnit.generationParameters?.virtualPersonAssetIds || [],
+                characterAuthorityIds: refreshed.generationUnit.characterAuthorityIds || [],
+                characterIdentitySourceVersions: refreshed.generationUnit.characterIdentitySourceVersions || [],
+                sceneAuthorityBinding: refreshed.generationUnit.sceneAuthorityBinding || null,
+                segmentDecision: refreshed.generationUnit.segmentDecision,
                 sequenceWorkspaceBinding: refreshed.generationUnit.sequenceWorkspaceBinding || null
               }
             });
           }
         }
       }
+      // Graph materialization is an idempotent reconciliation, not a side
+      // effect of content revision. Existing unchanged units may still be
+      // missing typed edges after a previous crash or a source-node repair.
+      await materializeVirtualAuthorityGraph({
+        connectEdge,
+        generationUnit: effective.generationUnit,
+        projectId,
+        projects,
+        updateNode
+      });
+      await materializeGenerationUnitSceneAuthorityEdge({
+        binding: sceneAuthority.binding,
+        connectEdge,
+        generationUnit: effective.generationUnit,
+        projectId,
+        projects
+      });
+      lastUnitByScene.set(sceneId, effective);
       continue;
     }
     const saved = await cinematic.saveGenerationUnit({
@@ -618,12 +689,31 @@ export async function ensureGenerationUnitsForProduction({
             generationUnitId: saved.generationUnit.generationUnitId,
             generationUnitRevision: saved.generationUnit.revision,
             virtualPersonAssetIds: saved.generationUnit.generationParameters?.virtualPersonAssetIds || [],
+            characterAuthorityIds: saved.generationUnit.characterAuthorityIds || [],
+            characterIdentitySourceVersions: saved.generationUnit.characterIdentitySourceVersions || [],
+            sceneAuthorityBinding: saved.generationUnit.sceneAuthorityBinding || null,
+            segmentDecision: saved.generationUnit.segmentDecision,
             sequenceWorkspaceBinding: saved.generationUnit.sequenceWorkspaceBinding || null
           }
         });
       }
     }
+    await materializeVirtualAuthorityGraph({
+      connectEdge,
+      generationUnit: saved.generationUnit,
+      projectId,
+      projects,
+      updateNode
+    });
+    await materializeGenerationUnitSceneAuthorityEdge({
+      binding: sceneAuthority.binding,
+      connectEdge,
+      generationUnit: saved.generationUnit,
+      projectId,
+      projects
+    });
     created.push(saved);
+    lastUnitByScene.set(sceneId, saved);
   }
   return {
     created,

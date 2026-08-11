@@ -2,6 +2,7 @@ export const TIMELINE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS timelines (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS timeline_clips (
   duration_ms INTEGER NOT NULL,
   trim_in_ms INTEGER NOT NULL,
   payload_json TEXT NOT NULL DEFAULT '{}',
+  is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_timeline_clips ON timeline_clips(timeline_id, track, start_ms);

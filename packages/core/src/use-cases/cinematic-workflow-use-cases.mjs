@@ -1,12 +1,26 @@
-import { createId, requireObject, requireText, UnuTvError } from "@ununu/unutv-contracts";
+import {
+  createId,
+  requireObject,
+  requireText,
+  resolveCinematicFormatProfile,
+  UnuTvError
+} from "@ununu/unutv-contracts";
 import { assertCinematicProductionWorkflow, buildCinematicWorkflowManifest } from "../cinematic-workflow-policy.mjs";
 import {
+  auditCinematicCanvasOverlaps,
   buildCinematicCanvasLayout,
-  cinematicProductionNodes,
-  findCinematicCanvasOverlaps
+  cinematicProductionNodes
 } from "../cinematic-canvas-layout.mjs";
+import {
+  requiresStoryboardLineageRebase,
+  storyboardLineageRepairJobId
+} from "../cinematic-workflow-repair-policy.mjs";
+import { buildStoryboardRetakeDirective } from "../storyboard-retake-directive-policy.mjs";
 import { deriveNextActionFromTasks } from "../orchestration/next-action.mjs";
 import { autoSignoffGenerationUnit } from "../workers/expert-signoff-worker.mjs";
+import { createCinematicEpisodeAuthoringUseCase } from "./cinematic-episode-authoring-use-case.mjs";
+import { createCinematicScreenplayRevisionUseCase } from "./cinematic-screenplay-revision-use-case.mjs";
+import { latestSequencePrevis } from "../latest-sequence-previs-policy.mjs";
 
 export function findReusableProviderRunForFailedIntent(runs = [], failedRunId = null) {
   const failed = runs.find((run) => run.id === failedRunId);
@@ -22,6 +36,10 @@ export function findReusableProviderRunForFailedIntent(runs = [], failedRunId = 
     .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))[0] ?? null;
 }
 
+export function generationUnitRequiresVideoArtifact(entry) {
+  return (entry?.generationUnit?.lifecycle ?? "active") === "active";
+}
+
 export function createCinematicWorkflowUseCases(ports, {
   cinematic,
   projectControl,
@@ -33,8 +51,11 @@ export function createCinematicWorkflowUseCases(ports, {
   series = null,
   reviewTarget = null,
   storyboards = null,
+  runProjectTransaction = null,
   createScriptRow = null,
+  deleteScriptRow = null,
   getScriptDocument = null,
+  saveScreenplayDocument = null,
   updateScriptRow = null,
   scriptPlanning = null,
   createNode = null,
@@ -50,57 +71,6 @@ export function createCinematicWorkflowUseCases(ports, {
       && story.characters?.length
       && story.causalEventChain?.length
     );
-  }
-
-  function equalJson(left, right) {
-    return JSON.stringify(left) === JSON.stringify(right);
-  }
-
-  async function ensureProjectionNode({
-    projectId,
-    canvas,
-    kind,
-    title,
-    x,
-    y,
-    resourceType,
-    resourceId,
-    payload
-  }) {
-    const current = canvas.nodes.find((node) => (
-      node.payload?.resourceType === resourceType
-      && node.payload?.resourceId === resourceId
-    ));
-    if (current) {
-      return updateNode({
-        projectId,
-        nodeId: current.id,
-        title,
-        x,
-        y,
-        payload: { ...current.payload, ...payload, resourceType, resourceId },
-        expectedRevision: current.revision
-      });
-    }
-    return createNode({
-      projectId,
-      canvasId: canvas.id,
-      kind,
-      title,
-      x,
-      y,
-      payload: { ...payload, resourceType, resourceId }
-    });
-  }
-
-  async function ensureProjectionEdge({ projectId, canvas, fromNodeId, toNodeId, role }) {
-    const current = canvas.edges.find((edge) => (
-      edge.fromNodeId === fromNodeId
-      && edge.toNodeId === toNodeId
-      && edge.role === role
-    ));
-    if (current) return current;
-    return connectEdge({ projectId, canvasId: canvas.id, fromNodeId, toNodeId, role });
   }
 
   async function startCinematicWorkflow(input = {}) {
@@ -185,6 +155,8 @@ export function createCinematicWorkflowUseCases(ports, {
       workflowId: input.workflowId ?? configuration.workflowId ?? createId("cinematic-workflow"),
       productionId,
       sourceNodeId,
+      projectType: production.projectType,
+      aspectRatio: input.aspectRatio ?? configuration.aspectRatio ?? configuration.workflowManifest?.aspectRatio,
       targetDurationSeconds: input.targetDurationSeconds ?? configuration.targetDurationSeconds ?? configuration.workflowManifest?.targetDurationSeconds,
       generationStrategies: input.generationStrategies ?? configuration.generationStrategies ?? configuration.workflowManifest?.generationStrategies,
       skillContext: loadedSkillContext
@@ -212,6 +184,7 @@ export function createCinematicWorkflowUseCases(ports, {
         ...configuration,
         productionId,
         sourceNodeId,
+        aspectRatio: persistedManifest.aspectRatio,
         seriesId,
         episodeNumber: persistedManifest.episodeNumber,
         episodeId: persistedManifest.episodeId,
@@ -277,6 +250,8 @@ export function createCinematicWorkflowUseCases(ports, {
         tasks: [],
         nextAction: null,
         promptAuthority: null,
+        screenplayAuthority: null,
+        screenplayRevisionContract: null,
         assetReuse: null
       };
     }
@@ -315,15 +290,43 @@ export function createCinematicWorkflowUseCases(ports, {
     }
 
     const authoringGaps = [];
+    let screenplayAuthority = {
+      targetType: "structured_script",
+      targetId: run.configuration.sourceNodeId,
+      revision: null,
+      contentChecksum: null,
+      scriptDocumentRevision: null
+    };
+    let screenplayRevisionContract = null;
     try {
-      const [story, bible, document] = await Promise.all([
+      const [story, bible, document, sourceNode] = await Promise.all([
         cinematic.getStoryPacket({ projectId, productionId }),
         cinematic.getVisualBible({ projectId, productionId }),
-        getScriptDocument?.({ projectId, nodeId: run.configuration.sourceNodeId })
+        getScriptDocument?.({ projectId, nodeId: run.configuration.sourceNodeId }),
+        ports.projects.getNode(projectId, run.configuration.sourceNodeId)
       ]);
       if (!meaningfulStory(story)) authoringGaps.push("story_packet");
       if (!bible) authoringGaps.push("visual_bible");
       if (!document?.rows?.length) authoringGaps.push("structured_script_rows");
+      const screenplayDocument = document?.screenplayDocument ?? null;
+      screenplayAuthority = {
+        targetType: "structured_script",
+        targetId: run.configuration.sourceNodeId,
+        revision: Number.isInteger(screenplayDocument?.revision)
+          ? screenplayDocument.revision
+          : Number.isInteger(document?.screenplayRevision) && document.screenplayRevision > 0
+            ? document.screenplayRevision
+            : Number.isInteger(document?.revision) ? document.revision : null,
+        contentChecksum: screenplayDocument?.checksum ?? null,
+        scriptDocumentRevision: Number.isInteger(document?.revision) ? document.revision : null
+      };
+      const activeRevisionContract = sourceNode?.payload?.screenplayRevisionContract;
+      if (
+        sourceNode?.payload?.authoringMode === "screenplay_development"
+        && activeRevisionContract?.format === "ScreenplayRevisionContractV1"
+      ) {
+        screenplayRevisionContract = activeRevisionContract;
+      }
     } catch {
       authoringGaps.push("authoring_state_unreadable");
     }
@@ -332,7 +335,7 @@ export function createCinematicWorkflowUseCases(ports, {
     try {
       const project = await ports.projects.open(projectId);
       const canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
-      layoutOverlaps = findCinematicCanvasOverlaps(cinematicProductionNodes(canvas, productionId));
+      layoutOverlaps = auditCinematicCanvasOverlaps(canvas, productionId).globalOverlaps;
     } catch {
       layoutOverlaps = [];
     }
@@ -345,7 +348,11 @@ export function createCinematicWorkflowUseCases(ports, {
           cinematic.listGenerationUnits({ projectId, productionId }),
           ports.projects.listRuns(projectId)
         ]);
-        for (const entry of units) {
+        // Serial scene generation deliberately keeps downstream units blocked
+        // until the immediately preceding take is accepted. Those units cannot
+        // legally have Provider artifacts yet, so integrity audits must only
+        // cover units whose lifecycle is currently executable.
+        for (const entry of units.filter(generationUnitRequiresVideoArtifact)) {
           const generationUnitId = entry.generationUnit.generationUnitId;
           const matchingRuns = providerRuns.filter((candidate) => candidate.request?.generationUnitId === generationUnitId);
           const successful = matchingRuns.find((candidate) => (
@@ -390,19 +397,29 @@ export function createCinematicWorkflowUseCases(ports, {
       seriesId,
       episodeNumber: run.configuration.episodeNumber ?? run.configuration.workflowManifest?.episodeNumber ?? null,
       promptAuthority,
+      screenplayAuthority,
+      screenplayRevisionContract,
       assetReuse,
       authoringGaps,
       layoutOverlaps,
       generationIntegrityIssues
     });
 
+    const workflowManifest = {
+      ...run.configuration.workflowManifest,
+      aspectRatio: run.configuration.aspectRatio || run.configuration.workflowManifest.aspectRatio,
+      formatProfile: run.configuration.workflowManifest.formatProfile
+        || (run.configuration.aspectRatio ? resolveCinematicFormatProfile({ aspectRatio: run.configuration.aspectRatio }) : null)
+    };
     return {
-      workflowManifest: run.configuration.workflowManifest,
-      run,
+      workflowManifest,
+      run: { ...run, configuration: { ...run.configuration, workflowManifest } },
       session,
       tasks,
       nextAction,
       promptAuthority,
+      screenplayAuthority,
+      screenplayRevisionContract,
       assetReuse
     };
   }
@@ -423,24 +440,41 @@ export function createCinematicWorkflowUseCases(ports, {
     let canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
     const productionId = status.run.configuration.productionId;
     const nodes = cinematicProductionNodes(canvas, productionId);
-    const layout = buildCinematicCanvasLayout(nodes);
+    const productionNodeIds = new Set(nodes.map((node) => node.id));
+    const obstacles = canvas.nodes.filter((node) => !productionNodeIds.has(node.id));
+    const layout = buildCinematicCanvasLayout(nodes, { obstacles });
     const moved = [];
     for (const placement of layout) {
       const node = canvas.nodes.find((entry) => entry.id === placement.nodeId);
       if (!node || (node.x === placement.x && node.y === placement.y)) continue;
-      const updated = await updateNode({
-        projectId,
-        nodeId: node.id,
-        x: placement.x,
-        y: placement.y,
-        expectedRevision: node.revision
-      });
+      const updated = typeof ports.projects.updateNodeLayout === "function"
+        ? await ports.projects.updateNodeLayout(projectId, node.id, {
+            x: placement.x,
+            y: placement.y
+          }, node.revision)
+        : await updateNode({
+            projectId,
+            nodeId: node.id,
+            x: placement.x,
+            y: placement.y,
+            expectedRevision: node.revision
+          });
       moved.push({ nodeId: updated.id, x: updated.x, y: updated.y, revision: updated.revision });
       canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
     }
-    const residualOverlaps = findCinematicCanvasOverlaps(cinematicProductionNodes(canvas, productionId));
-    if (residualOverlaps.length) {
-      throw new UnuTvError("canvas_reflow_incomplete", "Collision-free canvas reflow left residual overlaps", 500, { residualOverlaps });
+    const overlapAudit = auditCinematicCanvasOverlaps(canvas, productionId);
+    if (overlapAudit.productionOverlapCount || overlapAudit.globalOverlapCount) {
+      throw new UnuTvError(
+        "canvas_reflow_incomplete",
+        "Collision-free canvas reflow left residual production or cross-domain overlaps",
+        500,
+        {
+          productionOverlapCount: overlapAudit.productionOverlapCount,
+          globalOverlapCount: overlapAudit.globalOverlapCount,
+          productionOverlaps: overlapAudit.productionOverlaps,
+          globalOverlaps: overlapAudit.globalOverlaps
+        }
+      );
     }
     const next = await getCinematicWorkflowStatus({ projectId, automationRunId: status.run.id });
     return {
@@ -450,6 +484,8 @@ export function createCinematicWorkflowUseCases(ports, {
       canvasId: project.rootCanvasId,
       moved,
       overlapCount: 0,
+      productionOverlapCount: 0,
+      globalOverlapCount: 0,
       nextAction: next.nextAction
     };
   }
@@ -480,21 +516,56 @@ export function createCinematicWorkflowUseCases(ports, {
         { jobId, itemId, runId: item.providerRunId, kind: job.kind, billingMode: job.configuration?.billingMode ?? null }
       );
     }
-    const retriedItem = await storyboards.retryStoryboardBatchItem({
-      projectId,
-      productionId,
-      jobId,
-      itemId,
-      abandonUnknownSubmission: true,
-      operationContext: {
-        actorType: "automation",
-        actorId: "cinematic-provider-reconciliation",
-        automationRunId: status.run.id,
-        idempotencyKey: status.nextAction.idempotencyKey
-      }
-    });
     const blockedTask = status.tasks.find((task) => task.id === status.nextAction.blocker.taskId)
       ?? status.tasks.find((task) => task.status === "blocked");
+    const operationContext = {
+      actorType: "automation",
+      actorId: "cinematic-provider-reconciliation",
+      automationRunId: status.run.id,
+      idempotencyKey: status.nextAction.idempotencyKey
+    };
+    let retriedItem;
+    try {
+      retriedItem = await storyboards.retryStoryboardBatchItem({
+        projectId,
+        productionId,
+        jobId,
+        itemId,
+        abandonUnknownSubmission: true,
+        operationContext
+      });
+    } catch (error) {
+      if (error.code !== "storyboard_batch_generation_coverage_stale") throw error;
+      const cancelledJob = await storyboards.cancelStoryboardBatchJob({
+        projectId,
+        productionId,
+        jobId,
+        operationContext: {
+          ...operationContext,
+          idempotencyKey: `${status.nextAction.idempotencyKey}:cancel-incomplete-coverage`
+        }
+      });
+      if (blockedTask && automationExecutor?.retryAutomationTask) {
+        await automationExecutor.retryAutomationTask({
+          projectId,
+          automationRunId: status.run.id,
+          taskId: blockedTask.id,
+          note: "Cancelled the incomplete storyboard batch and re-queued image generation for the complete current shot set"
+        });
+      }
+      const next = await getCinematicWorkflowStatus({ projectId, automationRunId: status.run.id });
+      return {
+        format: "ProviderReconciliationReceiptV1",
+        projectId,
+        productionId,
+        jobId,
+        itemId,
+        previousRunId: item.providerRunId ?? null,
+        strategy: "cancel_incomplete_coverage_and_requeue",
+        cancelledJob,
+        nextAction: next.nextAction
+      };
+    }
     if (blockedTask && automationExecutor?.retryAutomationTask) {
       await automationExecutor.retryAutomationTask({
         projectId,
@@ -513,285 +584,6 @@ export function createCinematicWorkflowUseCases(ports, {
       previousRunId: item.providerRunId ?? null,
       strategy: "abandon_unknown_zero_cost_image",
       job: retriedItem,
-      nextAction: next.nextAction
-    };
-  }
-
-  async function authorEpisode(input = {}) {
-    const projectId = requireText(input.projectId, "projectId");
-    const status = await getCinematicWorkflowStatus({
-      projectId,
-      automationRunId: input.automationRunId
-    });
-    if (!status.run) throw new UnuTvError("cinematic_workflow_not_found", "No cinematic workflow run found", 404);
-    if (status.nextAction?.type !== "author_episode") {
-      throw new UnuTvError(
-        "cinematic_next_action_mismatch",
-        `Episode authoring is not the current Skill action; current action is ${status.nextAction?.type || "none"}`,
-        409,
-        { nextAction: status.nextAction }
-      );
-    }
-    if (!createNode || !updateNode || !connectEdge || !createScriptRow || !getScriptDocument || !updateScriptRow) {
-      throw new UnuTvError("episode_authoring_ports_required", "Episode authoring requires canvas and structured-script ports", 500);
-    }
-    const productionId = status.run.configuration.productionId;
-    const sourceNodeId = status.run.configuration.sourceNodeId;
-    const authoringPackage = requireObject(input.package ?? input.authoringPackage, "package");
-    if (authoringPackage.format !== "EpisodeAuthoringPackageV1") {
-      throw new UnuTvError("episode_authoring_package_invalid", "package.format must be EpisodeAuthoringPackageV1", 400);
-    }
-    const storyPacket = requireObject(authoringPackage.storyPacket, "package.storyPacket");
-    const visualBible = requireObject(authoringPackage.visualBible, "package.visualBible");
-    const packageId = requireText(authoringPackage.packageId, "package.packageId");
-    const scriptRows = Array.isArray(authoringPackage.scriptRows) ? authoringPackage.scriptRows : [];
-    if (!scriptRows.length) throw new UnuTvError("script_rows_required", "package.scriptRows must contain the complete structured episode", 400);
-    const duration = scriptRows.reduce((sum, row) => sum + (Number(row?.payload?.durationSeconds ?? row?.durationSeconds) || 0), 0);
-    const targetDuration = Number(status.workflowManifest?.targetDurationSeconds) || 0;
-    if (!duration || Math.abs(duration - targetDuration) > 1) {
-      throw new UnuTvError(
-        "episode_duration_mismatch",
-        `Structured rows total ${duration}s but workflow target is ${targetDuration}s`,
-        409,
-        { durationSeconds: duration, targetDurationSeconds: targetDuration }
-      );
-    }
-
-    const [existingStory, existingBible, sourceNode, currentDocument, project] = await Promise.all([
-      cinematic.getStoryPacket({ projectId, productionId }),
-      cinematic.getVisualBible({ projectId, productionId }),
-      ports.projects.getNode(projectId, sourceNodeId),
-      getScriptDocument({ projectId, nodeId: sourceNodeId }),
-      ports.projects.open(projectId)
-    ]);
-    if (!sourceNode || !project?.rootCanvasId) throw new UnuTvError("episode_canvas_source_required", "Episode source and root canvas are required", 409);
-
-    let savedStory = existingStory;
-    if (!existingStory || !equalJson(
-      { ...existingStory, storyPacketId: undefined, revision: undefined, updatedAt: undefined },
-      { ...storyPacket, storyPacketId: undefined, revision: undefined, updatedAt: undefined }
-    )) {
-      savedStory = await cinematic.saveStoryPacket({
-        projectId,
-        productionId,
-        expectedRevision: existingStory?.revision ?? 0,
-        storyPacket: {
-          ...storyPacket,
-          ...(existingStory?.storyPacketId ? { storyPacketId: existingStory.storyPacketId } : {}),
-          revision: (existingStory?.revision ?? 0) + 1
-        }
-      });
-    }
-
-    let savedBible = existingBible;
-    if (!existingBible || !equalJson(
-      { ...existingBible, visualBibleId: undefined, revision: undefined, updatedAt: undefined },
-      { ...visualBible, visualBibleId: undefined, revision: undefined, updatedAt: undefined }
-    )) {
-      savedBible = await cinematic.saveVisualBible({
-        projectId,
-        productionId,
-        expectedRevision: existingBible?.revision ?? 0,
-        visualBible: {
-          ...visualBible,
-          ...(existingBible?.visualBibleId ? { visualBibleId: existingBible.visualBibleId } : {}),
-          revision: (existingBible?.revision ?? 0) + 1
-        }
-      });
-    }
-
-    let structuredRowsChanged = false;
-    if (currentDocument.rows.length) {
-      const orderedCurrentRows = currentDocument.rows
-        .slice()
-        .sort((left, right) => left.orderIndex - right.orderIndex);
-      const currentRows = orderedCurrentRows.map((row) => row.payload);
-      const proposedRows = scriptRows.map((row) => row.payload ?? row);
-      if (!equalJson(currentRows, proposedRows)) {
-        const samePackage = sourceNode.payload?.authoringPackageId === packageId;
-        const sameStructure = orderedCurrentRows.length === scriptRows.length
-          && orderedCurrentRows.every((row, index) => (
-            Number(row.shotNumber) === Number(scriptRows[index]?.shotNumber ?? index + 1)
-          ));
-        if (!samePackage || !sameStructure) {
-          throw new UnuTvError(
-            "structured_script_conflict",
-            "Only a revision of the same authoring package with the same shot structure can replace existing rows without an explicit scoped reset",
-            409,
-            {
-              existingPackageId: sourceNode.payload?.authoringPackageId ?? null,
-              proposedPackageId: packageId,
-              currentRowCount: currentRows.length,
-              proposedRowCount: proposedRows.length
-            }
-          );
-        }
-        for (const [index, row] of orderedCurrentRows.entries()) {
-          await updateScriptRow({
-            projectId,
-            nodeId: sourceNodeId,
-            rowId: row.id,
-            orderIndex: index,
-            shotNumber: scriptRows[index]?.shotNumber ?? index + 1,
-            payload: proposedRows[index],
-            replacePayload: true
-          });
-        }
-        structuredRowsChanged = true;
-      }
-    } else {
-      for (const [index, row] of scriptRows.entries()) {
-        await createScriptRow({
-          projectId,
-          nodeId: sourceNodeId,
-          orderIndex: index,
-          shotNumber: row.shotNumber ?? index + 1,
-          payload: row.payload ?? row
-        });
-      }
-      structuredRowsChanged = true;
-    }
-
-    let revisedShots = [];
-    if (structuredRowsChanged && scriptPlanning?.planCinematicFromScript) {
-      const revisedPlan = await scriptPlanning.planCinematicFromScript({
-        projectId,
-        productionId,
-        sourceNodeId,
-        createStoryboard: true
-      });
-      revisedShots = revisedPlan.shots ?? [];
-      let liveCanvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
-      for (const shot of revisedShots) {
-        const shotNode = liveCanvas.nodes.find((node) => (
-          node.payload?.resourceType === "cinematic_shot"
-          && node.payload?.resourceId === shot.shotId
-        ));
-        if (!shotNode) continue;
-        await updateNode({
-          projectId,
-          nodeId: shotNode.id,
-          title: `S${String(shot.order).padStart(2, "0")} · ${shot.narrativeJob}`,
-          payload: {
-            ...shotNode.payload,
-            revision: shot.revision,
-            durationSeconds: shot.durationSeconds,
-            shot,
-            stage: "shot_design",
-            stageStatus: "revised"
-          },
-          expectedRevision: shotNode.revision
-        });
-        liveCanvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
-      }
-    }
-
-    const sourceProjection = await updateNode({
-      projectId,
-      nodeId: sourceNodeId,
-      title: authoringPackage.title || sourceNode.title,
-      payload: {
-        ...sourceNode.payload,
-        ...(authoringPackage.sourceDocument || {}),
-        authoringPackageId: packageId,
-        productionId,
-        structuredRowCount: scriptRows.length,
-        structuredDurationSeconds: duration,
-        stage: "script",
-        stageStatus: "authored"
-      },
-      expectedRevision: sourceNode.revision
-    });
-    let canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
-    const storyNode = await ensureProjectionNode({
-      projectId,
-      canvas,
-      kind: "story",
-      title: "EP01 故事锁与因果链",
-      x: sourceProjection.x + 560,
-      y: sourceProjection.y,
-      resourceType: "story_packet",
-      resourceId: savedStory.storyPacketId,
-      payload: {
-        productionId,
-        revision: savedStory.revision,
-        packageId,
-        storyPacket: savedStory,
-        stage: "script_analysis",
-        stageStatus: "ready"
-      }
-    });
-    canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
-    const bibleNode = await ensureProjectionNode({
-      projectId,
-      canvas,
-      kind: "cinematic",
-      title: "EP01 视觉与声音圣经",
-      x: sourceProjection.x + 1248,
-      y: sourceProjection.y,
-      resourceType: "visual_bible",
-      resourceId: savedBible.visualBibleId,
-      payload: {
-        productionId,
-        revision: savedBible.revision,
-        packageId,
-        visualBible: savedBible,
-        stage: "visual_bible",
-        stageStatus: "ready"
-      }
-    });
-    canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
-    await ensureProjectionEdge({
-      projectId,
-      canvas,
-      fromNodeId: sourceNodeId,
-      toNodeId: storyNode.id,
-      role: "cinematic_stage:story_packet"
-    });
-    canvas = await ports.projects.openCanvas(projectId, project.rootCanvasId);
-    await ensureProjectionEdge({
-      projectId,
-      canvas,
-      fromNodeId: storyNode.id,
-      toNodeId: bibleNode.id,
-      role: "cinematic_stage:visual_bible"
-    });
-
-    let next = await getCinematicWorkflowStatus({ projectId, automationRunId: status.run.id });
-    const blockedAuthoringTask = next.tasks.find((task) => task.status === "blocked" && (
-      ["story_packet_required", "visual_bible_required"].includes(task.error?.code)
-      || next.nextAction?.blocker?.code === "shot_performance_contract_required"
-    ));
-    if (blockedAuthoringTask && automationExecutor?.retryAutomationTask) {
-      const staleStoryboardBatchJobId = blockedAuthoringTask.error?.details?.jobId ?? null;
-      if (staleStoryboardBatchJobId && storyboards?.cancelStoryboardBatchJob) {
-        await storyboards.cancelStoryboardBatchJob({
-          projectId,
-          productionId,
-          jobId: staleStoryboardBatchJobId
-        });
-      }
-      await automationExecutor.retryAutomationTask({
-        projectId,
-        automationRunId: status.run.id,
-        taskId: blockedAuthoringTask.id,
-        note: "EpisodeAuthoringPackageV1 atomically resolved the authoring or performance-contract gate"
-      });
-      next = await getCinematicWorkflowStatus({ projectId, automationRunId: status.run.id });
-    }
-    return {
-      format: "EpisodeAuthoringReceiptV1",
-      packageId,
-      productionId,
-      sourceNodeId,
-      storyPacketId: savedStory.storyPacketId,
-      storyRevision: savedStory.revision,
-      visualBibleId: savedBible.visualBibleId,
-      visualBibleRevision: savedBible.revision,
-      structuredRowCount: scriptRows.length,
-      durationSeconds: duration,
-      canvasNodeIds: [sourceNodeId, storyNode.id, bibleNode.id],
-      revisedShotIds: revisedShots.map((shot) => shot.shotId),
       nextAction: next.nextAction
     };
   }
@@ -821,8 +613,65 @@ export function createCinematicWorkflowUseCases(ports, {
     const workerResults = [];
     const configuration = statusBefore.run.configuration || {};
     const sourceNodeId = configuration.sourceNodeId || statusBefore.workflowManifest?.sourceNodeId;
+    if (
+      statusBefore.nextAction?.type === "advance"
+      && ["auto_paused", "auto_failed", "manual_editable"].includes(statusBefore.session?.state)
+      && projectControl.resumeAutomation
+    ) {
+      await projectControl.resumeAutomation({ projectId, automationRunId });
+      statusBefore = await getCinematicWorkflowStatus({ projectId, automationRunId });
+    }
 
-    if (statusBefore.nextAction?.blocker?.code === "cinematic_video_artifact_missing") {
+    if (sequenceWorkspace && automationTasks?.invalidateAutomationTasks) {
+      const [shots, sequencePrevis] = await Promise.all([
+        cinematic.listShots({ projectId, productionId }),
+        sequenceWorkspace.listSequencePrevis({ projectId, productionId })
+          .then(latestSequencePrevis)
+      ]);
+      const shotRevisions = new Map(shots.map((shot) => [shot.shotId, shot.revision]));
+      const stalePrevisShots = sequencePrevis
+        ? sequencePrevis.shots.filter((shot) => shotRevisions.get(shot.shotId) !== shot.shotRevision)
+        : [];
+      const previsTask = statusBefore.tasks.find((task) => task.stage === "previs_design");
+      if (
+        sequencePrevis
+        && previsTask
+        && ["succeeded", "reused"].includes(previsTask.status)
+        && (sequencePrevis.shots.length !== shots.length || stalePrevisShots.length)
+      ) {
+        const invalidation = await automationTasks.invalidateAutomationTasks({
+          projectId,
+          automationRunId,
+          fromStage: "previs_design",
+          reason: {
+            code: "sequence_previs_shot_revision_stale",
+            sequencePrevisId: sequencePrevis.sequencePrevisId,
+            sequencePrevisRevision: sequencePrevis.revision,
+            staleShots: stalePrevisShots.map((shot) => ({
+              shotId: shot.shotId,
+              previsShotRevision: shot.shotRevision,
+              currentShotRevision: shotRevisions.get(shot.shotId) ?? null
+            }))
+          }
+        });
+        if (statusBefore.session?.state !== "auto_running") {
+          await projectControl.resumeAutomation({ projectId, automationRunId });
+        }
+        workerResults.push({
+          worker: "sequence-previs-lineage",
+          ok: true,
+          sequencePrevisId: sequencePrevis.sequencePrevisId,
+          sequencePrevisRevision: sequencePrevis.revision,
+          invalidatedStages: invalidation.affectedStages
+        });
+        statusBefore = await getCinematicWorkflowStatus({ projectId, automationRunId });
+      }
+    }
+
+    if ([
+      "cinematic_video_artifact_missing",
+      "scene_authority_canvas_source_required"
+    ].includes(statusBefore.nextAction?.blocker?.code)) {
       const { ensureGenerationUnitsForProduction } = await import("../workers/unit-design-worker.mjs");
       const repairedUnits = await ensureGenerationUnitsForProduction({
         projectId,
@@ -988,7 +837,7 @@ export function createCinematicWorkflowUseCases(ports, {
           const sourceMedia = ports.media.open(projectId, binding.mediaId);
           if (!sourceMedia) throw new UnuTvError("media_not_found", `低模预演媒体不存在：${binding.mediaId}`, 404);
           const pngBytes = await sharp(sourceMedia.filePath, { density: 144 })
-            .resize({ width: 540, height: 960, fit: "fill" })
+            .resize({ width: 864, height: 1536, fit: "fill" })
             .png({ compressionLevel: 9 })
             .toBuffer();
           providerMedia = await ports.media.importBytes({
@@ -1099,7 +948,63 @@ export function createCinematicWorkflowUseCases(ports, {
       }
     }
 
+    if (
+      requiresStoryboardLineageRebase(statusBefore.nextAction?.blocker)
+      && automationExecutor?.retryAutomationTask
+      && scriptPlanning
+      && storyboards
+    ) {
+      const blockedTask = statusBefore.tasks.find((task) => (
+        task.id === statusBefore.nextAction.blocker.taskId && task.status === "blocked"
+      ));
+      const jobId = storyboardLineageRepairJobId(statusBefore.nextAction.blocker);
+      if (blockedTask) {
+        if (jobId) {
+          const job = await storyboards.getStoryboardBatchJob({ projectId, productionId, jobId });
+          if (job && !job.cancelledAt && job.status !== "cancelled") {
+            await storyboards.cancelStoryboardBatchJob({
+              projectId,
+              productionId,
+              jobId,
+              operationContext: {
+                actorType: "automation",
+                actorId: "cinematic-storyboard-lineage-repair",
+                automationRunId,
+                idempotencyKey: `${statusBefore.nextAction.idempotencyKey}:cancel-stale-batch`
+              }
+            });
+          }
+        }
+        await scriptPlanning.planCinematicFromScript({
+          projectId,
+          productionId,
+          sourceNodeId,
+          createStoryboard: true,
+          operationContext: {
+            actorType: "automation",
+            actorId: "cinematic-storyboard-lineage-repair",
+            automationRunId,
+            idempotencyKey: `${statusBefore.nextAction.idempotencyKey}:rebase-storyboard`
+          }
+        });
+        await automationExecutor.retryAutomationTask({
+          projectId,
+          automationRunId,
+          taskId: blockedTask.id,
+          note: "Cancelled the stale Storyboard batch, rebound the Storyboard to current Shot revisions, and queued one new lineage-bound batch"
+        });
+        workerResults.push({
+          worker: "storyboard-batch-lineage-repair",
+          ok: true,
+          cancelledJobId: jobId
+        });
+        statusBefore = await getCinematicWorkflowStatus({ projectId, automationRunId });
+      }
+    }
+
     const runtimeRepairableBlockers = new Set([
+      "cinematic_asset_readiness_required",
+      "cinematic_development_review_required",
       "revision_conflict",
       "ERR_SQLITE_ERROR",
       "invalid_cinematic_contract",
@@ -1107,6 +1012,7 @@ export function createCinematicWorkflowUseCases(ports, {
       "sequence_previs_frame_pixel_acceptance_required",
       "sequence_previs_owner_acceptance_required",
       "shot_script_owner_acceptance_required",
+      "director_capture_not_found",
       "continuity_evaluation_required",
       "latest_cinematic_evaluation_rejected",
       "structured_continuity_evaluation_required",
@@ -1115,6 +1021,10 @@ export function createCinematicWorkflowUseCases(ports, {
       "timeline_aspect_ratio_mismatch"
     ]);
     if (runtimeRepairableBlockers.has(statusBefore.nextAction?.blocker?.code) && automationExecutor?.retryAutomationTask) {
+      if (statusBefore.session?.state === "manual_editable" && projectControl.resumeAutomation) {
+        await projectControl.resumeAutomation({ projectId, automationRunId });
+        statusBefore = await getCinematicWorkflowStatus({ projectId, automationRunId });
+      }
       const conflictedTask = statusBefore.tasks.find((task) => (
         task.id === statusBefore.nextAction.blocker.taskId
         || (task.status === "blocked" && runtimeRepairableBlockers.has(task.error?.code))
@@ -1130,7 +1040,12 @@ export function createCinematicWorkflowUseCases(ports, {
     }
 
     // Full pipeline / one-shot: bootstrap missing upstream contracts before stage execution.
-    if ((configuration.oneShot || configuration.fullDelivery) && configuration.brief && sourceNodeId) {
+    if (
+      !configuration.workflowManifest
+      && (configuration.oneShot || configuration.fullDelivery)
+      && configuration.brief
+      && sourceNodeId
+    ) {
       try {
         const { bootstrapEpisodeFromBrief } = await import("../workers/bootstrap-episode-worker.mjs");
         if (createScriptRow && getScriptDocument && scriptPlanning) {
@@ -1203,7 +1118,8 @@ export function createCinematicWorkflowUseCases(ports, {
       advanceResult = await automationExecutor.advanceAutomation({
         projectId,
         automationRunId,
-        releaseWaitingLease: true
+        releaseWaitingLease: true,
+        forceOneStep: true
       });
     }
     const status = await getCinematicWorkflowStatus({ projectId, automationRunId });
@@ -1240,6 +1156,7 @@ export function createCinematicWorkflowUseCases(ports, {
         sequencePrevisId,
         revision: sequencePrevisRevision,
         state,
+        ...(input.playbackReceiptId ? { playbackReceiptId: input.playbackReceiptId } : {}),
         note: input.note || ""
       })).review
       : await reviewTarget({
@@ -1248,6 +1165,8 @@ export function createCinematicWorkflowUseCases(ports, {
         targetId,
         state,
         note: input.note || "",
+        ...(input.reviewId ? { reviewId: input.reviewId } : {}),
+        ...(input.evidence ? { evidence: input.evidence } : {}),
         operationContext: statusBefore.session?.automationRunId
           ? {
             actorType: "owner_gate",
@@ -1305,7 +1224,13 @@ export function createCinematicWorkflowUseCases(ports, {
         productionId: statusBefore.run.configuration.productionId,
         storyboardId: rejectedStoryboardTarget.storyboardId,
         storyboardShotId: rejectedStoryboardTarget.storyboardShotId,
-        imageMediaId: null
+        imageMediaId: null,
+        retakeDirective: buildStoryboardRetakeDirective({
+          directive: input.retakeDirective,
+          note: input.note,
+          rejectedMediaId: targetId,
+          review
+        })
       });
     }
     let status = await getCinematicWorkflowStatus({ projectId, automationRunId: statusBefore.run?.id });
@@ -1339,9 +1264,35 @@ export function createCinematicWorkflowUseCases(ports, {
     return { review, nextAction: status.nextAction };
   }
 
+  const authorEpisode = createCinematicEpisodeAuthoringUseCase({
+    ports,
+    automationExecutor,
+    automationTasks,
+    cinematic,
+    connectEdge,
+    createNode,
+    createScriptRow,
+    deleteScriptRow,
+    getCinematicWorkflowStatus,
+    getScriptDocument,
+    runProjectTransaction,
+    saveScreenplayDocument,
+    storyboards,
+    updateNode,
+    updateScriptRow
+  });
+
+  const reviseCinematicScreenplay = createCinematicScreenplayRevisionUseCase({
+    getCinematicWorkflowStatus,
+    getNode: ({ projectId, nodeId }) => ports.projects.getNode(projectId, nodeId),
+    getScriptDocument,
+    updateNode
+  });
+
   return {
     startCinematicWorkflow,
     getCinematicWorkflowStatus,
+    reviseCinematicScreenplay,
     advanceCinematicWorkflow,
     authorEpisode,
     reflowCinematicCanvas,

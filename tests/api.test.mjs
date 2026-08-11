@@ -89,6 +89,41 @@ test("HTTP API creates and reopens a canvas", async (context) => {
   assert.equal(canvas.nodes[0].title, "镜头 A");
 });
 
+test("HTTP API sends large multibyte JSON bodies without truncation", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-api-utf8-"));
+  const service = createUnuTvServer({ dataRoot });
+  context.after(() => service.close());
+  const address = await service.listen(0);
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/api/projects`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "中文响应回归" })
+  }).then((response) => response.json());
+  const production = await fetch(`${base}/api/projects/${created.project.id}/cinematic-productions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title: "大型中文影视合同", projectType: "short_film" })
+  }).then((response) => response.json());
+  const notes = "八个人在无名公寓连续移动。".repeat(18_000);
+  const response = await fetch(`${base}/api/projects/${created.project.id}/cinematic-productions/${production.productionId}/visual-bible`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      cinematography: { grammar: notes },
+      lighting: { source: "门外冷光" },
+      color: { primary: "冷暖对比" },
+      productionDesign: { location: "无名公寓公共区" },
+      characterLook: { continuity: "锁定身份" },
+      performance: { baseline: "克制真实" },
+      sound: { world: "持续雨声" },
+      vfx: { physics: "现实重力" },
+      continuityLocks: ["同一连续空间"]
+    })
+  });
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert.equal(Number(response.headers.get("content-length")), bytes.byteLength);
+  assert.equal(JSON.parse(bytes.toString("utf8")).cinematography.grammar, notes);
+});
+
 test("HTTP run endpoint returns a real provider result and persists generated media", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-run-api-"));
   let received;
@@ -177,7 +212,16 @@ test("cinematic production API completes contracts through compile and preflight
     referenceAssetIds: [], acceptanceCriteria: ["跨视图身份一致"], prohibitedChanges: ["新增第二个人"]
   }).then((response) => response.json());
   const imageCompilation = await send(`${productionRoot}/asset-authorities/${authority.authorityId}/compile`, "POST", {
-    generationParameters: { provider: "ununu", model: "openai/gpt-image-2", aspectRatio: "16:9", resolution: "2048x1152", count: 1, referenceMediaIds: [] }, referenceBindings: []
+    generationParameters: {
+      provider: "ununu",
+      model: "openai/gpt-image-2",
+      aspectRatio: "3:2",
+      resolution: "1536x1024",
+      background: "opaque",
+      count: 1,
+      referenceMediaIds: []
+    },
+    referenceBindings: []
   }).then((response) => response.json());
   assert.equal(imageCompilation.envelope.protocolId, "ununu.character.v2");
   assert.equal(imageCompilation.envelope.lint.ok, true, JSON.stringify(imageCompilation.envelope.lint));
@@ -197,13 +241,114 @@ test("cinematic production API completes contracts through compile and preflight
     color: { primary: "冷蓝" }, performance: cinematicPerformance(8, { trigger: "来人先抬手，人物确认后视线才落到信物" }), sound: { ambience: "雨声" }, physicsVfx: { rain: "遵循重力" }, editContinuity: { axis: "不越轴" },
     dialogue: [], requiredAssetIds: [], mustNotAppearYet: [], acceptanceCriteria: ["信物来源与镜头路径清楚"]
   }).then((response) => response.json());
+  const previsFrames = [];
+  for (const [index, previsShot] of [shot, movingShot].entries()) {
+    const frame = await send(`${projectRoot}/media/data`, "POST", {
+      kind: "image",
+      title: `${previsShot.narrativeJob} · 已复核低模预演帧`,
+      dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    }).then((response) => response.json());
+    await send(`${projectRoot}/reviews`, "POST", {
+      targetType: "media",
+      targetId: frame.id,
+      state: "accepted",
+      note: `Owner 逐像素接受第 ${index + 1} 镜低模预演干净帧`
+    });
+    previsFrames.push(frame);
+  }
+  const sequencePrevis = await send(`${productionRoot}/sequence-previs`, "POST", {
+    sequencePrevis: {
+      sequencePrevisId: "sequence-previs-api-rain-gate",
+      productionId: production.productionId,
+      title: "雨夜校门连续预演",
+      status: "candidate",
+      storyPacketId: storyPacket.storyPacketId,
+      storyPacketRevision: storyPacket.revision,
+      durationSeconds: 16,
+      frameRate: 24,
+      shots: [shot, movingShot].map((previsShot, index) => ({
+        previsShotId: `previs-shot-${previsShot.shotId}`,
+        shotId: previsShot.shotId,
+        shotRevision: previsShot.revision,
+        order: index + 1,
+        startSeconds: index * 8,
+        endSeconds: (index + 1) * 8,
+        narrativeJob: previsShot.narrativeJob,
+        entryPhase: previsShot.openingState,
+        exitPhase: previsShot.endingState,
+        frameMediaId: previsFrames[index].id,
+        frameSourceRole: "low_poly_clean_start_frame",
+        cameraState: { movement: previsShot.cinematography.movementPath },
+        performanceState: { description: previsShot.performance.visibleEvidence || previsShot.narrativeJob },
+        spatialState: { description: previsShot.blocking.positions || previsShot.blocking.gaze },
+        audioCue: { description: previsShot.sound.ambience }
+      })),
+      cutDecisions: [{
+        cutDecisionId: "cut-rain-wait-to-token",
+        fromShotId: shot.shotId,
+        toShotId: movingShot.shotId,
+        transitionType: "cut",
+        atSeconds: 8,
+        motivation: "人物确认来人后切入信物信息",
+        outgoingPhase: shot.endingState,
+        incomingPhase: movingShot.openingState,
+        axisRule: "保持校门纵深轴，不越轴",
+        gazeRelation: "人物视线从来人过渡到手中信物",
+        motionVector: "前镜静止收束，后镜沿纵深轴推进",
+        audioBridge: "雨声连续",
+        overlapSeconds: 0
+      }],
+      acceptedAuthorityIds: [],
+      storyboardIds: [],
+      directorCaptureIds: [],
+      rejectedExampleEvaluationIds: [],
+      revision: 1
+    }
+  }).then((response) => response.json());
+  const visualContexts = new Map();
+  for (const previsShot of [shot, movingShot]) {
+    const visualContext = await send(`${productionRoot}/sequence-previs/${sequencePrevis.sequencePrevisId}/visual-context`, "POST", {
+      shotId: previsShot.shotId
+    }).then((response) => response.json());
+    visualContexts.set(previsShot.shotId, visualContext);
+  }
+  const playbackReceipt = await send(
+    `${productionRoot}/sequence-previs/${sequencePrevis.sequencePrevisId}/playback-receipts`,
+    "POST",
+    {
+      playback: {
+        playbackSessionId: `api-playback-${sequencePrevis.sequencePrevisId}`,
+        startedAt: "2026-07-28T00:00:00.000Z",
+        completedAt: "2026-07-28T00:00:16.000Z",
+        sampleCount: 385,
+        maxObservedStepMs: 42,
+        manualSeekCount: 0,
+        intervals: [{ startSeconds: 0, endSeconds: sequencePrevis.durationSeconds }]
+      }
+    }
+  ).then((response) => response.json());
+  const sequencePrevisAcceptance = await send(`${productionRoot}/sequence-previs/${sequencePrevis.sequencePrevisId}/reviews`, "POST", {
+    revision: sequencePrevis.revision,
+    state: "accepted",
+    playbackReceiptId: playbackReceipt.playbackReceiptId,
+    note: "Owner 完整播放并接受雨夜校门连续预演"
+  }).then((response) => response.json());
+  assert.equal(sequencePrevisAcceptance.audit.ok, true, JSON.stringify(sequencePrevisAcceptance.audit));
+  const sequenceBindingFor = (shotId) => ({
+    sequencePrevisId: sequencePrevis.sequencePrevisId,
+    sequencePrevisRevision: sequencePrevis.revision,
+    visualContextBundleId: visualContexts.get(shotId).visualContextBundleId,
+    reviewId: sequencePrevisAcceptance.review.id
+  });
   const movingUnit = await send(`${productionRoot}/generation-units`, "POST", {
     generationUnit: {
-      strategy: "single_shot", shotLinks: [{ shotId: movingShot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [], executionNodeId: executionNode.id,
+      strategy: "single_shot", segmentDecision: "new_shot", segmentSeam: { explicitCut: "deliberate_cut" },
+      shotLinks: [{ shotId: movingShot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [], executionNodeId: executionNode.id,
+      sequenceWorkspaceBinding: sequenceBindingFor(movingShot.shotId),
       sequenceState: apiSequenceState(),
       promptCoverage: { ...productionPromptCoverage, cameraTrajectory: "沿纵深轴推近后原地向下俯摇，禁止横移和越轴" },
       controlIntent: { primaryConsistency: "within_clip_temporal", cameraFreedom: "limited", motionComplexity: "medium", modeRationale: "文字声明推进与下摇，必须由结构化相机控制承载。", invariants: ["人物和轴线不变"], permittedChanges: ["机位前移和视轴下摇"], dynamicControl: { source: "text_motion_contract", subjectTrajectories: "人物原地。", actionPhases: "推近、下摇、确认信物。", timing: "连续完成。", cameraTrajectory: "沿纵深轴推近后向下俯摇。", physicsContinuity: "雨水连续。", endState: "信物清楚可见。" } },
-      generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 8, aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} }
+      generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 8, aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} }
     }, referenceBindings: []
   }).then((response) => response.json());
   const movingCompilation = await send(`${productionRoot}/generation-units/${movingUnit.generationUnit.generationUnitId}/compile`, "POST", {}).then((response) => response.json());
@@ -229,8 +374,10 @@ test("cinematic production API completes contracts through compile and preflight
   }).then((response) => response.json());
   const semanticCarrierUnit = await send(`${productionRoot}/generation-units`, "POST", {
     generationUnit: {
-      strategy: "single_shot", shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "SHOT_FRAME_SET", requiredCapabilities: ["multi_reference"],
+      strategy: "single_shot", segmentDecision: "new_shot", segmentSeam: { explicitCut: "deliberate_cut" },
+      shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "SHOT_FRAME_SET", requiredCapabilities: ["multi_reference"],
       executionNodeId: executionNode.id,
+      sequenceWorkspaceBinding: sequenceBindingFor(shot.shotId),
       sequenceState: apiSequenceState(),
       controlIntent: {
         primaryConsistency: "spatial_blocking", cameraFreedom: "limited", motionComplexity: "medium",
@@ -240,7 +387,7 @@ test("cinematic production API completes contracts through compile and preflight
       },
       promptCoverage: productionPromptCoverage,
       generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "image_reference", duration: 8,
-        aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, referenceMediaIds: ["media-semantic-frame"], providerOptions: {} }
+        aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: ["media-semantic-frame"], providerOptions: {} }
     },
     referenceBindings: [{
       assetId: "storyboard-semantic", versionId: "storyboard-semantic-v1", mediaId: "media-semantic-frame", checksum: "checksum-semantic-frame",
@@ -258,12 +405,14 @@ test("cinematic production API completes contracts through compile and preflight
   assert.equal(semanticCarrierCompilation.envelope.lint.errors.some((entry) => entry.code === "visual_state_carrier_shot_stale"), true);
   const gatedUnit = await send(`${productionRoot}/generation-units`, "POST", {
     generationUnit: {
-      strategy: "single_shot", shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [],
+      strategy: "single_shot", segmentDecision: "new_shot", segmentSeam: { explicitCut: "deliberate_cut" },
+      shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [],
       executionNodeId: executionNode.id,
+      sequenceWorkspaceBinding: sequenceBindingFor(shot.shotId),
       sequenceState: apiSequenceState(),
       executionGates: { requiredProfessionalRoles: ["director-story", "cinematography", "continuity-qa"] },
       generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 8,
-        aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} }
+        aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} }
     }, referenceBindings: []
   }).then((response) => response.json());
   const gatedCompilation = await send(`${productionRoot}/generation-units/${gatedUnit.generationUnit.generationUnitId}/compile`, "POST", {}).then((response) => response.json());
@@ -274,11 +423,13 @@ test("cinematic production API completes contracts through compile and preflight
   await send(productionRoot, "PATCH", { teamManifestIds: ["manifest-veto-test"] });
   const vetoGatedUnit = await send(`${productionRoot}/generation-units`, "POST", {
     generationUnit: {
-      strategy: "single_shot", shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [],
+      strategy: "single_shot", segmentDecision: "new_shot", segmentSeam: { explicitCut: "deliberate_cut" },
+      shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [],
       executionNodeId: executionNode.id, executionGates: { requiredProfessionalRoles: ["cinematography"] },
+      sequenceWorkspaceBinding: sequenceBindingFor(shot.shotId),
       sequenceState: apiSequenceState(),
       generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 8,
-        aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} }
+        aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} }
     }, referenceBindings: []
   }).then((response) => response.json());
   await send(`${productionRoot}/contributions`, "POST", {
@@ -293,19 +444,36 @@ test("cinematic production API completes contracts through compile and preflight
   assert.equal(vetoCompilation.envelope.lint.errors.some((entry) => entry.code === "professional_signoff_target_stale"), true);
   const missingHandoffPlan = await send(`${productionRoot}/generation-units`, "POST", {
     generationUnit: {
-      strategy: "continuous_segment", shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "PREVIOUS_ACCEPTED_TAIL", requiredCapabilities: ["first_frame"],
+      strategy: "continuous_segment", segmentDecision: "continuation_segment",
+      segmentSeam: { sourceEvaluationId: "evaluation-tail-accepted" },
+      shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "PREVIOUS_ACCEPTED_TAIL", requiredCapabilities: ["first_frame"],
       executionNodeId: executionNode.id,
+      sequenceWorkspaceBinding: sequenceBindingFor(shot.shotId),
       sequenceState: apiSequenceState(),
       generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "first_frame", duration: 8,
-        aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, firstFrameMediaId: "media-h1", referenceMediaIds: [], providerOptions: {} }
+        aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, firstFrameMediaId: "media-h1", referenceMediaIds: [], providerOptions: {} }
     }, referenceBindings: []
   });
   assert.equal(missingHandoffPlan.status, 400);
   assert.equal((await missingHandoffPlan.json()).error.code, "invalid_cinematic_contract");
   const handoffUnit = await send(`${productionRoot}/generation-units`, "POST", {
     generationUnit: {
-      strategy: "continuous_segment", shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "PREVIOUS_ACCEPTED_TAIL", requiredCapabilities: ["first_frame"],
+      strategy: "continuous_segment", segmentDecision: "continuation_segment",
+      segmentSeam: {
+        sourceEvaluationId: "evaluation-tail-accepted",
+        tailAnalysis: {
+          durationSeconds: 8,
+          frameSamples: [
+            { atSeconds: 7.25, frameMediaId: "media-h1-window", jitterScore: 0.05, sharpness: 0.9 },
+            { atSeconds: 7.5, frameMediaId: "media-h1-window", jitterScore: 0.04, sharpness: 0.92 },
+            { atSeconds: 7.75, frameMediaId: "media-h1", jitterScore: 0.03, sharpness: 0.94 },
+            { atSeconds: 8, frameMediaId: "media-h1", jitterScore: 0.03, sharpness: 0.95 }
+          ]
+        }
+      },
+      shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "PREVIOUS_ACCEPTED_TAIL", requiredCapabilities: ["first_frame"],
       executionNodeId: executionNode.id,
+      sequenceWorkspaceBinding: sequenceBindingFor(shot.shotId),
       sequenceState: apiSequenceState(),
       executionGates: { requireGenerationControlIntent: true, requireReferenceSemanticControl: true },
       controlIntent: {
@@ -324,7 +492,7 @@ test("cinematic production API completes contracts through compile and preflight
         conservationChecks: ["blocking", "props", "lighting", "action_phase", "screen_direction"]
       },
       generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "first_frame", duration: 8,
-        aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, firstFrameMediaId: "media-h1", referenceMediaIds: [], providerOptions: {} }
+        aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, firstFrameMediaId: "media-h1", referenceMediaIds: [], providerOptions: {} }
     },
     referenceBindings: [{
       assetId: "tail-asset", versionId: "tail-v1", mediaId: "media-h1", displayName: "上一段 H1", providerIndex: 1, role: "continuity_tail",
@@ -340,8 +508,10 @@ test("cinematic production API completes contracts through compile and preflight
   assert.match(handoffCompilation.envelope.compiledContentPrompt, /不使用固定秒数/u);
   const unitPayload = await send(`${productionRoot}/generation-units`, "POST", {
     generationUnit: {
-      strategy: "single_shot", shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: ["native_audio"],
+      strategy: "single_shot", segmentDecision: "new_shot", segmentSeam: { explicitCut: "deliberate_cut" },
+      shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: ["native_audio"],
       executionNodeId: executionNode.id,
+      sequenceWorkspaceBinding: sequenceBindingFor(shot.shotId),
       sequenceState: apiSequenceState(),
       controlIntent: {
         primaryConsistency: "within_clip_temporal", cameraFreedom: "locked", motionComplexity: "medium",
@@ -351,7 +521,7 @@ test("cinematic production API completes contracts through compile and preflight
       },
       promptCoverage: productionPromptCoverage,
       generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 8,
-        aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: { providerTraceId: "cinematic-mock" } }
+        aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: { providerTraceId: "cinematic-mock" } }
     }, referenceBindings: []
   }).then((response) => response.json());
   const unitId = unitPayload.generationUnit.generationUnitId;
@@ -381,6 +551,56 @@ test("cinematic production API completes contracts through compile and preflight
     targetId: cinematicRevisionReviewTargetId("shot", updatedShot.shotId, updatedShot.revision),
     state: "accepted", note: "Owner 重新接受更新后的分镜脚本 revision"
   });
+  const updatedSequencePrevis = await send(`${productionRoot}/sequence-previs/${sequencePrevis.sequencePrevisId}`, "PATCH", {
+    patch: {
+      shots: sequencePrevis.shots.map((previsShot) => previsShot.shotId === updatedShot.shotId
+        ? {
+            ...previsShot,
+            shotRevision: updatedShot.revision,
+            narrativeJob: updatedShot.narrativeJob,
+            entryPhase: updatedShot.openingState,
+            exitPhase: updatedShot.endingState
+          }
+        : previsShot)
+    }
+  }).then((response) => response.json());
+  const refreshedVisualContexts = new Map();
+  for (const previsShot of [updatedShot, movingShot]) {
+    const visualContext = await send(`${productionRoot}/sequence-previs/${updatedSequencePrevis.sequencePrevisId}/visual-context`, "POST", {
+      shotId: previsShot.shotId
+    }).then((response) => response.json());
+    refreshedVisualContexts.set(previsShot.shotId, visualContext);
+  }
+  const refreshedPlaybackReceipt = await send(
+    `${productionRoot}/sequence-previs/${updatedSequencePrevis.sequencePrevisId}/playback-receipts`,
+    "POST",
+    {
+      playback: {
+        playbackSessionId: `api-playback-${updatedSequencePrevis.sequencePrevisId}-r${updatedSequencePrevis.revision}`,
+        startedAt: "2026-07-28T00:01:00.000Z",
+        completedAt: "2026-07-28T00:01:16.000Z",
+        sampleCount: 385,
+        maxObservedStepMs: 42,
+        manualSeekCount: 0,
+        intervals: [{ startSeconds: 0, endSeconds: updatedSequencePrevis.durationSeconds }]
+      }
+    }
+  ).then((response) => response.json());
+  const refreshedPrevisAcceptance = await send(`${productionRoot}/sequence-previs/${updatedSequencePrevis.sequencePrevisId}/reviews`, "POST", {
+    revision: updatedSequencePrevis.revision,
+    state: "accepted",
+    playbackReceiptId: refreshedPlaybackReceipt.playbackReceiptId,
+    note: "Owner 重新接受包含更新分镜的连续预演"
+  }).then((response) => response.json());
+  assert.equal(refreshedPrevisAcceptance.audit.ok, true, JSON.stringify(refreshedPrevisAcceptance.audit));
+  const reboundUnit = await send(`${productionRoot}/generation-units/${unitId}`, "PATCH", {
+    sequenceWorkspaceBinding: {
+      sequencePrevisId: updatedSequencePrevis.sequencePrevisId,
+      sequencePrevisRevision: updatedSequencePrevis.revision,
+      visualContextBundleId: refreshedVisualContexts.get(updatedShot.shotId).visualContextBundleId,
+      reviewId: refreshedPrevisAcceptance.review.id
+    }
+  }).then((response) => response.json());
   const refreshedPreflight = await send(`${productionRoot}/generation-units/${unitId}/preflight`, "POST", { recompile: true }).then((response) => response.json());
   assert.equal(refreshedPreflight.ready, true, JSON.stringify(refreshedPreflight));
   const formalRun = await send(`${productionRoot}/generation-units/${unitId}/runs`, "POST", {
@@ -391,7 +611,7 @@ test("cinematic production API completes contracts through compile and preflight
     formalGenerationIntent: {
       version: "formal_generation_intent_v1",
       generationUnitId: unitId,
-      generationUnitRevision: unitPayload.generationUnit.revision,
+      generationUnitRevision: reboundUnit.generationUnit.revision,
       compilationId: refreshedPreflight.compilationId,
       payloadHash: refreshedPreflight.envelope.payloadHash,
       executionNodeId: executionNode.id,

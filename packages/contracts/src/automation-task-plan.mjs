@@ -8,9 +8,9 @@ export const AUTOMATION_TASK_PLAN = Object.freeze([
   Object.freeze({ stage: "image_generation", agentProfileId: "image-generation", dependencies: Object.freeze(["previs_design"]), paidTaskType: "image" }),
   Object.freeze({ stage: "prompt_compile", agentProfileId: "prompt-compile", dependencies: Object.freeze(["image_generation"]), paidTaskType: null }),
   Object.freeze({ stage: "video_generation", agentProfileId: "video-generation", dependencies: Object.freeze(["prompt_compile"]), paidTaskType: "video" }),
-  Object.freeze({ stage: "sound_design", agentProfileId: "sound", dependencies: Object.freeze(["shot_design"]), paidTaskType: "audio" }),
-  Object.freeze({ stage: "continuity_qa", agentProfileId: "continuity-qa", dependencies: Object.freeze(["video_generation", "sound_design"]), paidTaskType: null }),
+  Object.freeze({ stage: "continuity_qa", agentProfileId: "continuity-qa", dependencies: Object.freeze(["video_generation"]), paidTaskType: null }),
   Object.freeze({ stage: "timeline_edit", agentProfileId: "edit", dependencies: Object.freeze(["continuity_qa"]), paidTaskType: null }),
-  Object.freeze({ stage: "candidate_render", agentProfileId: "delivery", dependencies: Object.freeze(["timeline_edit"]), paidTaskType: "render" }),
+  Object.freeze({ stage: "sound_design", agentProfileId: "sound", dependencies: Object.freeze(["timeline_edit"]), paidTaskType: "audio" }),
+  Object.freeze({ stage: "candidate_render", agentProfileId: "delivery", dependencies: Object.freeze(["sound_design"]), paidTaskType: "render" }),
   Object.freeze({ stage: "delivery_qc", agentProfileId: "delivery", dependencies: Object.freeze(["candidate_render"]), paidTaskType: null })
 ]);

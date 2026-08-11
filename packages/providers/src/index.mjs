@@ -1,26 +1,24 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { UnuTvError, VIRTUAL_PERSON_ASSET_ID_PATTERN } from "@ununu/unutv-contracts";
+import { UnuTvError } from "@ununu/unutv-contracts";
+import { arkVirtualPersonAssetIds } from "./ark-video-reference-policy.mjs";
+import { normalizeAuthorityImageOutput } from "./authority-image-output-normalizer.mjs";
 import { fetchUnunuImage, readUnunuImageResponse, ununuImageTimeoutMs } from "./ununu-image-response-adapter.mjs";
-
+import { buildUnunuImageEditForm } from "./ununu-image-edit-form.mjs";
 const VIDEO_SUCCESS = new Set(["completed", "complete", "succeeded", "success", "done"]);
 const VIDEO_FAILURE = new Set(["failed", "error", "cancelled", "canceled", "expired"]);
-
 function deterministicGatewayRequestId(input) {
   const seed = String(input.request?.idempotencyKey || input.run?.id || "ununu-image-request");
   const hex = createHash("sha256").update(seed).digest("hex").slice(0, 13);
   return String((BigInt(`0x${hex}`) % 900_000_000_000_000n) + 100_000_000_000_000n);
 }
-
 function credential(...values) {
   return values.find((value) => typeof value === "string" && value.trim())?.trim();
 }
-
 async function responseError(response, fallback) {
   const payload = await response.json().catch(() => ({}));
   return new UnuTvError("provider_request_failed", payload?.error?.message || payload?.message || `${fallback} (HTTP ${response.status})`, 502);
 }
-
 function findTaskId(payload) {
   return payload?.id ?? payload?.task_id ?? payload?.taskId ?? payload?.data?.id;
 }
@@ -67,19 +65,6 @@ function referenceIds(input) {
   return Array.isArray(input.node.payload?.referenceMediaIds) ? input.node.payload.referenceMediaIds : [];
 }
 
-function virtualPersonAssetIds(input) {
-  const requested = input.request?.virtualPersonAssetIds;
-  if (requested === undefined) return [];
-  if (!Array.isArray(requested)) {
-    throw new UnuTvError("invalid_virtual_person_asset_ids", "virtualPersonAssetIds must be an array", 400);
-  }
-  const values = requested.map((value) => typeof value === "string" ? value.trim() : "");
-  if (values.some((value) => !VIRTUAL_PERSON_ASSET_ID_PATTERN.test(value)) || new Set(values).size !== values.length) {
-    throw new UnuTvError("invalid_virtual_person_asset_ids", "Every virtual person asset ID must be unique and match asset-YYYYMMDDhhmmss-suffix", 400);
-  }
-  return values;
-}
-
 function imageMimeFromFormat(format) {
   if (format === "jpeg" || format === "jpg") return "image/jpeg";
   if (format === "webp") return "image/webp";
@@ -105,30 +90,6 @@ async function imageArtifact(item, fetchImpl, fallbackMime, providerLabel) {
   throw new UnuTvError("provider_artifact_missing", `${providerLabel} response did not contain b64_json or an image URL`, 502);
 }
 
-async function ununuImageEditForm(input, requestPayload) {
-  const ids = referenceIds(input);
-  if (ids.length > 5) throw new UnuTvError("too_many_image_references", "GPT Image 2 accepts at most 5 reference images", 400);
-  const form = new FormData();
-  form.append("model", requestPayload.model);
-  form.append("prompt", requestPayload.prompt);
-  form.append("background", requestPayload.background);
-  form.append("size", requestPayload.size);
-  form.append("quality", requestPayload.quality);
-  form.append("n", "1");
-  form.append("response_format", requestPayload.response_format);
-  form.append("output_format", requestPayload.output_format);
-  for (const [index, mediaId] of ids.entries()) {
-    const media = input.media.open(input.projectId, mediaId);
-    if (!media) throw new UnuTvError("media_not_found", `Reference media not found: ${mediaId}`, 404);
-    if (media.kind !== "image" && !String(media.mimeType || "").startsWith("image/")) {
-      throw new UnuTvError("image_reference_required", `GPT Image 2 reference must be an image: ${mediaId}`, 400);
-    }
-    const bytes = await readFile(media.filePath);
-    form.append("image", new Blob([bytes], { type: media.mimeType || "image/png" }), `image_${index + 1}.${imageExtension((media.mimeType || "image/png").split("/")[1])}`);
-  }
-  return form;
-}
-
 async function submitUnunuImage(input, config, fetchImpl) {
   if (!config.apiKey) throw new UnuTvError("provider_not_configured", "UNUNU_GATE_API_KEY is not configured", 409);
   const prompt = input.request.prompt || input.node.payload?.prompt || "";
@@ -149,9 +110,10 @@ async function submitUnunuImage(input, config, fetchImpl) {
   const timeoutMs = ununuImageTimeoutMs(config);
   let responseRequestId = requestId;
   const artifacts = [];
+  const outputNormalizations = [];
   for (let index = 0; index < requestedCount; index += 1) {
     const body = hasReferences
-      ? await ununuImageEditForm(input, requestPayload)
+      ? await buildUnunuImageEditForm(input, requestPayload, referenceIds(input))
       : JSON.stringify({ ...requestPayload, n: 1 });
     let response;
     try {
@@ -168,10 +130,10 @@ async function submitUnunuImage(input, config, fetchImpl) {
     responseRequestId = read.responseRequestId;
     const payload = read.payload;
     const item = Array.isArray(payload?.data) ? payload.data[0] : undefined;
-    artifacts.push({
-      ...(await imageArtifact(item, fetchImpl, imageMimeFromFormat(outputFormat), "Ununu Image")),
-      title: `${input.node.title}${requestedCount > 1 ? `-${index + 1}` : ""}.${imageExtension(outputFormat)}`
-    });
+    const generated = await imageArtifact(item, fetchImpl, imageMimeFromFormat(outputFormat), "Ununu Image");
+    const normalized = await normalizeAuthorityImageOutput({ artifact: generated, authorityType: input.node.payload?.authorityType, requestedSize: requestPayload.size });
+    if (normalized.receipt) outputNormalizations.push(normalized.receipt);
+    artifacts.push({ ...normalized.artifact, title: `${input.node.title}${requestedCount > 1 ? `-${index + 1}` : ""}.${imageExtension(outputFormat)}` });
   }
   return {
     status: "succeeded",
@@ -183,7 +145,8 @@ async function submitUnunuImage(input, config, fetchImpl) {
       requestedCount,
       referenceMediaIds: referenceIds(input),
       requestId: responseRequestId,
-      providerTimeoutMs: timeoutMs
+      providerTimeoutMs: timeoutMs,
+      ...(outputNormalizations.length ? { outputNormalizations } : {})
     },
     artifacts
   };
@@ -235,10 +198,18 @@ async function submitOpenRouterImage(input, config, fetchImpl) {
 
 async function submitArk(input, config, fetchImpl) {
   if (!config.apiKey) throw new UnuTvError("provider_not_configured", "ARK_API_KEY is not configured", 409);
+  if (input.request.resolution && input.request.resolution !== "480p") {
+    throw new UnuTvError(
+      "seedance_resolution_locked",
+      "Ark Seedance 2.0 Mini production is locked to 480p",
+      409,
+      { requestedResolution: input.request.resolution, requiredResolution: "480p" }
+    );
+  }
   const firstFrameId = input.request.firstFrameMediaId;
   const lastFrameId = input.request.lastFrameMediaId;
   const ordinaryReferenceIds = referenceIds(input);
-  const portraitAssetIds = virtualPersonAssetIds(input);
+  const portraitAssetIds = arkVirtualPersonAssetIds(input);
   if ((firstFrameId || lastFrameId) && (ordinaryReferenceIds.length || portraitAssetIds.length)) {
     throw new UnuTvError(
       "provider_mode_reference_conflict",
@@ -268,7 +239,7 @@ async function submitArk(input, config, fetchImpl) {
     content,
     generate_audio: input.request.generateAudio !== false,
     ratio: input.request.aspectRatio || "16:9",
-    resolution: input.request.resolution || "720p",
+    resolution: "480p",
     duration: input.request.duration || 5,
     return_last_frame: true,
     watermark: false
@@ -366,6 +337,14 @@ async function submitOpenSpeech(input, config, fetchImpl) {
   if (!text) throw new UnuTvError("audio_input_required", "Seed Audio requires approved text or an audio prompt");
   const format = input.request.responseFormat || "mp3";
   const speakerId = input.request.speakerId || input.node.payload?.speakerId || config.speakerId;
+  const formalDialogue = input.node.payload?.resourceType === "cinematic_dialogue_line" || input.request.taskType === "dialogue";
+  if (formalDialogue && !speakerId) {
+    throw new UnuTvError(
+      "dialogue_provider_voice_binding_required",
+      "OpenSpeech references=[] is allowed only for non-dialogue SFX or ambience; formal dialogue requires an accepted speaker binding",
+      409
+    );
+  }
   const requestPayload = {
     model: input.request.model || config.model,
     text_prompt: text,

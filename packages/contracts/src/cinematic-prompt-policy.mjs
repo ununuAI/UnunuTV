@@ -5,12 +5,9 @@ import {
   validateGenerationUnit,
   validateReferenceBindings
 } from "./cinematic-contracts.mjs";
-import { getVideoModelCapability, preflightVideoModelCapability } from "./video-model-capability-policy.mjs";
-import { evaluateCinematicGenerationControl } from "./cinematic-generation-control-policy.mjs";
+import { getVideoModelCapability } from "./video-model-capability-policy.mjs";
 import { evaluateStructuredCameraTrajectories } from "./cinematic-camera-trajectory-policy.mjs";
 import { evaluateTemporalMotionPlan } from "./cinematic-temporal-motion-policy.mjs";
-import { evaluatePromptConstraintCoverage } from "./cinematic-prompt-coverage-policy.mjs";
-import { evaluateGenerationUnitLifecycle } from "./cinematic-generation-unit-lifecycle-policy.mjs";
 import {
   CINEMATIC_CONTROLLED_LEXICON,
   cinematicReferenceAlias,
@@ -19,16 +16,17 @@ import {
   compileCinematicPromptSections as compileSections,
   dedupeHighRiskNegatives,
   describeCinematicRecord as describeRecord,
-  formatCinematicSeconds as formatSeconds
+  formatCinematicSeconds as formatSeconds,
+  stripCinematicTechnicalControls
 } from "./cinematic-prompt-render-policy.mjs";
 import { buildCinematicPromptDraft } from "./cinematic-prompt-draft-contracts.mjs";
 import { cinematicPromptPayloadHash as payloadHash } from "./cinematic-prompt-hash-policy.mjs";
 import { cinematicPromptByteLength as byteLength, fitCinematicPromptByteBudget as fitByteBudget } from "./cinematic-prompt-fitting-policy.mjs";
-
+import { CINEMATIC_SEGMENT_DECISIONS } from "./cinematic-segment-seam-policy.mjs";
+import { compileCinematicDirectorPromptPolicy } from "./cinematic-director-prompt-policy.mjs";
+import { buildCinematicPromptPreflightContext } from "./cinematic-prompt-preflight-context.mjs";
 export { CINEMATIC_CONTROLLED_LEXICON };
-
-export const CINEMATIC_PROMPT_COMPILER_VERSION = "3.5.0";
-
+export const CINEMATIC_PROMPT_COMPILER_VERSION = "3.5.1";
 // Reject anonymous labels such as `主体1`, but do not treat camera-distance
 // phrases such as `距主体2.5米` or `距主体 2 米` as synthetic identities.
 const SYNTHETIC_SUBJECT_PATTERN = /(?:^|[^距])主体\s*(?:\d+(?![\d.]|\s*(?:米|m)\b)|[一二三四五六七八九十]+(?!\s*(?:米|m)\b))/u;
@@ -53,7 +51,10 @@ function dialogueTextSet(value) {
 function unitLockedText(storyPacket, shots) {
   const globalDialogue = dialogueTextSet(storyPacket.dialogue);
   const shotDialogue = shots.flatMap((shot) => cleanList(shot.dialogue));
-  const nonDialogueLocks = cleanList(storyPacket.userLockedText).filter((entry) => !globalDialogue.has(entry));
+  const nonDialogueLocks = cleanList(storyPacket.userLockedText)
+    .filter((entry) => !globalDialogue.has(entry))
+    .map(stripCinematicTechnicalControls)
+    .filter(Boolean);
   return { nonDialogueLocks, shotDialogue };
 }
 
@@ -65,7 +66,7 @@ function lockedTextCandidates(storyPacket, shots = []) {
   ].filter((entry) => entry.length >= 2);
 }
 
-export function lintCinematicPrompt({ compiledContentPrompt, generationParameters, generationUnit, referenceBindings = [], shots = [], storyPacket, teamManifestIds = [] }) {
+export function lintCinematicPrompt({ compiledContentPrompt, directorPromptPolicy = null, generationParameters, generationUnit, referenceBindings = [], shots = [], storyPacket, teamManifestIds = [] }) {
   const errors = [];
   const warnings = [];
   const prompt = cleanText(compiledContentPrompt);
@@ -77,15 +78,35 @@ export function lintCinematicPrompt({ compiledContentPrompt, generationParameter
   const temporalMotion = evaluateTemporalMotionPlan({ generationUnit });
   errors.push(...cameraTrajectory.errors);
   errors.push(...temporalMotion.errors);
+  errors.push(...(Array.isArray(directorPromptPolicy?.errors) ? directorPromptPolicy.errors : []));
+  if (gates.requireSegmentSeamDecision) {
+    const audit = gateEvidence.segmentSeamAudit && typeof gateEvidence.segmentSeamAudit === "object"
+      ? gateEvidence.segmentSeamAudit
+      : null;
+    if (!CINEMATIC_SEGMENT_DECISIONS.includes(generationUnit.segmentDecision)) {
+      errors.push({ code: "segment_decision_required", message: "正式生成必须显式持久化 new_shot、continuation_segment 或 one_take_segment。" });
+    }
+    if (!audit) {
+      errors.push({ code: "segment_seam_audit_required", message: "正式生成前必须由 Core 完成段间接缝审计。" });
+    } else {
+      for (const entry of Array.isArray(audit.errors) ? audit.errors : []) {
+        errors.push({ ...entry, code: entry.code || "segment_seam_audit_failed", message: entry.message || "段间接缝审计未通过。" });
+      }
+    }
+  }
   if (gates.requireSequenceState) {
     const sequenceAudit = gateEvidence.sequenceStateAudit && typeof gateEvidence.sequenceStateAudit === "object" ? gateEvidence.sequenceStateAudit : null;
     if (!sequenceAudit) errors.push({ code: "sequence_state_audit_required", message: "正式生成前必须由 Core 完成已发生/本段/后续保留与实际状态对账。" });
     else for (const entry of Array.isArray(sequenceAudit.errors) ? sequenceAudit.errors : []) errors.push({ code: entry.code || "sequence_state_audit_failed", message: entry.message || "时序状态对账未通过。", sequence: true });
   }
   if (gates.requireSequencePrevis) {
-    const audit = gateEvidence.sequenceWorkspaceAudit && typeof gateEvidence.sequenceWorkspaceAudit === "object" ? gateEvidence.sequenceWorkspaceAudit : null;
-    if (!audit) errors.push({ code: "sequence_previs_audit_required", message: "正式生成前必须审计连续预演、切镜决策与本镜视觉上下文。" });
-    else for (const entry of Array.isArray(audit.errors) ? audit.errors : []) errors.push({ ...entry, code: entry.code || "sequence_previs_audit_failed", message: entry.message || "连续预演审计未通过。", sequencePrevis: true });
+    if (!generationUnit.sequenceWorkspaceBinding) {
+      errors.push({ code: "sequence_previs_required", message: "正式生成前必须绑定已接受的连续预演与本镜视觉上下文。" });
+    } else {
+      const audit = gateEvidence.sequenceWorkspaceAudit && typeof gateEvidence.sequenceWorkspaceAudit === "object" ? gateEvidence.sequenceWorkspaceAudit : null;
+      if (!audit) errors.push({ code: "sequence_previs_audit_required", message: "正式生成前必须审计连续预演、切镜决策与本镜视觉上下文。" });
+      else for (const entry of Array.isArray(audit.errors) ? audit.errors : []) errors.push({ ...entry, code: entry.code || "sequence_previs_audit_failed", message: entry.message || "连续预演审计未通过。", sequencePrevis: true });
+    }
   }
   if (gates.requireOwnerStoryReview || gates.requireOwnerShotReviews) {
     const ownerReview = gateEvidence.ownerStoryShotReview && typeof gateEvidence.ownerStoryShotReview === "object"
@@ -361,55 +382,59 @@ export function compileCinematicPrompt({
   const orderedShots = generationUnit.shotLinks.map((link) => shotById.get(link.shotId));
   if (orderedShots.some((shot) => !shot)) throw Object.assign(new Error("Every generation-unit shotLink must resolve to a CinematicShotSpec."), { code: "missing_shot_spec" });
   const profile = getVideoModelCapability({ model: generationUnit.generationParameters.model, provider: generationUnit.generationParameters.provider });
-  const sections = compileSections({ profile, referenceBindings, shots: orderedShots, storyPacket, unit: generationUnit, visualBible });
+  const providerReferenceBindings = referenceBindings
+    .filter((binding) => binding?.providerEligible !== false)
+    .sort((left, right) => Number(left?.providerIndex) - Number(right?.providerIndex))
+    .map((binding, index) => ({ ...binding, providerIndex: index + 1 }));
+  const directorPromptPolicy = compileCinematicDirectorPromptPolicy({
+    generationUnit,
+    providerCapability: profile,
+    referenceBindings: providerReferenceBindings,
+    shots: orderedShots,
+    storyPacket,
+    visualBible
+  });
+  const sections = compileSections({ directorPromptPolicy, profile, referenceBindings: providerReferenceBindings, shots: orderedShots, storyPacket, unit: generationUnit, visualBible });
+  const manualPromptProvided = cleanText(manualPrompt).length > 0;
+  const manualDraft = manualOverride === true || manualPromptProvided;
   const fitted = manualOverride
     ? { droppedFragments: [], droppedSections: [], prompt: cleanText(manualPrompt) }
     : fitByteBudget(sections, profile?.promptMaxBytes);
   const lint = lintCinematicPrompt({
     compiledContentPrompt: fitted.prompt,
+    directorPromptPolicy,
     generationParameters: generationUnit.generationParameters,
     generationUnit,
-    referenceBindings,
+    referenceBindings: providerReferenceBindings,
     shots: orderedShots,
     storyPacket,
     teamManifestIds
   });
-  const capabilityPreflight = preflightVideoModelCapability({
-    generationParameters: generationUnit.generationParameters,
-    generationUnit,
-    promptBytes: lint.bytes,
-    referenceBindings
-  });
-  const modeControl = evaluateCinematicGenerationControl({ generationUnit, referenceBindings });
-  const promptCoverage = evaluatePromptConstraintCoverage({
-    coverage: generationUnit.promptCoverage,
-    includeDynamics: true,
-    required: generationUnit.executionGates?.requirePromptCoverage === true
-  });
-  const cameraTrajectory = evaluateStructuredCameraTrajectories({ generationUnit, referenceBindings, shots: orderedShots });
-  const temporalMotion = evaluateTemporalMotionPlan({ generationUnit });
-  const unitLifecycle = evaluateGenerationUnitLifecycle({ generationUnit });
-  const sequenceState = generationUnit.executionGateEvidence?.sequenceStateAudit ?? null;
-  const sequenceErrors = generationUnit.executionGates?.requireSequenceState === true
-    ? (Array.isArray(sequenceState?.errors) ? sequenceState.errors : [{ code: "sequence_state_audit_required", message: "缺少 Core 时序状态审计。" }])
-    : [];
-  const preflight = {
-    ...capabilityPreflight,
-    errors: [...capabilityPreflight.errors, ...unitLifecycle.errors, ...modeControl.errors, ...promptCoverage.errors, ...cameraTrajectory.errors, ...temporalMotion.errors, ...sequenceErrors],
+  const {
+    capabilityPreflight,
     cameraTrajectory,
     modeControl,
+    preflight,
     promptCoverage,
+    segmentSeamAudit,
     temporalMotion,
-    sequenceState,
     unitLifecycle,
-    ok: capabilityPreflight.ok && unitLifecycle.ok && modeControl.ok && promptCoverage.ok && cameraTrajectory.ok && temporalMotion.ok && sequenceErrors.length === 0
-  };
+    visualInputDecision
+  } = buildCinematicPromptPreflightContext({
+    directorPromptPolicy,
+    generationUnit,
+    lint,
+    manualDraft,
+    referenceBindings,
+    shots: orderedShots
+  });
   const envelope = {
     protocolId: CINEMATIC_STRATEGY_PROTOCOL[generationUnit.strategy],
     protocolVersion: "2.0.0",
     generationUnitId: generationUnit.generationUnitId,
     sourceVersions: {
       generationUnitRevision: generationUnit.revision,
+      characterIdentityBindings: Array.isArray(generationUnit.characterIdentitySourceVersions) ? generationUnit.characterIdentitySourceVersions : [],
       shotRevisions: orderedShots.map((shot) => ({ revision: shot.revision, shotId: shot.shotId })),
       storyPacketId: storyPacket.storyPacketId,
       storyPacketRevision: storyPacket.revision,
@@ -426,7 +451,7 @@ export function compileCinematicPrompt({
       visualBible,
       sections,
       compiledContentPrompt: fitted.prompt,
-      referenceBindings,
+      referenceBindings: providerReferenceBindings,
       negativeConstraints: dedupeHighRiskNegatives({ shots: orderedShots, storyPacket, unit: generationUnit }),
       status: (lint?.ok !== false && preflight.ok) ? "preflight_ready" : "preflight_blocked"
     }),
@@ -436,9 +461,13 @@ export function compileCinematicPrompt({
     capabilitySnapshot: capabilityPreflight.capabilitySnapshot,
     capabilityDegradation: capabilityPreflight.degradations,
     generationControl: modeControl,
+    directorPromptPolicy,
+    visualInputDecision,
     unitLifecycle,
     cameraTrajectory,
     temporalMotion,
+    segmentDecision: generationUnit.segmentDecision ?? null,
+    segmentSeam: segmentSeamAudit,
     promptCoverage,
     teamManifestIds,
     expertPackIds,
@@ -450,8 +479,10 @@ export function compileCinematicPrompt({
     droppedFragments: fitted.droppedFragments,
     lint,
     preflight,
-    manualOverride,
-    requiresPreflight: manualOverride || !lint.ok || !preflight.ok
+    manualOverride: manualOverride === true,
+    manualPromptProvided,
+    promptSource: manualOverride === true ? "manual_preview" : "structured_compiler",
+    requiresPreflight: manualDraft || !lint.ok || !preflight.ok
   };
   envelope.payloadHash = payloadHash({
     compiledContentPrompt: envelope.compiledContentPrompt,
@@ -462,6 +493,9 @@ export function compileCinematicPrompt({
     lifecycle: generationUnit.lifecycle ?? "active",
     promptCoverage: generationUnit.promptCoverage ?? null,
     sequenceState: generationUnit.sequenceState ?? null,
+    segmentDecision: generationUnit.segmentDecision ?? null,
+    segmentSeam: segmentSeamAudit,
+    directorPromptPolicy,
     cameraTrajectoryPlans: orderedShots.map((shot) => shot.cameraTrajectoryPlan ?? shot.orbitCameraTrajectory ?? null),
     temporalMotionPlan: generationUnit.controlIntent?.temporalMotionPlan ?? null,
     referenceBindings: envelope.referenceBindings.map(({ mediaId, providerIndex, role, authorityRevision, semanticControl }) => ({ authorityRevision, mediaId, providerIndex, role, semanticControl: semanticControl ?? null })),

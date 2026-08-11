@@ -5,6 +5,7 @@ import {
 } from "./cinematic-prompt-coverage-policy.mjs";
 import { renderCameraTrajectoryPlan, renderOrbitCameraTrajectory } from "./cinematic-camera-trajectory-policy.mjs";
 import { renderTemporalMotionPlan } from "./cinematic-temporal-motion-policy.mjs";
+import { stripAbstractCinematicIntentLabels } from "./cinematic-abstract-intent-policy.mjs";
 
 export const CINEMATIC_CONTROLLED_LEXICON = Object.freeze({
   shotSize: "景别", cameraPosition: "机位", angle: "角度", perspective: "透视与焦段意图", composition: "构图", depthOfField: "景深",
@@ -35,6 +36,21 @@ const CINEMATIC_DIRECTION_LABELS = Object.freeze({
 
 export function cleanCinematicText(value) {
   return typeof value === "string" ? value.replace(/\s+/gu, " ").trim() : "";
+}
+
+// Owner locks can legitimately combine story facts with delivery/provider
+// controls. The former belong in the content Prompt; the latter remain
+// authoritative in generationParameters and must never leak into Prompt text.
+export function stripCinematicTechnicalControls(value) {
+  return cleanCinematicText(value)
+    .replace(/(?:画幅|宽高比|比例)\s*[:：=]?\s*(?:16\s*:\s*9|9\s*:\s*16|1\s*:\s*1)\s*[，,；;]?/giu, "")
+    .replace(/(?:^|[，,；;]\s*)(?:16\s*:\s*9|9\s*:\s*16|1\s*:\s*1)\s*(?=$|[，,；;。])/giu, "$1")
+    .replace(/(?:分辨率\s*[:：=]?\s*)?(?:480p|720p|1080p|2k|4k|8k)\b\s*[，,；;]?/giu, "")
+    .replace(/(?:provider|model|模型)\s*[:：=]\s*[a-z0-9_./-]+\s*[，,；;]?/giu, "")
+    .replace(/(?:总时长|视频时长|生成时长|duration)\s*[:：=]?\s*\d+(?:\.\d+)?\s*(?:秒|s\b)\s*[，,；;]?/giu, "")
+    .replace(/[；;，,]\s*[；;，,]+/gu, "；")
+    .replace(/^[；;，,\s]+|[；;，,\s]+$/gu, "")
+    .trim();
 }
 
 export function terminateCinematicSentence(value) {
@@ -129,11 +145,12 @@ function renderContinuationHandoff(unit) {
   ];
 }
 
-export function compileCinematicPromptSections({ profile, referenceBindings, shots, storyPacket, unit, visualBible }) {
+export function compileCinematicPromptSections({ directorPromptPolicy = null, profile, referenceBindings, shots, storyPacket, unit, visualBible }) {
   return [
     section("参考", renderReferences(referenceBindings), 100, referenceBindings.length > 0),
     section("参考图语义职责", renderReferenceSemanticControls(referenceBindings), 100, referenceBindings.some((binding) => binding.semanticControl)),
     section("风格", renderStyle(visualBible, shots), 80, true),
+    section("抽象意图具体化", directorPromptPolicy?.abstractIntent?.providerClauses ?? [], 100, Boolean(directorPromptPolicy?.abstractIntent?.labels?.length)),
     section("场景布局", renderSceneLayout(visualBible, shots), 90, true),
     section("初始主体状态", renderInitialSubjectState(shots), 100, true),
     section("初始空间位置", renderInitialSpatialPosition(shots), 100, true),
@@ -271,7 +288,10 @@ function dialogueTextSet(value) {
 function unitLockedText(storyPacket, shots) {
   const globalDialogue = dialogueTextSet(storyPacket.dialogue);
   const shotDialogue = shots.flatMap((shot) => cleanCinematicList(shot.dialogue));
-  const nonDialogueLocks = cleanCinematicList(storyPacket.userLockedText).filter((entry) => !globalDialogue.has(entry));
+  const nonDialogueLocks = cleanCinematicList(storyPacket.userLockedText)
+    .filter((entry) => !globalDialogue.has(entry))
+    .map(stripCinematicTechnicalControls)
+    .filter(Boolean);
   return { nonDialogueLocks, shotDialogue };
 }
 
@@ -281,7 +301,7 @@ function renderStyle(visualBible, shots) {
     .replace(/(?:16\s*:\s*9|9\s*:\s*16|1\s*:\s*1)/giu, "")
     .replace(/\s{2,}/gu, " ")
     .trim();
-  return terminateCinematicSentence([contentFormat, visualBible.cinematography?.grammar, visualBible.cinematography?.lensPreference, visualBible.performance?.baseline]
+  return terminateCinematicSentence([contentFormat, stripAbstractCinematicIntentLabels(visualBible.cinematography?.grammar), visualBible.cinematography?.lensPreference, visualBible.performance?.baseline]
     .map(cleanCinematicText).filter(Boolean).join("，"));
 }
 

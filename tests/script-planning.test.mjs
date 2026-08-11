@@ -3,6 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { screenplayContentChecksum } from "@ununu/unutv-contracts";
 import { createLocalRuntime } from "@ununu/unutv-local-runtime";
 
 async function createProductionFoundation(app, projectId, sourceNodeId) {
@@ -38,6 +39,17 @@ test("structured script rows deterministically persist scenes, beats, shots, and
   await runtime.app.createScriptRow({ projectId: project.id, nodeId: script.id, shotNumber: 3, payload: {
     sceneNumber: 2, sceneHeading: "外景·港口道路·连续", location: "港口道路", timeOfDay: "连续", sceneDescription: "车辆突然驶离，侦探开始追踪", shotSize: "中远景"
   } });
+  const screenplayV1 = "# 港口追踪\n\n## 第一场｜外景·旧港口·清晨\n\n侦探在浓雾中等待，证人出现后车辆驶离。";
+  await runtime.app.saveScreenplayDocument({
+    projectId: project.id,
+    nodeId: script.id,
+    document: {
+      format: "ScreenplayDocumentInputV1",
+      content: screenplayV1,
+      checksum: screenplayContentChecksum(screenplayV1),
+      expectedRevision: 0
+    }
+  });
   const production = await createProductionFoundation(runtime.app, project.id, script.id);
 
   const planned = await runtime.app.planCinematicFromScript({ projectId: project.id, productionId: production.productionId, sourceNodeId: script.id, storyboardTitle: "港口分镜脚本" });
@@ -54,6 +66,9 @@ test("structured script rows deterministically persist scenes, beats, shots, and
   assert.equal(planned.shots[0].editContinuity.cutIntent, "以汽笛声桥切入证人");
   assert.equal(planned.storyboard.shots[0].durationSeconds, 4);
   assert.equal(planned.storyboard.source.scriptBreakdownId, planned.breakdown.breakdownId);
+  assert.equal(planned.breakdown.sourceScreenplayDocumentRevision, 1);
+  assert.equal(planned.breakdown.sourceScreenplayDocumentChecksum, screenplayContentChecksum(screenplayV1));
+  assert.equal(planned.shots[0].sourceScript.screenplayDocumentRevision, 1);
   assert.equal(planned.shots[1].dialogue[0].text, "终于找到你了。");
   assert.equal(planned.shots[0].sourceScript.rowId, first.id);
 
@@ -71,9 +86,69 @@ test("structured script rows deterministically persist scenes, beats, shots, and
   assert.equal(replanned.shots[0].revision, 2);
   assert.match(replanned.shots[0].storyBeat, /检查怀表/);
 
+  const markedStoryboard = {
+    ...replanned.storyboard,
+    shots: replanned.storyboard.shots.map((shot, index) => index ? shot : {
+      ...shot,
+      status: "image_ready",
+      imageMediaId: "media-old-screenplay",
+      imageVersionId: "version-old-screenplay",
+      imageChecksum: "a".repeat(64),
+      revision: shot.revision + 1
+    }),
+    revision: replanned.storyboard.revision + 1,
+    updatedAt: new Date().toISOString()
+  };
+  await runtime.projects.saveStoryboardDocument(project.id, markedStoryboard, replanned.storyboard.revision);
+  const legacyLineageStoryboard = await runtime.projects.saveStoryboardDocument(project.id, {
+    ...markedStoryboard,
+    source: {
+      ...markedStoryboard.source,
+      shotRevisions: {
+        ...markedStoryboard.source.shotRevisions,
+        [markedStoryboard.shots[0].shotId]: markedStoryboard.shots[0].shotRevision - 1
+      }
+    },
+    revision: markedStoryboard.revision + 1,
+    updatedAt: new Date().toISOString()
+  }, markedStoryboard.revision);
+  const lineageRebased = await runtime.app.planCinematicFromScript({
+    projectId: project.id,
+    productionId: production.productionId,
+    sourceNodeId: script.id
+  });
+  assert.equal(lineageRebased.replayed, true);
+  assert.equal(lineageRebased.storyboard.revision, legacyLineageStoryboard.revision + 1);
+  assert.equal(lineageRebased.storyboard.shots[0].imageMediaId, null);
+  assert.equal(lineageRebased.storyboard.shots[0].imageSourceShotRevision, null);
+
+  const screenplayV2 = screenplayV1.replace("证人出现后车辆驶离", "证人现身后车辆突然驶离");
+  await runtime.app.saveScreenplayDocument({
+    projectId: project.id,
+    nodeId: script.id,
+    document: {
+      format: "ScreenplayDocumentInputV1",
+      content: screenplayV2,
+      checksum: screenplayContentChecksum(screenplayV2),
+      expectedRevision: 1
+    }
+  });
+  const screenplayReplanned = await runtime.app.planCinematicFromScript({
+    projectId: project.id,
+    productionId: production.productionId,
+    sourceNodeId: script.id
+  });
+  assert.equal(screenplayReplanned.replayed, false);
+  assert.equal(screenplayReplanned.breakdown.revision, 3);
+  assert.equal(screenplayReplanned.breakdown.sourceScreenplayDocumentRevision, 2);
+  assert.equal(screenplayReplanned.shots[0].revision, 3);
+  assert.equal(screenplayReplanned.storyboard.shots[0].status, "ready_for_image");
+  assert.equal(screenplayReplanned.storyboard.shots[0].imageMediaId, null);
+  assert.equal(screenplayReplanned.storyboard.source.screenplayDocumentRevision, 2);
+
   runtime.close();
   runtime = createLocalRuntime({ dataRoot, recoverRenders: false });
   const reopened = await runtime.app.getScriptBreakdown({ projectId: project.id, productionId: production.productionId, sourceNodeId: script.id });
-  assert.equal(reopened.revision, 2);
-  assert.equal(reopened.scenes[1].beats[0].shotId, replanned.shots[2].shotId);
+  assert.equal(reopened.revision, 3);
+  assert.equal(reopened.scenes[1].beats[0].shotId, screenplayReplanned.shots[2].shotId);
 });

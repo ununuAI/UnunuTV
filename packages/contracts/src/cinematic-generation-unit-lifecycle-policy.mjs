@@ -1,5 +1,6 @@
 export const CINEMATIC_GENERATION_UNIT_LIFECYCLES = Object.freeze([
   "active",
+  "waiting_for_previous_accept",
   "blocked_by_authority",
   "blocked_by_rejected_continuity_source",
   "superseded"

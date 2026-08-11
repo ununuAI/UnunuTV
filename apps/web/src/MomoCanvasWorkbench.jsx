@@ -1,5 +1,4 @@
 "use client";
-
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Background, MiniMap, ReactFlow, applyNodeChanges } from "@xyflow/react";
 import { Boxes, Plus, X } from "lucide-react";
@@ -11,9 +10,9 @@ import { isPanoramaNode } from "./PanoramaViewer.jsx";
 import { groupAsCanvasNode, imageGenerationStarterPrompt } from "./canvas-node-policies.js";
 import { useCanvasGenerationRunner } from "./canvas-generation-runner.js";
 import { exportPanoramaViews } from "./panorama-export.js";
-import { fittedMediaHeight } from "./media-node-fit.js";
+import { fittedMediaNodeHeight } from "./media-node-fit.js";
 import { gridCellRole } from "@ununu/unutv-contracts";
-import { canvasNodeIsExpanded, canvasNodeViewTransition, nodeSupportsInlineWorkspace, projectCanvasNodeView } from "./canvas-node-view-policy.js";
+import { canvasNodeIsExpanded, nodeSupportsInlineWorkspace, planCanvasNodeViewTransition, projectCanvasNodeView } from "./canvas-node-view-policy.js";
 import { CANVAS_NODE_TYPES, DEFAULT_EDGE_OPTIONS, TEMP_NODE_ID } from "./canvas-flow-elements.jsx";
 import { useNodePayloadUpdater } from "./use-node-payload-updater.js";
 import { useGridNodeActions } from "./use-grid-node-actions.js";
@@ -25,32 +24,10 @@ import { useCanvasConnectionActions } from "./use-canvas-connection-actions.js";
 import { filterCanvasPresentationEdges, nodeHasCanvasPresentation } from "./canvas-entry-policy.js";
 import { useCanvasAssetDrop } from "./use-canvas-asset-drop.js";
 import { toFlowEdge } from "./canvas-edge-presentation.js";
-
-function isStoryboardGroup(node) {
-  return ["selection-group", "storyboard-image-group", "storyboard-video-group", "panorama-capture-group"].includes(node.payload?.groupRole);
-}
-
+import { toFlowNode } from "./canvas-flow-node-presentation.js";
+import { buildCanonicalAuthorityCanvasView } from "./canonical-authority-aggregation-view-model.js";
+import { useAuthorityAggregateProjection } from "./use-authority-aggregate-projection.js";
 function stop(event) { event.preventDefault(); event.stopPropagation(); }
-
-function toFlowNode(node, canvas, selectedIds, actions, editingTextId, editingTitleId, readOnly, zoomPercent) {
-  const result = {
-    id: node.id,
-    type: "canvasNode",
-    position: { x: node.x, y: node.y },
-    width: node.width,
-    height: node.height,
-    initialWidth: node.width,
-    initialHeight: node.height,
-    selected: selectedIds.includes(node.id),
-    data: { canvasNode: node, canvas, actions, selectedIds, editingTextId, editingTitleId, readOnly, zoomPercent },
-    draggable: !readOnly,
-    zIndex: selectedIds.includes(node.id) ? 100 : isStoryboardGroup(node) ? 0 : ["script", "text", "cinematic"].includes(node.kind) ? 20 : 6
-  };
-  if (node.kind === "asset") result.dragHandle = ".momo-asset-drag-handle";
-  else if (canvasNodeIsExpanded(node)) result.dragHandle = node.kind === "director" ? ".director-console-header" : ".cp-workspace-header";
-  return result;
-}
-
 export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ canvas, canvasTool, notify, onExpandNode, onSelect, onZoomChange, projectId, readOnly = false, refresh, showConnections, showMiniMap = false, zoom }, ref) {
   const flowRef = useRef(null);
   const viewportRef = useRef({ x: 26, y: 10, zoom: zoom / 100 });
@@ -69,17 +46,20 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
   const [importPath, setImportPath] = useState("");
   const [assetRegistration, setAssetRegistration] = useState(null);
   const [referencePickerNodeId, setReferencePickerNodeId] = useState(null);
-  const [locallyExpandedIds, setLocallyExpandedIds] = useState([]);
+  const [localNodeViews, setLocalNodeViews] = useState({});
   const [flowNodes, setFlowNodes] = useState([]);
   const [viewport, setViewport] = useState(viewportRef.current);
   const [isConnecting, setIsConnecting] = useState(false);
-
+  const authorityAggregates = useAuthorityAggregateProjection(canvas, projectId);
+  const presentationCanvas = useMemo(
+    () => buildCanonicalAuthorityCanvasView(canvas, authorityAggregates),
+    [authorityAggregates, canvas]
+  );
   const syncSelection = useCallback((ids) => {
     setSelectedIds(ids);
     if (ids.length > 1) setViewport(viewportRef.current);
     onSelect(ids[0] || null);
   }, [onSelect]);
-
   const pushHistory = useCallback((command) => {
     historyRef.current = { undo: [...historyRef.current.undo, command].slice(-100), redo: [] };
     setHistoryTick((value) => value + 1);
@@ -167,31 +147,39 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
 
   const setNodeExpanded = useCallback(async (node, expanded) => {
     if (!node || !nodeSupportsInlineWorkspace(node)) return;
-    const persistedExpanded = canvasNodeIsExpanded(node);
-    const locallyExpanded = locallyExpandedIds.includes(node.id);
-    if ((persistedExpanded || locallyExpanded) === expanded) {
+    const effectiveNode = localNodeViews[node.id] ? { ...node, ...localNodeViews[node.id] } : node;
+    if (canvasNodeIsExpanded(effectiveNode) === expanded) {
       if (expanded && node?.id) fitNode(node.id);
       return;
     }
     if (readOnly) {
-      setLocallyExpandedIds((ids) => expanded ? [...new Set([...ids, node.id])] : ids.filter((id) => id !== node.id));
+      setLocalNodeViews((current) => {
+        const projectedNodes = canvas.nodes.map((candidate) => (
+          current[candidate.id] ? { ...candidate, ...current[candidate.id] } : candidate
+        ));
+        const source = projectedNodes.find((candidate) => candidate.id === node.id) || node;
+        return {
+          ...current,
+          [node.id]: planCanvasNodeViewTransition(source, expanded, projectedNodes)
+        };
+      });
       window.setTimeout(() => fitNode(node.id), 80);
       return;
     }
-    const before = { width: node.width, height: node.height, payload: node.payload };
-    const after = canvasNodeViewTransition(node, expanded);
+    const before = { x: node.x, y: node.y, width: node.width, height: node.height, payload: node.payload };
+    const after = planCanvasNodeViewTransition(node, expanded, canvas.nodes);
     try {
       await api.updateNode(projectId, node.id, after);
       pushHistory({ type: "nodeView", nodeId: node.id, before, after });
       await refresh();
       window.setTimeout(() => fitNode(node.id), 120);
     } catch (error) { notify(error); }
-  }, [fitNode, locallyExpandedIds, notify, projectId, pushHistory, readOnly, refresh]);
+  }, [canvas.nodes, fitNode, localNodeViews, notify, projectId, pushHistory, readOnly, refresh]);
 
   const fitMediaNode = useCallback(async (node, naturalWidth, naturalHeight) => {
     if (readOnly) return;
     if (isPanoramaNode(node)) return;
-    const nextHeight = fittedMediaHeight(node.width, naturalWidth, naturalHeight);
+    const nextHeight = fittedMediaNodeHeight(node, naturalWidth, naturalHeight);
     if (!nextHeight) return;
     if (Math.abs(nextHeight - node.height) < 2 || fittingMediaRef.current.has(node.id)) return;
     fittingMediaRef.current.add(node.id);
@@ -345,15 +333,15 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
   useEffect(() => {
     const projected = [
       ...(canvas.groups || []).map((group) => ({ ...toFlowNode(groupAsCanvasNode(group, projectId), canvas, selectedIds, actions, editingTextId, editingTitleId, readOnly, viewport.zoom * 100), draggable: false, connectable: false, zIndex: 0 })),
-      ...canvas.nodes.filter(nodeHasCanvasPresentation).map((node) => {
+      ...presentationCanvas.nodes.filter(nodeHasCanvasPresentation).map((node) => {
         const decorated = decorateNode({ ...node, projectId });
-        const projectedNode = projectCanvasNodeView(decorated, locallyExpandedIds.includes(node.id));
-        return toFlowNode(projectedNode, canvas, selectedIds, actions, editingTextId, editingTitleId, readOnly, zoom);
+        const projectedNode = projectCanvasNodeView(decorated, localNodeViews[node.id]);
+        return toFlowNode(projectedNode, presentationCanvas, selectedIds, actions, editingTextId, editingTitleId, readOnly, zoom);
       })
     ];
     if (menu?.temporary && typeof menu.flowX === "number" && typeof menu.flowY === "number") projected.push({ id: TEMP_NODE_ID, type: "tempNode", position: { x: menu.flowX - 9, y: menu.flowY - 9 }, width: 18, height: 18, data: {}, draggable: false, selectable: false });
     setFlowNodes(projected);
-  }, [actions, canvas, decorateNode, editingTextId, editingTitleId, locallyExpandedIds, menu, projectId, readOnly, selectedIds, zoom]);
+  }, [actions, canvas.groups, decorateNode, editingTextId, editingTitleId, localNodeViews, menu, presentationCanvas, projectId, readOnly, selectedIds, zoom]);
 
   useEffect(() => {
     if (!readOnly) return;
@@ -369,10 +357,10 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
 
   const flowEdges = useMemo(() => {
     if (!showConnections) return [];
-    const result = filterCanvasPresentationEdges(canvas.edges, canvas.nodes).map(toFlowEdge);
+    const result = filterCanvasPresentationEdges(presentationCanvas.edges, presentationCanvas.nodes).map(toFlowEdge);
     if (menu?.temporary && menu.sourceNodeIds?.length === 1) result.push({ id: "__temporary_edge__", source: menu.sourceNodeIds[0], target: TEMP_NODE_ID, type: "smoothstep", style: { strokeDasharray: "6 4", opacity: .85 }, selectable: false });
     return result;
-  }, [canvas.edges, menu, showConnections]);
+  }, [menu, presentationCanvas.edges, presentationCanvas.nodes, showConnections]);
 
   useEffect(() => {
     if (!manualConnection) return;

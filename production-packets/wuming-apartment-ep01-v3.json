@@ -7,6 +7,15 @@
     "status": "locked_for_previs",
     "targetDurationSeconds": 120,
     "aspectRatio": "9:16",
+    "deliverySpec": {
+      "resolution": "480p",
+      "width": 480,
+      "height": 854,
+      "frameRate": 24,
+      "videoCodec": "H.264",
+      "audioCodec": "AAC",
+      "audioChannels": "stereo"
+    },
     "safeComposition": "16:9 center-safe",
     "platform": "竖屏短剧",
     "rhythmProfile": {

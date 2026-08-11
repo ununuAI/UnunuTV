@@ -156,7 +156,8 @@ test("HTTP evaluation endpoint refuses a high-score ACCEPT with a failed definin
   }).then((response) => response.json());
   const unitRecord = await send(`${productionRoot}/generation-units`, "POST", {
     generationUnit: {
-      strategy: "single_shot", shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "FIRST_FRAME", requiredCapabilities: [],
+      strategy: "single_shot", segmentDecision: "new_shot", segmentSeam: { explicitCut: "deliberate_cut" },
+      shotLinks: [{ shotId: shot.shotId, order: 1 }], visualAnchorPolicy: "FIRST_FRAME", requiredCapabilities: [],
       generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "first_frame", duration: 4, aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: [] },
       reviewRequirements: requirements,
       sequenceState: {

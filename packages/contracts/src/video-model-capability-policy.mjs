@@ -1,4 +1,4 @@
-export const VIDEO_MODEL_REGISTRY_VERSION = "2026-07-21";
+export const VIDEO_MODEL_REGISTRY_VERSION = "2026-07-28";
 
 export const ARK_SEEDANCE_2_MINI_MODEL_ID = "doubao-seedance-2-0-mini-260615";
 export const OPENROUTER_GROK_VIDEO_MODEL_ID = "x-ai/grok-imagine-video";
@@ -24,15 +24,8 @@ const PROFILES = [
     supportsPromptTimeSlots: true,
     supportedCapabilities: ["first_frame", "first_last_frame", "multi_reference", "native_audio", "internal_cuts", "storyboard_reference", "prompt_time_slots", "virtual_person_asset"],
     supportedAspectRatios: ["16:9", "9:16", "1:1"],
-    supportedResolutions: ["480p", "720p", "1080p"],
-    supportedResolutionsByMode: {
-      // Ark rejects 1080p for Seedance 2.0 Mini's reference-to-video
-      // (r2v) path even though the model family exposes 1080p elsewhere.
-      // Keep the mode-specific constraint in preflight so a paid request
-      // cannot discover this compatibility rule after submission.
-      image_reference: ["480p", "720p"]
-    },
-    evidence: "official-volcengine-seedance-2-series-owner-confirmation-and-live-r2v-provider-response-2026-07-28",
+    supportedResolutions: ["480p"],
+    evidence: "official-volcengine-seedance-2-series-owner-confirmation-and-owner-locked-480p-production-policy-2026-07-28",
     evidenceUrls: [
       "https://www.volcengine.com/docs/82379/2291680",
       "https://www.volcengine.com/docs/82379/1520757"
@@ -130,6 +123,12 @@ export function preflightVideoModelCapability({ generationParameters, generation
   if ((generationUnit.requiredCapabilities ?? []).includes("virtual_person_asset") && virtualPersonAssetIds.length === 0) {
     errors.push({ code: "missing_virtual_person_asset", message: "virtual_person_asset requires at least one virtualPersonAssetId." });
   }
+  if (virtualPersonAssetIds.length > 0 && generationParameters.mode !== "image_reference") {
+    errors.push({
+      code: "virtual_person_requires_image_reference",
+      message: "Seedance virtual-person asset:// inputs are reference_image controls and require image_reference mode."
+    });
+  }
   if (profile.supportedAspectRatios.length && !profile.supportedAspectRatios.includes(generationParameters.aspectRatio)) {
     errors.push({ code: "unsupported_aspect_ratio", message: `${profile.displayName} does not support aspect ratio ${generationParameters.aspectRatio}.` });
   }
@@ -141,7 +140,7 @@ export function preflightVideoModelCapability({ generationParameters, generation
   const requiredFrameMode = {
     FIRST_FRAME: "first_frame",
     FIRST_LAST_FRAME: "first_last_frame",
-    PREVIOUS_ACCEPTED_TAIL: "first_frame",
+    PREVIOUS_ACCEPTED_TAIL: virtualPersonAssetIds.length ? "image_reference" : "first_frame",
     STORYBOARD_SHEET: "image_reference",
     SHOT_FRAME_SET: "image_reference",
     ACTION_PHASE_BOARD: "image_reference",
@@ -162,7 +161,9 @@ export function preflightVideoModelCapability({ generationParameters, generation
   if (forbidsMixedFrameReferences && frameInputMode && (generationParameters.referenceMediaIds?.length || virtualPersonAssetIds.length)) {
     errors.push({ code: "frame_reference_conflict", message: `${profile.displayName} cannot mix first/last-frame input with ordinary reference images.` });
   }
-  if (["STORYBOARD_SHEET", "SHOT_FRAME_SET", "ACTION_PHASE_BOARD", "DUPLICATE_HANDOFF"].includes(generationUnit.visualAnchorPolicy) && referenceBindings.length === 0) {
+  if (["STORYBOARD_SHEET", "SHOT_FRAME_SET", "ACTION_PHASE_BOARD", "DUPLICATE_HANDOFF"].includes(generationUnit.visualAnchorPolicy)
+    && referenceBindings.length === 0
+    && virtualPersonAssetIds.length === 0) {
     errors.push({ code: "missing_visual_anchor_reference", message: `${generationUnit.visualAnchorPolicy} requires at least one bound reference media item.` });
   }
   const range = videoModelDurationRange({

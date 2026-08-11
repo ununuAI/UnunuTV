@@ -105,6 +105,8 @@ test("a Director capture becomes exact shot and storyboard control lineage", asy
     productionId,
     generationUnit: {
       strategy: "single_shot",
+      segmentDecision: "new_shot",
+      segmentSeam: { explicitCut: "deliberate_cut" },
       shotLinks: [{ shotId: shot.shotId, order: 1 }],
       visualAnchorPolicy: "SHOT_FRAME_SET",
       requiredCapabilities: ["multi_reference"],

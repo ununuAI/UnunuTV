@@ -45,6 +45,17 @@ export interface CanvasNode {
   assetRole?: string;
   blockedReason?: string;
   canRun: boolean;
+  cinematicPromptFacts?: {
+    directorFields: Array<{ field: string; label: string; clauses: Array<{ text: string; sourcePath: string }>; ok: boolean }>;
+    errors: Array<{ code: string; message: string }>;
+    labels: string[];
+    ok: boolean;
+    promptMode: { code: string; reason: string } | null;
+    providerAdapter: { referenceCount: number | null; referenceLimit: number | null; deterministicCompression: boolean } | null;
+    providerClauses: string[];
+    sources: Array<{ label: string; sourcePath: string; sourceValue: string }>;
+    version: "cinematic_prompt_facts_view_v1";
+  };
   cost: string;
   generationActivity?: unknown;
   id: string;

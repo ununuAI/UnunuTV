@@ -10,6 +10,7 @@ import { ModelRequestManifest } from "./ModelRequestManifest";
 import { ModelExecutionControls } from "./ModelExecutionControls";
 import { NodeReferenceControls, NodeReferenceRows } from "./NodeReferenceControls";
 import { PromptDocumentEditor, type PromptDocumentV1 } from "./PromptDocumentEditor";
+import { CinematicPromptFacts } from "./CinematicPromptFacts";
 import { hydrateLegacyPromptReferences } from "./prompt-document-hydration.js";
 import { GROK_PROMPT_MAX_BYTES, GROK_VIDEO_MODEL_ID, SEEDANCE_VIDEO_MODEL_ID, clampVideoDuration, utf8ByteLength, videoDurationRange } from "./video-generation-capabilities.js";
 import { PROMPT_OUTPUT_MODES, promptOutputModeMeta } from "./prompt-output-mode-policy.js";
@@ -23,7 +24,7 @@ function modelOptionsFor(node: CanvasNode) {
 
 function specOptionsFor(node: CanvasNode) {
   if (node.kind === "image" || node.kind === "subject" || node.kind === "material" || node.kind === "historyPick") return ["16:9", "1K"];
-  if (node.kind === "video" || node.kind === "videoShot" || node.kind === "compose") return ["16:9", "720p"];
+  if (node.kind === "video" || node.kind === "videoShot" || node.kind === "compose") return ["16:9", "480p"];
   return [];
 }
 
@@ -59,6 +60,11 @@ function videoReferenceModeLabel(mode: VideoReferenceMode) {
   if (mode === "first_frame") return "首帧";
   if (mode === "first_last_frame") return "首尾帧";
   return "全能参考";
+}
+
+function normalizedVideoResolution(modelId: string, resolution: unknown) {
+  if (modelId === SEEDANCE_VIDEO_MODEL_ID) return "480p";
+  return String(resolution || "720p");
 }
 
 const IMAGE_TYPE_LABELS: Record<string, string> = {
@@ -184,7 +190,10 @@ export function PromptCard({
   const [videoModelId, setVideoModelId] = useState(String(node.modelSelection?.modelId ?? "x-ai/grok-imagine-video"));
   const [videoMode, setVideoMode] = useState<VideoReferenceMode>(normalizeVideoReferenceMode(node.modelSelection?.parameters?.mode));
   const [videoRatio, setVideoRatio] = useState(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
-  const [videoResolution, setVideoResolution] = useState(String(node.modelSelection?.parameters?.resolution ?? "720p"));
+  const [videoResolution, setVideoResolution] = useState(normalizedVideoResolution(
+    String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID),
+    node.modelSelection?.parameters?.resolution
+  ));
   const [videoDuration, setVideoDuration] = useState(Number(node.modelSelection?.parameters?.duration ?? 4));
   const [videoCount, setVideoCount] = useState(Number(node.modelSelection?.parameters?.n ?? node.modelSelection?.parameters?.count ?? 1));
   const [videoGenerateAudio, setVideoGenerateAudio] = useState(Boolean(node.modelSelection?.parameters?.generateAudio ?? true));
@@ -244,7 +253,10 @@ export function PromptCard({
     setVideoModelId(String(node.modelSelection?.modelId ?? "x-ai/grok-imagine-video"));
     setVideoMode(normalizeVideoReferenceMode(node.modelSelection?.parameters?.mode));
     setVideoRatio(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
-    setVideoResolution(String(node.modelSelection?.parameters?.resolution ?? "720p"));
+    setVideoResolution(normalizedVideoResolution(
+      String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID),
+      node.modelSelection?.parameters?.resolution
+    ));
     setVideoDuration(Number(node.modelSelection?.parameters?.duration ?? 4));
     setVideoCount(Number(node.modelSelection?.parameters?.n ?? node.modelSelection?.parameters?.count ?? 1));
     setVideoGenerateAudio(Boolean(node.modelSelection?.parameters?.generateAudio ?? true));
@@ -448,7 +460,7 @@ export function PromptCard({
       parameters: {
         mode,
         ratio: videoRatio,
-        resolution: videoResolution,
+        resolution: videoModelId === SEEDANCE_VIDEO_MODEL_ID ? "480p" : videoResolution,
         duration,
         n: videoCount,
         generateAudio,
@@ -485,6 +497,8 @@ export function PromptCard({
   const isImageExecutionNode = node.kind === "image";
   const isVideoExecutionNode = isVideoPromptNode(node);
   const isAudioExecutionNode = node.kind === "audio";
+  const isNonDialogueSoundNode = ["cinematic_sfx", "cinematic_ambience"].includes(String(node.payload?.resourceType ?? ""));
+  const audioVoiceRunnable = Boolean(audioSpeakerId) || isNonDialogueSoundNode;
   const isTextExecutionNode = isTextNode || isScriptNode;
   const isMediaNode = isMediaPromptNode(node);
   const usesCompactContext = isTextExecutionNode || isMediaNode || isAudioExecutionNode;
@@ -564,7 +578,7 @@ export function PromptCard({
         </summary>
         <div className="generator-model-menu" role="listbox">
           <button className={isOpenRouterGrok ? "active" : ""} onClick={(event) => { setVideoModelId(GROK_VIDEO_MODEL_ID); setVideoResolution((current) => current === "480p" ? current : "720p"); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: GROK_VIDEO_MODEL_ID, mode: videoMode, generateAudio: videoGenerateAudio }))); setVideoCount(1); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Grok Imagine Video · OpenRouter</button>
-          <button className={isArkSeedanceMini ? "active" : ""} onClick={(event) => { setVideoModelId(SEEDANCE_VIDEO_MODEL_ID); setVideoResolution((current) => current === "1080p" ? "720p" : current); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: SEEDANCE_VIDEO_MODEL_ID, mode: videoMode, generateAudio: videoGenerateAudio }))); setVideoCount(1); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Seedance 2.0 Mini · Ark</button>
+          <button className={isArkSeedanceMini ? "active" : ""} onClick={(event) => { setVideoModelId(SEEDANCE_VIDEO_MODEL_ID); setVideoResolution("480p"); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: SEEDANCE_VIDEO_MODEL_ID, mode: videoMode, generateAudio: videoGenerateAudio }))); setVideoCount(1); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Seedance 2.0 Mini · Ark</button>
         </div>
       </details>
       <details className="video-mode-select">
@@ -608,7 +622,7 @@ export function PromptCard({
         </summary>
         <div className="video-parameter-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}>
           <section><span>比例</span><div>{["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"].map((ratio) => <button className={videoRatio === ratio ? "active" : ""} key={ratio} onClick={() => setVideoRatio(ratio)} type="button">{ratio}</button>)}</div></section>
-          <section><span>清晰度</span><div>{["480p", "720p"].map((resolution) => <button className={videoResolution === resolution ? "active" : ""} key={resolution} onClick={() => setVideoResolution(resolution)} type="button">{resolution.toUpperCase()}</button>)}</div></section>
+          <section><span>清晰度</span><div>{(isArkSeedanceMini ? ["480p"] : ["480p", "720p"]).map((resolution) => <button className={videoResolution === resolution ? "active" : ""} key={resolution} onClick={() => setVideoResolution(resolution)} type="button">{resolution.toUpperCase()}</button>)}</div></section>
           <section><span>生成时长</span><label><input max={videoDurationCapability.max} min={videoDurationCapability.min} onChange={(event) => setVideoDuration(Number(event.target.value))} type="range" value={displayedVideoDuration} /><strong>{displayedVideoDuration}s</strong></label></section>
           <section><span>生成数量</span><div>{[1].map((count) => <button className={videoCount === count ? "active" : ""} key={count} onClick={() => setVideoCount(count)} type="button">{count}个</button>)}</div></section>
           <section className="video-audio-setting"><span>原声音频</span><label><input checked={videoGenerateAudio} onChange={(event) => { const next = event.target.checked; setVideoGenerateAudio(next); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: videoModelId, mode: videoMode, generateAudio: next }))); }} type="checkbox" /><strong>{videoGenerateAudio ? "生成" : "关闭"}</strong></label></section>
@@ -645,7 +659,7 @@ export function PromptCard({
         <div className="audio-parameter-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}><span>语速</span><label><input max="1.5" min="0.6" onChange={(event) => setAudioSpeed(Number(event.target.value))} step="0.1" type="range" value={audioSpeed} /><strong>{audioSpeed.toFixed(1)}x</strong></label></div>
       </details>
       <span className="generator-spacer" />
-      <button aria-busy={isNodeGenerating} aria-label="生成音频" className="send-dot generator-send" disabled={readOnly || isNodeGenerating} onClick={() => void saveAudioConfig()} title={readOnly ? "全自动运行期间只读" : isNodeGenerating ? "音频正在生成" : "使用所选音色生成音频"} type="button">{isNodeGenerating ? <LoaderCircle aria-hidden="true" className="model-execution-spinner" size={14} /> : <ArrowUp size={14} />}</button>
+      <button aria-busy={isNodeGenerating} aria-label="生成音频" className="send-dot generator-send" disabled={readOnly || isNodeGenerating || !audioVoiceRunnable} onClick={() => void saveAudioConfig()} title={readOnly ? "全自动运行期间只读" : isNodeGenerating ? "音频正在生成" : !audioVoiceRunnable ? "先选择已验证或明确填写的 speaker ID；空音色仅是 audition_pending 草案" : "使用所选音色生成音频"} type="button">{isNodeGenerating ? <LoaderCircle aria-hidden="true" className="model-execution-spinner" size={14} /> : <ArrowUp size={14} />}</button>
     </div>
   );
 
@@ -738,6 +752,7 @@ export function PromptCard({
         ) : null}
         {!usesCompactContext ? <ModelReferencePacket packet={node.modelReferencePacket} sourceNodes={sourceNodes} /> : null}
         {!usesCompactContext ? <ModelRequestManifest manifest={node.modelRequestManifest} receipt={node.modelExecutionReceipt} /> : null}
+        <CinematicPromptFacts facts={node.cinematicPromptFacts} />
         {isTextExecutionNode || isImageExecutionNode ? (
           <ModelExecutionControls.Provider
             busy={isNodeGenerating}

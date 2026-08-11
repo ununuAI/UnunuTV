@@ -104,7 +104,16 @@ CREATE TABLE IF NOT EXISTS node_prompt_documents (
 CREATE TABLE IF NOT EXISTS script_documents (
   node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
   current_revision INTEGER NOT NULL DEFAULT 0,
+  current_screenplay_revision INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS screenplay_document_versions (
+  node_id TEXT NOT NULL REFERENCES script_documents(node_id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  content_text TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(node_id, revision)
 );
 CREATE TABLE IF NOT EXISTS script_rows (
   id TEXT PRIMARY KEY,
@@ -239,6 +248,8 @@ CREATE TABLE IF NOT EXISTS reviews (
   target_id TEXT NOT NULL,
   state TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
+  evidence_json TEXT,
+  target_revision INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
 ${DIRECTOR_STAGE_SCHEMA}
@@ -319,6 +330,7 @@ CREATE TABLE IF NOT EXISTS cinematic_image_prompt_compilations (
   payload_hash TEXT NOT NULL,
   compiler_version TEXT NOT NULL,
   manual_override INTEGER NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1,
   envelope_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -393,6 +405,7 @@ CREATE TABLE IF NOT EXISTS professional_contributions (
   target_id TEXT NOT NULL,
   role_id TEXT NOT NULL,
   revision INTEGER NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
   contribution_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -404,6 +417,7 @@ CREATE TABLE IF NOT EXISTS prompt_compilations (
   payload_hash TEXT NOT NULL,
   compiler_version TEXT NOT NULL,
   manual_override INTEGER NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1,
   envelope_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -416,6 +430,7 @@ CREATE TABLE IF NOT EXISTS cinematic_evaluations (
   media_id TEXT NOT NULL REFERENCES media(id),
   decision TEXT NOT NULL,
   revision INTEGER NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
   evaluation_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );

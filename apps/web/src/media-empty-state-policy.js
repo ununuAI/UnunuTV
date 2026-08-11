@@ -1,7 +1,11 @@
 export function mediaEmptyState(node, mediaKind = "image") {
   const payload = node?.payload || {};
   const lifecycle = payload.generationUnitLifecycle || "active";
+  const effectiveStatus = payload.storyboardBatchTrace?.itemStatus || payload.generationStatus;
   if (lifecycle === "superseded") return { detail: payload.generationMessage || "必须按新权威与镜头合同重建。", label: "旧生成单元已废弃" };
+  if (effectiveStatus === "queued") {
+    return { detail: payload.generationMessage || "任务已排队，但尚未调用 Provider。", label: "已排队 · 未开始生成" };
+  }
   if (payload.generationStatus === "blocked" || lifecycle !== "active") {
     return { detail: payload.generationMessage || "上游电影工业门禁尚未通过。", label: mediaKind === "video" ? "视频生产已阻断" : "图片已隔离" };
   }

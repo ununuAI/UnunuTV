@@ -1,6 +1,6 @@
-export const CINEMATIC_WORKFLOW_CONTRACT_VERSION = "1.0.0";
+export const CINEMATIC_WORKFLOW_CONTRACT_VERSION = "2.0.0";
 export const CINEMATIC_WORKFLOW_SKILL_ID = "ununu-cinematic-production";
-export const CINEMATIC_WORKFLOW_SKILL_VERSION = "4.0.0";
+export const CINEMATIC_WORKFLOW_SKILL_VERSION = "5.0.0";
 export const CINEMATIC_WORKFLOW_PHASES = Object.freeze([
   "script_analysis",
   "block_planning",
@@ -11,9 +11,9 @@ export const CINEMATIC_WORKFLOW_PHASES = Object.freeze([
   "image_generation",
   "prompt_compile",
   "video_generation",
-  "sound_design",
   "continuity_qa",
   "timeline_edit",
+  "sound_design",
   "candidate_render",
   "delivery_qc"
 ]);
@@ -52,7 +52,7 @@ function enumValue(value, allowed, path, issues) {
 export function validateCinematicWorkflowManifest(value) {
   const issues = [];
   if (!isRecord(value)) return { ok: false, issues: [issue("workflowManifest", "workflowManifest must be an object", "invalid_type")] };
-  for (const field of ["workflowId", "skillId", "skillVersion", "productionId", "sourceNodeId", "deliveryMode", "paidBoundary", "billingMode", "createdAt"]) {
+  for (const field of ["workflowId", "skillId", "skillVersion", "productionId", "sourceNodeId", "aspectRatio", "deliveryMode", "paidBoundary", "billingMode", "createdAt"]) {
     requiredText(value[field], field, issues);
   }
   if (value.contractVersion !== CINEMATIC_WORKFLOW_CONTRACT_VERSION) {
@@ -62,6 +62,9 @@ export function validateCinematicWorkflowManifest(value) {
     issues.push(issue("targetDurationSeconds", "targetDurationSeconds must be an integer >= 1", "invalid_number"));
   }
   enumValue(value.deliveryMode, CINEMATIC_WORKFLOW_DELIVERY_MODES, "deliveryMode", issues);
+  enumValue(value.aspectRatio, CINEMATIC_DELIVERY_ASPECT_RATIOS, "aspectRatio", issues);
+  const formatValidation = validateCinematicFormatProfile(value.formatProfile);
+  issues.push(...formatValidation.issues);
   enumValue(value.paidBoundary, CINEMATIC_WORKFLOW_PAID_BOUNDARIES, "paidBoundary", issues);
   enumValue(value.billingMode, CINEMATIC_WORKFLOW_BILLING_MODES, "billingMode", issues);
   if (!Array.isArray(value.phases) || value.phases.length !== CINEMATIC_WORKFLOW_PHASES.length) {
@@ -132,3 +135,4 @@ export function assertCinematicWorkflowManifest(value) {
   }
   return value;
 }
+import { CINEMATIC_DELIVERY_ASPECT_RATIOS, validateCinematicFormatProfile } from "./cinematic-format-profile-contracts.mjs";

@@ -1,4 +1,13 @@
-import { UnuTvError, createId, nowIso, requireNumber, requireObject, requireText } from "@ununu/unutv-contracts";
+import {
+  UnuTvError,
+  assertScreenplayDocumentInput,
+  createId,
+  nowIso,
+  requireNumber,
+  requireObject,
+  requireText,
+  screenplayContentChecksum
+} from "@ununu/unutv-contracts";
 
 async function requireScriptNode(ports, projectId, nodeId) {
   const node = await ports.projects.getNode(projectId, nodeId);
@@ -29,6 +38,27 @@ export function createScriptUseCases(ports) {
     });
   }
 
+  async function saveScreenplayDocument(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const nodeId = requireText(input.nodeId, "nodeId");
+    await requireScriptNode(ports, projectId, nodeId);
+    if (typeof ports.projects.saveScreenplayDocument !== "function") {
+      throw new UnuTvError("screenplay_document_port_required", "Screenplay document persistence is unavailable", 500);
+    }
+    const current = await ports.projects.getScriptDocument(projectId, nodeId);
+    const document = assertScreenplayDocumentInput(
+      requireObject(input.document, "document"),
+      { documentId: nodeId, currentRevision: current.screenplayRevision }
+    );
+    return ports.projects.saveScreenplayDocument(projectId, {
+      nodeId,
+      content: document.content,
+      checksum: screenplayContentChecksum(document.content),
+      expectedRevision: document.expectedRevision,
+      updatedAt: nowIso()
+    });
+  }
+
   async function updateScriptRow(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const nodeId = requireText(input.nodeId, "nodeId");
@@ -52,5 +82,5 @@ export function createScriptUseCases(ports) {
     return { deleted: await ports.projects.deleteScriptRow(projectId, requireText(input.rowId, "rowId"), nowIso()) };
   }
 
-  return { createScriptRow, deleteScriptRow, getScriptDocument, updateScriptRow };
+  return { createScriptRow, deleteScriptRow, getScriptDocument, saveScreenplayDocument, updateScriptRow };
 }

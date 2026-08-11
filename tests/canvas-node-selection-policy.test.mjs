@@ -2,18 +2,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { INVISIBLE_NODE_RESIZE_HANDLES, shouldEnableInvisibleNodeResize, shouldShowNodePrompt } from "../apps/web/src/canvas-node-selection-policy.js";
 
-test("a selected asset exposes the same prompt contract as other prompt-bearing nodes", () => {
-  assert.equal(shouldShowNodePrompt({ kind: "asset", selected: true, selectionCount: 1 }), true);
+test("only generative image and audio execution nodes expose the generic Prompt surface", () => {
+  assert.equal(shouldShowNodePrompt({ kind: "image", selected: true, selectionCount: 1 }), true);
+  assert.equal(shouldShowNodePrompt({ kind: "audio", selected: true, selectionCount: 1 }), true);
+  assert.equal(shouldShowNodePrompt({ kind: "asset", selected: true, selectionCount: 1 }), false);
 });
 
 test("prompt stays hidden without a single selected node", () => {
-  assert.equal(shouldShowNodePrompt({ kind: "asset", selected: false, selectionCount: 0 }), false);
-  assert.equal(shouldShowNodePrompt({ kind: "asset", selected: true, selectionCount: 2 }), false);
+  assert.equal(shouldShowNodePrompt({ kind: "image", selected: false, selectionCount: 0 }), false);
+  assert.equal(shouldShowNodePrompt({ kind: "image", selected: true, selectionCount: 2 }), false);
 });
 
-test("World only exposes a generation Prompt when a real World Provider is ready", () => {
+test("World is not a PromptDocument execution node even when legacy Provider flags exist", () => {
   assert.equal(shouldShowNodePrompt({ kind: "world", selected: true, selectionCount: 1 }), false);
-  assert.equal(shouldShowNodePrompt({ kind: "world", selected: true, selectionCount: 1, worldProviderReady: true }), true);
+  assert.equal(shouldShowNodePrompt({ kind: "world", selected: true, selectionCount: 1, worldProviderReady: true }), false);
 });
 
 test("editable nodes keep invisible resize affordances before and after internal interaction without rendering visible corners", () => {
@@ -30,7 +32,7 @@ test("editable nodes keep invisible resize affordances before and after internal
 });
 
 test("inline workspaces and video keep their dedicated prompt surfaces", () => {
-  assert.equal(shouldShowNodePrompt({ expanded: true, kind: "asset", selected: true, selectionCount: 1 }), false);
+  assert.equal(shouldShowNodePrompt({ expanded: true, kind: "image", selected: true, selectionCount: 1 }), false);
   assert.equal(shouldShowNodePrompt({ kind: "video", selected: true, selectionCount: 1 }), false);
   assert.equal(shouldShowNodePrompt({ kind: "videoShot", selected: true, selectionCount: 1 }), false);
   assert.equal(shouldShowNodePrompt({ kind: "compose", selected: true, selectionCount: 1 }), false);

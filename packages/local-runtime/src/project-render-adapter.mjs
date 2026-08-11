@@ -1,3 +1,5 @@
+import { runDatabaseTransaction } from "./project-transaction.mjs";
+
 const parse = (value, fallback) => value ? JSON.parse(value) : fallback;
 
 function renderRow(row) {
@@ -32,10 +34,119 @@ export function attachProjectRenderMethods(prototype, emitEvent) {
     emitEvent(database, "render.job_changed", job.id, { status: job.status, progress: job.progress });
     return renderRow(database.prepare("SELECT * FROM render_jobs WHERE id=?").get(job.id));
   };
-  prototype.getRenderJob = function getRenderJob(projectId, renderJobId) { return renderRow(this.database(projectId).prepare("SELECT * FROM render_jobs WHERE id=?").get(renderJobId)); };
-  prototype.listRenderJobs = function listRenderJobs(projectId, timelineId = null) {
+  prototype.commitRenderCompletion = function commitRenderCompletion(projectId, {
+    expectedTimelineLineageHash,
+    expectedTimelineUpdatedAt,
+    job,
+    master,
+    media,
+    qcReport
+  }) {
     const database = this.database(projectId);
-    const rows = timelineId ? database.prepare("SELECT * FROM render_jobs WHERE timeline_id=? ORDER BY created_at DESC").all(timelineId) : database.prepare("SELECT * FROM render_jobs ORDER BY created_at DESC").all();
+    return runDatabaseTransaction(database, () => {
+      const liveRow = database.prepare(`
+        SELECT * FROM render_jobs
+        WHERE id=? AND project_id=? AND is_active=1 AND status='running'
+      `).get(job.id, projectId);
+      const live = renderRow(liveRow);
+      const timeline = database.prepare(`
+        SELECT id, updated_at AS updatedAt
+        FROM timelines
+        WHERE id=? AND is_active=1
+      `).get(job.timelineId);
+      if (
+        !live
+        || !timeline
+        || live.timelineId !== job.timelineId
+        || live.renderGraph?.timelineLineageHash !== expectedTimelineLineageHash
+        || timeline.updatedAt !== expectedTimelineUpdatedAt
+      ) {
+        return {
+          committed: false,
+          reason: !live
+            ? "render_job_inactive"
+            : (!timeline ? "render_timeline_inactive" : "render_timeline_lineage_changed")
+        };
+      }
+      const nodeRow = database.prepare(`
+        SELECT id, canvas_id AS canvasId, payload_json AS payloadJson
+        FROM nodes
+        WHERE id=?
+      `).get(live.outputNodeId);
+      const payload = parse(nodeRow?.payloadJson, {});
+      if (!nodeRow || payload.invalidated === true || payload.stale === true) {
+        return { committed: false, reason: "render_output_node_inactive" };
+      }
+      const timestamp = job.completedAt;
+      const mediaIds = [...new Set([...(Array.isArray(payload.mediaIds) ? payload.mediaIds : []), media.id])];
+      database.prepare("UPDATE media SET node_id=? WHERE id=?").run(live.outputNodeId, media.id);
+      database.prepare(`
+        UPDATE nodes
+        SET payload_json=?, revision=revision+1, updated_at=?
+        WHERE id=?
+      `).run(JSON.stringify({ ...payload, mediaIds, currentMediaId: media.id }), timestamp, live.outputNodeId);
+      database.prepare(`
+        INSERT INTO technical_qc_reports
+          (id, project_id, render_job_id, media_id, status, report_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(qcReport.id, projectId, qcReport.renderJobId, qcReport.mediaId, qcReport.status, JSON.stringify(qcReport), qcReport.createdAt);
+      database.prepare(`
+        INSERT INTO export_masters
+          (id, project_id, timeline_id, render_job_id, media_id, preset, checksum, lineage_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        master.id,
+        projectId,
+        master.timelineId,
+        master.renderJobId,
+        master.mediaId,
+        master.preset,
+        master.checksum,
+        JSON.stringify(master.lineage ?? {}),
+        master.createdAt
+      );
+      const changed = database.prepare(`
+        UPDATE render_jobs
+        SET status=?, progress=?, output_path=?, output_media_id=?, error_json=?,
+          updated_at=?, started_at=?, completed_at=?
+        WHERE id=? AND project_id=? AND is_active=1 AND status='running'
+      `).run(
+        job.status,
+        job.progress,
+        job.outputPath,
+        job.outputMediaId,
+        null,
+        job.updatedAt,
+        job.startedAt,
+        job.completedAt,
+        job.id,
+        projectId
+      );
+      if (Number(changed.changes) !== 1) {
+        throw new Error("render completion lost its active-job compare-and-swap");
+      }
+      database.prepare("UPDATE canvases SET revision=revision+1, updated_at=? WHERE id=?")
+        .run(timestamp, nodeRow.canvasId);
+      emitEvent(database, "media.imported", media.id, { nodeId: live.outputNodeId, kind: media.kind });
+      emitEvent(database, "render.qc_completed", qcReport.id, { renderJobId: qcReport.renderJobId, status: qcReport.status });
+      emitEvent(database, "export.master_created", master.id, { timelineId: master.timelineId, renderJobId: master.renderJobId, mediaId: master.mediaId });
+      emitEvent(database, "render.job_changed", job.id, { status: job.status, progress: job.progress });
+      return {
+        committed: true,
+        job: renderRow(database.prepare("SELECT * FROM render_jobs WHERE id=?").get(job.id))
+      };
+    });
+  };
+  prototype.getRenderJob = function getRenderJob(projectId, renderJobId, includeInactive = false) {
+    return renderRow(this.database(projectId).prepare(`
+      SELECT * FROM render_jobs WHERE id=? ${includeInactive ? "" : "AND is_active=1"}
+    `).get(renderJobId));
+  };
+  prototype.listRenderJobs = function listRenderJobs(projectId, timelineId = null, includeInactive = false) {
+    const database = this.database(projectId);
+    const rows = timelineId
+      ? database.prepare(`SELECT * FROM render_jobs WHERE timeline_id=? ${includeInactive ? "" : "AND is_active=1"} ORDER BY created_at DESC`).all(timelineId)
+      : database.prepare(`SELECT * FROM render_jobs ${includeInactive ? "" : "WHERE is_active=1"} ORDER BY created_at DESC`).all();
     return rows.map(renderRow);
   };
   prototype.saveExportMaster = function saveExportMaster(projectId, master) {
@@ -45,11 +156,13 @@ export function attachProjectRenderMethods(prototype, emitEvent) {
     emitEvent(database, "export.master_created", master.id, { timelineId: master.timelineId, renderJobId: master.renderJobId, mediaId: master.mediaId });
     return master;
   };
-  prototype.getExportMasterByRenderJob = function getExportMasterByRenderJob(projectId, renderJobId) {
+  prototype.getExportMasterByRenderJob = function getExportMasterByRenderJob(projectId, renderJobId, includeInactive = false) {
     const row = this.database(projectId).prepare(`
       SELECT id, project_id AS projectId, timeline_id AS timelineId, render_job_id AS renderJobId,
         media_id AS mediaId, preset, checksum, lineage_json, created_at AS createdAt
-      FROM export_masters WHERE render_job_id=? ORDER BY created_at DESC LIMIT 1
+      FROM export_masters WHERE render_job_id=?
+        ${includeInactive ? "" : "AND is_active=1"}
+      ORDER BY created_at DESC LIMIT 1
     `).get(renderJobId);
     return row ? { ...row, lineage: parse(row.lineage_json, {}) } : undefined;
   };
@@ -60,8 +173,12 @@ export function attachProjectRenderMethods(prototype, emitEvent) {
     emitEvent(database, "render.qc_completed", report.id, { renderJobId: report.renderJobId, status: report.status });
     return report;
   };
-  prototype.getTechnicalQcReport = function getTechnicalQcReport(projectId, renderJobId) {
-    const row = this.database(projectId).prepare("SELECT report_json FROM technical_qc_reports WHERE render_job_id=? ORDER BY created_at DESC LIMIT 1").get(renderJobId);
+  prototype.getTechnicalQcReport = function getTechnicalQcReport(projectId, renderJobId, includeInactive = false) {
+    const row = this.database(projectId).prepare(`
+      SELECT report_json FROM technical_qc_reports WHERE render_job_id=?
+        ${includeInactive ? "" : "AND is_active=1"}
+      ORDER BY created_at DESC LIMIT 1
+    `).get(renderJobId);
     return row ? JSON.parse(row.report_json) : undefined;
   };
   prototype.saveDeliveryPackage = function saveDeliveryPackage(projectId, manifest) {
@@ -76,15 +193,18 @@ export function attachProjectRenderMethods(prototype, emitEvent) {
     emitEvent(database, "delivery.package_created", manifest.id, { renderJobId: manifest.renderJobId, kind: manifest.kind, status: manifest.status });
     return manifest;
   };
-  prototype.getDeliveryPackage = function getDeliveryPackage(projectId, packageId) {
-    const row = this.database(projectId).prepare("SELECT manifest_json FROM delivery_packages WHERE id=?").get(packageId);
+  prototype.getDeliveryPackage = function getDeliveryPackage(projectId, packageId, includeInactive = false) {
+    const row = this.database(projectId).prepare(`
+      SELECT manifest_json FROM delivery_packages
+      WHERE id=? ${includeInactive ? "" : "AND is_active=1"}
+    `).get(packageId);
     return row ? JSON.parse(row.manifest_json) : undefined;
   };
-  prototype.listDeliveryPackages = function listDeliveryPackages(projectId, renderJobId = null) {
+  prototype.listDeliveryPackages = function listDeliveryPackages(projectId, renderJobId = null, includeInactive = false) {
     const database = this.database(projectId);
     const rows = renderJobId
-      ? database.prepare("SELECT manifest_json FROM delivery_packages WHERE render_job_id=? ORDER BY created_at DESC").all(renderJobId)
-      : database.prepare("SELECT manifest_json FROM delivery_packages ORDER BY created_at DESC").all();
+      ? database.prepare(`SELECT manifest_json FROM delivery_packages WHERE render_job_id=? ${includeInactive ? "" : "AND is_active=1"} ORDER BY created_at DESC`).all(renderJobId)
+      : database.prepare(`SELECT manifest_json FROM delivery_packages ${includeInactive ? "" : "WHERE is_active=1"} ORDER BY created_at DESC`).all();
     return rows.map((row) => JSON.parse(row.manifest_json));
   };
 }

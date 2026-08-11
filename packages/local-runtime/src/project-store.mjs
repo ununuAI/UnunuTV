@@ -1,72 +1,83 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { UnuTvError, createId, nowIso } from "@ununu/unutv-contracts";
+import {
+  UnuTvError,
+  canonicalProjectId,
+  createId,
+  isCanonicalProjectId,
+  nowIso
+} from "@ununu/unutv-contracts";
 import { projectDatabasePath, projectDirectory } from "./paths.mjs";
 import { PROJECT_SCHEMA } from "./schema.mjs";
 import { applyProjectMigrations } from "./project-migrations.mjs";
 import { readNodePrompt, writeNodePrompt } from "./node-prompt-store.mjs";
 import { insertRun, selectRun, selectRuns, updateRun } from "./run-store.mjs";
-import { attachProjectScriptMethods } from "./project-script-adapter.mjs";
-import { attachProjectAssetMethods } from "./project-asset-adapter.mjs";
-import { attachCinematicProductionMethods } from "./cinematic-production-adapter.mjs";
-import { attachCinematicProductionResetMethods } from "./cinematic-production-reset-adapter.mjs";
-import { attachProjectControlMethods } from "./project-control-adapter.mjs";
-import { attachStoryboardMethods } from "./storyboard-adapter.mjs";
-import { attachProjectTimelineMethods } from "./project-timeline-adapter.mjs";
-import { attachProjectBudgetMethods } from "./project-budget-adapter.mjs";
-import { attachAutomationTaskMethods } from "./automation-task-adapter.mjs";
-import { attachProjectRenderMethods } from "./project-render-adapter.mjs";
-import { attachDirectorStageMethods } from "./director-stage-adapter.mjs";
-import { attachCinematicSequenceWorkspaceMethods } from "./cinematic-sequence-workspace-adapter.mjs";
-
-function parse(value, fallback = {}) {
-  return value ? JSON.parse(value) : fallback;
-}
-
-function nodeRow(row) {
-  if (!row) return undefined;
-  return {
-    id: row.id,
-    canvasId: row.canvas_id,
-    kind: row.kind,
-    title: row.title,
-    x: row.x,
-    y: row.y,
-    width: row.width,
-    height: row.height,
-    revision: row.revision,
-    payload: parse(row.payload_json),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-function event(database, type, entityId, payload = {}) {
-  database.prepare("INSERT INTO events (type, entity_id, payload_json, created_at) VALUES (?, ?, ?, ?)")
-    .run(type, entityId ?? null, JSON.stringify(payload), nowIso());
-}
+import { attachProjectStoreDomains } from "./attach-project-store-domains.mjs";
+import {
+  parseProjectStoreJson as parse,
+  projectNodeFromRow as nodeRow,
+  recordProjectEvent as event
+} from "./project-store-helpers.mjs";
+import { updateProjectNodeWithCas } from "./project-node-cas.mjs";
+import { runDatabaseTransaction } from "./project-transaction.mjs";
+import { configureSqliteConnection } from "./sqlite-connection-policy.mjs";
 
 export class ProjectStore {
-  constructor(dataRoot) {
+  constructor(dataRoot, options = {}) {
     this.dataRoot = dataRoot;
     this.databases = new Map();
+    this.transactionObserver = options.transactionObserver ?? null;
   }
 
-  database(projectId) {
-    let database = this.databases.get(projectId);
+  database(projectId, options = {}) {
+    const canonicalId = canonicalProjectId(projectId);
+    if (!isCanonicalProjectId(canonicalId)) {
+      throw new UnuTvError("invalid_project_id", "projectId must be a canonical project UUID or its bare route UUID", 400);
+    }
+    let database = this.databases.get(canonicalId);
     if (!database) {
-      const databasePath = projectDatabasePath(this.dataRoot, projectId);
-      database = new DatabaseSync(databasePath);
+      const databasePath = projectDatabasePath(this.dataRoot, canonicalId);
+      if (!existsSync(databasePath) && options.createIfMissing !== true) {
+        throw new UnuTvError("project_not_found", `Project not found: ${canonicalId}`, 404);
+      }
+      database = configureSqliteConnection(new DatabaseSync(databasePath));
       database.exec(PROJECT_SCHEMA);
       applyProjectMigrations(database, {
-        backupDirectory: path.join(projectDirectory(this.dataRoot, projectId), "backups"),
+        backupDirectory: path.join(projectDirectory(this.dataRoot, canonicalId), "backups"),
         databasePath,
-        projectId
+        projectId: canonicalId
       });
-      this.databases.set(projectId, database);
+      this.databases.set(canonicalId, database);
     }
     return database;
+  }
+
+  async runInTransaction(projectId, work, options = {}) {
+    const database = this.database(projectId);
+    if (database.isTransaction) {
+      throw new UnuTvError(
+        "project_transaction_nested",
+        "A project unit-of-work cannot be opened inside another project transaction",
+        500
+      );
+    }
+    const operation = options.operation ?? "project_mutation";
+    const notify = async (eventType, details = {}) => {
+      if (!this.transactionObserver) return;
+      await this.transactionObserver({ eventType, operation, projectId, ...details });
+    };
+    await notify("begin");
+    try {
+      const result = await runDatabaseTransaction(database, async () => work({
+        checkpoint: (boundary, details = {}) => notify("checkpoint", { boundary, details })
+      }));
+      await notify("commit").catch(() => {});
+      return result;
+    } catch (error) {
+      await notify("rollback", { error }).catch(() => {});
+      throw error;
+    }
   }
 
   create(project) {
@@ -86,7 +97,7 @@ export class ProjectStore {
       "backups"
     ]) mkdirSync(path.join(directory, relative), { recursive: true });
     writeFileSync(path.join(directory, ".unutv", "project.json"), `${JSON.stringify({ projectId: project.id }, null, 2)}\n`, "utf8");
-    const database = this.database(project.id);
+    const database = this.database(project.id, { createIfMissing: true });
     database.prepare("INSERT INTO project_meta (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)")
       .run(project.id, project.title, project.createdAt, project.updatedAt);
     event(database, "project.created", project.id, { title: project.title });
@@ -193,7 +204,7 @@ export class ProjectStore {
     return nodeRow(this.database(projectId).prepare("SELECT * FROM nodes WHERE id=?").get(nodeId));
   }
 
-  updateNode(projectId, nodeId, patch, expectedRevision) {
+  updateNode(projectId, nodeId, patch, expectedRevision, screenplayCas = undefined) {
     const database = this.database(projectId);
     const current = this.getNode(projectId, nodeId);
     if (!current) return undefined;
@@ -201,11 +212,34 @@ export class ProjectStore {
       throw new UnuTvError("revision_conflict", `Expected node revision ${expectedRevision}, found ${current.revision}`, 409);
     }
     const next = { ...current, ...patch, revision: current.revision + 1, updatedAt: nowIso() };
-    database.prepare(`
-      UPDATE nodes SET title=?, x=?, y=?, width=?, height=?, revision=?, payload_json=?, updated_at=? WHERE id=?
-    `).run(next.title, next.x, next.y, next.width, next.height, next.revision, JSON.stringify(next.payload), next.updatedAt, nodeId);
+    updateProjectNodeWithCas(database, { current, next, nodeId, screenplayCas });
     this.touchCanvas(database, current.canvasId);
     event(database, "node.updated", nodeId, { canvasId: current.canvasId, revision: next.revision });
+    return next;
+  }
+
+  updateNodeLayout(projectId, nodeId, patch, expectedRevision) {
+    const database = this.database(projectId);
+    const current = this.getNode(projectId, nodeId);
+    if (!current) return undefined;
+    if (expectedRevision !== undefined && Number(expectedRevision) !== current.revision) {
+      throw new UnuTvError("revision_conflict", `Expected node revision ${expectedRevision}, found ${current.revision}`, 409);
+    }
+    const next = {
+      ...current,
+      x: patch.x ?? current.x,
+      y: patch.y ?? current.y,
+      width: patch.width ?? current.width,
+      height: patch.height ?? current.height,
+      updatedAt: nowIso()
+    };
+    database.prepare(`
+      UPDATE nodes
+      SET x=?, y=?, width=?, height=?, updated_at=?
+      WHERE id=?
+    `).run(next.x, next.y, next.width, next.height, next.updatedAt, nodeId);
+    this.touchCanvas(database, current.canvasId);
+    event(database, "node.layout_updated", nodeId, { canvasId: current.canvasId, revision: current.revision });
     return next;
   }
 
@@ -315,7 +349,9 @@ export class ProjectStore {
               worldProjection: "gaussian_splat",
               worldFormat: path.extname(media.relativePath).slice(1).toLowerCase() || "spz"
             }
-          : { ...node.payload, mediaIds, currentMediaId: media.id };
+          : media.makeCurrent === false
+            ? { ...node.payload, mediaIds }
+            : { ...node.payload, mediaIds, currentMediaId: media.id };
         this.updateNode(projectId, media.nodeId, { payload });
       }
     }
@@ -455,22 +491,6 @@ export class ProjectStore {
     return { nodeId: row.nodeId, mediaId: row.mediaId, metadata: parse(row.metadata_json), updatedAt: row.updatedAt };
   }
 
-  createReview(projectId, review) {
-    const database = this.database(projectId);
-    database.prepare(`
-      INSERT INTO reviews (id, target_type, target_id, state, note, created_at) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(review.id, review.targetType, review.targetId, review.state, review.note, review.createdAt);
-    event(database, "review.created", review.id, { targetType: review.targetType, targetId: review.targetId, state: review.state });
-    return review;
-  }
-
-  listReviews(projectId) {
-    return this.database(projectId).prepare(`
-      SELECT id, target_type AS targetType, target_id AS targetId, state, note, created_at AS createdAt
-      FROM reviews ORDER BY created_at, rowid
-    `).all();
-  }
-
   touchCanvas(database, canvasId) {
     database.prepare("UPDATE canvases SET revision=revision+1, updated_at=? WHERE id=?").run(nowIso(), canvasId);
   }
@@ -481,15 +501,4 @@ export class ProjectStore {
   }
 }
 
-attachProjectScriptMethods(ProjectStore.prototype, event);
-attachProjectAssetMethods(ProjectStore.prototype, event, parse);
-attachCinematicProductionMethods(ProjectStore.prototype, event);
-attachCinematicProductionResetMethods(ProjectStore.prototype, event);
-attachProjectControlMethods(ProjectStore.prototype, event);
-attachStoryboardMethods(ProjectStore.prototype, event);
-attachProjectTimelineMethods(ProjectStore.prototype, event);
-attachProjectBudgetMethods(ProjectStore.prototype, event);
-attachAutomationTaskMethods(ProjectStore.prototype, event);
-attachProjectRenderMethods(ProjectStore.prototype, event);
-attachDirectorStageMethods(ProjectStore.prototype, event);
-attachCinematicSequenceWorkspaceMethods(ProjectStore.prototype, event);
+attachProjectStoreDomains(ProjectStore.prototype, event, parse);

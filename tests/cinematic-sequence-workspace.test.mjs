@@ -10,6 +10,7 @@ import {
   CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE,
   auditSequencePrevisForAcceptance,
   auditSequencePrevisForGeneration,
+  auditSequencePrevisPlaybackReceipt,
   cinematicSequencePrevisReviewTargetId,
   validateCreativeDecisionTrace,
   validateSequencePrevisDocument,
@@ -55,6 +56,38 @@ test("sequence workspace contracts make timeline, context, take memory and trace
   const acceptance = auditSequencePrevisForAcceptance({ sequencePrevis: incomplete, visualContextBundles: [context] });
   assert.equal(acceptance.ok, false);
   assert.equal(acceptance.errors.some((entry) => entry.code === "sequence_previs_frame_required"), true);
+  const playbackReceipt = {
+    version: "sequence_previs_playback_receipt_v1",
+    playbackReceiptId: "playback-test",
+    playbackSessionId: "session-test",
+    productionId: document.productionId,
+    sequencePrevisId: document.sequencePrevisId,
+    sequencePrevisRevision: document.revision,
+    durationSeconds: document.durationSeconds,
+    frameRate: document.frameRate,
+    startedAt: "2026-07-23T00:00:00.000Z",
+    completedAt: "2026-07-23T00:00:04.000Z",
+    createdAt: "2026-07-23T00:00:04.000Z",
+    sampleCount: 97,
+    maxObservedStepMs: 42,
+    manualSeekCount: 0,
+    intervals: [{ startSeconds: 0, endSeconds: 4 }]
+  };
+  assert.equal(auditSequencePrevisPlaybackReceipt(playbackReceipt, document).ok, true);
+  const canvasPaintStall = {
+    ...playbackReceipt,
+    playbackReceiptId: "playback-canvas-paint-stall",
+    maxObservedStepMs: 600
+  };
+  assert.equal(auditSequencePrevisPlaybackReceipt(canvasPaintStall, document).ok, true);
+  const hiddenOrPausedPlayback = {
+    ...playbackReceipt,
+    playbackReceiptId: "playback-hidden-or-paused",
+    maxObservedStepMs: 1250
+  };
+  const hiddenOrPausedAudit = auditSequencePrevisPlaybackReceipt(hiddenOrPausedPlayback, document);
+  assert.equal(hiddenOrPausedAudit.ok, false);
+  assert.equal(hiddenOrPausedAudit.errors.some((entry) => entry.code === "sequence_playback_step_gap"), true);
   const targetId = cinematicSequencePrevisReviewTargetId(document.sequencePrevisId, 1);
   const audit = auditSequencePrevisForGeneration({ generationUnit: { sequenceWorkspaceBinding: { sequencePrevisId: document.sequencePrevisId, sequencePrevisRevision: 1, visualContextBundleId: context.visualContextBundleId } }, sequencePrevis: document, visualContextBundle: context, reviews: [
     { id: "review-accepted", targetType: CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE, targetId, state: "accepted", createdAt: "2026-07-23T00:00:00.000Z" }
@@ -66,6 +99,72 @@ test("sequence workspace contracts make timeline, context, take memory and trace
   ] });
   assert.equal(rejected.ok, false);
   assert.equal(rejected.errors.some((entry) => entry.code === "sequence_previs_owner_acceptance_required"), true);
+});
+
+test("playback receipt and H0/H1 contracts reject timeline gaps and invented handoffs", () => {
+  const document = previs(
+    "production-test",
+    { storyPacketId: "story-test", revision: 1 },
+    { shotId: "shot-test", revision: 1 },
+  );
+  const gappedReceipt = {
+    version: "sequence_previs_playback_receipt_v1",
+    playbackReceiptId: "playback-gapped",
+    playbackSessionId: "session-gapped",
+    productionId: document.productionId,
+    sequencePrevisId: document.sequencePrevisId,
+    sequencePrevisRevision: document.revision,
+    durationSeconds: document.durationSeconds,
+    frameRate: document.frameRate,
+    startedAt: "2026-07-28T00:00:00.000Z",
+    completedAt: "2026-07-28T00:00:04.000Z",
+    createdAt: "2026-07-28T00:00:04.000Z",
+    sampleCount: 96,
+    maxObservedStepMs: 42,
+    manualSeekCount: 0,
+    intervals: [
+      { startSeconds: 0, endSeconds: 1.5 },
+      { startSeconds: 2, endSeconds: 4 },
+    ],
+  };
+  const playbackAudit = auditSequencePrevisPlaybackReceipt(
+    gappedReceipt,
+    document,
+  );
+  assert.equal(playbackAudit.ok, false);
+  assert.equal(
+    playbackAudit.errors.some(
+      (entry) => entry.code === "sequence_playback_coverage_gap",
+    ),
+    true,
+  );
+
+  const handoffDocument = {
+    ...document,
+    cutDecisions: [{
+      cutDecisionId: "cut-h0-h1",
+      fromShotId: "shot-a",
+      toShotId: "shot-b",
+      atSeconds: 2,
+      transitionType: "continuous_no_cut",
+      motivation: "连续动作交接",
+      outgoingPhase: "H0",
+      incomingPhase: "H1",
+      axisRule: "不越轴",
+      gazeRelation: "视线连续",
+      motionVector: "同方向",
+      audioBridge: "环境声连续",
+      overlapSeconds: 0.5,
+    }],
+  };
+  const missingHandoff = validateSequencePrevisDocument(handoffDocument);
+  assert.equal(missingHandoff.ok, false);
+  assert.equal(
+    missingHandoff.issues.some(
+      (entry) => entry.code === "sequence_handoff_evidence_required",
+    ),
+    true,
+  );
 });
 
 test("sequence workspace survives HTTP persistence, context compilation and generation compile evidence", async (context) => {
@@ -91,10 +190,21 @@ test("sequence workspace survives HTTP persistence, context compilation and gene
   assert.equal(bundle.promptFacts.preserve.includes("入口到桌席纵深轴不变"), true);
   const bypass = await send(`${root}/reviews`, "POST", { targetType: CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE, targetId: cinematicSequencePrevisReviewTargetId(savedPrevis.sequencePrevisId, 1), state: "accepted", note: "试图绕过" });
   assert.equal(bypass.status, 409);
-  const accepted = await send(`${productionRoot}/sequence-previs/${savedPrevis.sequencePrevisId}/reviews`, "POST", { revision: 1, state: "accepted", note: "Owner 接受连续预演" }).then((response) => response.json());
+  const playbackReceipt = await send(`${productionRoot}/sequence-previs/${savedPrevis.sequencePrevisId}/playback-receipts`, "POST", {
+    playback: {
+      playbackSessionId: "sequence-workspace-test-playback",
+      startedAt: "2026-07-23T00:00:00.000Z",
+      completedAt: "2026-07-23T00:00:04.000Z",
+      sampleCount: 97,
+      maxObservedStepMs: 42,
+      manualSeekCount: 0,
+      intervals: [{ startSeconds: 0, endSeconds: 4 }]
+    }
+  }).then((response) => response.json());
+  const accepted = await send(`${productionRoot}/sequence-previs/${savedPrevis.sequencePrevisId}/reviews`, "POST", { revision: 1, state: "accepted", playbackReceiptId: playbackReceipt.playbackReceiptId, note: "Owner 接受连续预演" }).then((response) => response.json());
   assert.equal(accepted.review.state, "accepted");
   assert.equal(accepted.audit.ok, true);
-  const unit = await send(`${productionRoot}/generation-units`, "POST", { generationUnit: { strategy: "single_shot", shotLinks: [{ shotId: savedShot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [], sequenceWorkspaceBinding: { sequencePrevisId: savedPrevis.sequencePrevisId, sequencePrevisRevision: 1, visualContextBundleId: bundle.visualContextBundleId }, generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 4, aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: [] } }, referenceBindings: [] }).then((response) => response.json());
+  const unit = await send(`${productionRoot}/generation-units`, "POST", { generationUnit: { strategy: "single_shot", segmentDecision: "new_shot", segmentSeam: { explicitCut: "deliberate_cut" }, shotLinks: [{ shotId: savedShot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [], sequenceWorkspaceBinding: { sequencePrevisId: savedPrevis.sequencePrevisId, sequencePrevisRevision: 1, visualContextBundleId: bundle.visualContextBundleId }, generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 4, aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: [] } }, referenceBindings: [] }).then((response) => response.json());
   const compilation = await send(`${productionRoot}/generation-units/${unit.generationUnit.generationUnitId}/compile`, "POST", {}).then((response) => response.json());
   assert.equal(compilation.envelope.sourceVersions.sequenceWorkspaceAudit.ok, true, JSON.stringify(compilation.envelope.sourceVersions.sequenceWorkspaceAudit));
   assert.equal((await fetch(`${productionRoot}/sequence-previs`).then((response) => response.json())).sequencePrevis.length, 1);
@@ -110,4 +220,16 @@ test("official CLI creates and reopens Sequence Previs without direct database a
   const saved = await run(["sequence-previs", "create", "--project", created.project.id, "--production", production.productionId, "--data", JSON.stringify(previs(production.productionId, storyPacket, savedShot))]);
   const listed = await run(["sequence-previs", "list", "--project", created.project.id, "--production", production.productionId]);
   assert.equal(listed.sequencePrevis[0].sequencePrevisId, saved.sequencePrevisId);
+  const playbackReceipt = await run(["sequence-previs", "playback-receipt", "--project", created.project.id, "--production", production.productionId, "--previs", saved.sequencePrevisId, "--data", JSON.stringify({
+    playbackSessionId: "sequence-cli-playback",
+    startedAt: "2026-07-28T00:00:00.000Z",
+    completedAt: "2026-07-28T00:00:04.000Z",
+    sampleCount: 97,
+    maxObservedStepMs: 42,
+    manualSeekCount: 0,
+    intervals: [{ startSeconds: 0, endSeconds: 4 }],
+  })]);
+  assert.equal(playbackReceipt.sequencePrevisId, saved.sequencePrevisId);
+  const playbackReceipts = await run(["sequence-previs", "playback-receipts", "--project", created.project.id, "--production", production.productionId, "--previs", saved.sequencePrevisId]);
+  assert.equal(playbackReceipts.playbackReceipts[0].playbackReceiptId, playbackReceipt.playbackReceiptId);
 });

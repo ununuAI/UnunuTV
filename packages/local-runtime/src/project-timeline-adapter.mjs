@@ -19,7 +19,9 @@ export function attachProjectTimelineMethods(prototype, event) {
     event(database, "timeline.created", timeline.id);
     return timeline;
   };
-  prototype.listTimelines = function listTimelines(projectId) { return selectTimelines(this.database(projectId)); };
+  prototype.listTimelines = function listTimelines(projectId, includeInactive = false) {
+    return selectTimelines(this.database(projectId), includeInactive);
+  };
   prototype.addTimelineClip = function addTimelineClip(projectId, clip) {
     const database = this.database(projectId);
     insertTimelineClip(database, clip);
@@ -68,5 +70,7 @@ export function attachProjectTimelineMethods(prototype, event) {
     if (command) event(database, "timeline.resource_command_redone", timelineId, { commandId: command.id, commandType: command.commandType, resourceType: command.resourceType });
     return command;
   };
-  prototype.getTimeline = function getTimeline(projectId, timelineId) { return selectTimeline(this.database(projectId), timelineId); };
+  prototype.getTimeline = function getTimeline(projectId, timelineId, includeInactive = false) {
+    return selectTimeline(this.database(projectId), timelineId, includeInactive);
+  };
 }

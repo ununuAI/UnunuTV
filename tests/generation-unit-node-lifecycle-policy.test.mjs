@@ -37,3 +37,14 @@ test("preflight projection keeps the execution node truthful and visibly ready",
   assert.equal(payload.promptCompilationId, "prompt-compilation-current");
   assert.equal(mediaEmptyState({ payload }, "video").label, "预检通过");
 });
+
+test("queued storyboard work is explicit and never presented as a running Provider request", () => {
+  const state = mediaEmptyState({
+    payload: {
+      generationStatus: "queued",
+      generationMessage: "图片任务已排队，但尚未调用 Provider。"
+    }
+  }, "image");
+  assert.equal(state.label, "已排队 · 未开始生成");
+  assert.match(state.detail, /尚未调用 Provider/u);
+});

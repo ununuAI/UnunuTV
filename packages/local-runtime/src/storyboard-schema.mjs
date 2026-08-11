@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS storyboard_documents_v2 (
   title TEXT NOT NULL,
   status TEXT NOT NULL,
   current_version INTEGER NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -47,6 +48,8 @@ CREATE TABLE IF NOT EXISTS storyboard_batch_jobs (
   provider TEXT,
   model TEXT,
   configuration_json TEXT NOT NULL DEFAULT '{}',
+  source_lineage_json TEXT,
+  current_source_lineage_json TEXT,
   revision INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -68,6 +71,7 @@ CREATE TABLE IF NOT EXISTS storyboard_batch_items (
   output_media_id TEXT,
   output_version_id TEXT,
   output_checksum TEXT,
+  source_lineage_json TEXT,
   error_json TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,

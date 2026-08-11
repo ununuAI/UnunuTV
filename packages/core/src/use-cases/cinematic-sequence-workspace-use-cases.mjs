@@ -1,9 +1,11 @@
 import {
   CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE,
+  CINEMATIC_SEQUENCE_PREVIS_PLAYBACK_RECEIPT_VERSION,
   CINEMATIC_SEQUENCE_PREVIS_STATES,
   UnuTvError,
   auditSequencePrevisForAcceptance,
   auditSequencePrevisForGeneration,
+  auditSequencePrevisPlaybackReceipt,
   cinematicSequencePrevisReviewTargetId,
   createId,
   nowIso,
@@ -12,6 +14,7 @@ import {
   requireObject,
   requireText,
   validateCreativeDecisionTrace,
+  validateSequencePrevisPlaybackReceipt,
   validateSequencePrevisDocument,
   validateVisualContextBundle,
   validateVisualTakeMemory
@@ -40,6 +43,9 @@ export function createCinematicSequenceWorkspaceUseCases(ports) {
   const getPrevisRecord = port(ports, "getSequencePrevis");
   const listPrevisRecords = port(ports, "listSequencePrevis");
   const listPrevisVersionRecords = port(ports, "listSequencePrevisVersions");
+  const savePlaybackReceiptRecord = port(ports, "saveSequencePrevisPlaybackReceipt");
+  const getPlaybackReceiptRecord = port(ports, "getSequencePrevisPlaybackReceipt");
+  const listPlaybackReceiptRecords = port(ports, "listSequencePrevisPlaybackReceipts");
   const saveContextRecord = port(ports, "saveVisualContextBundle");
   const getContextRecord = port(ports, "getVisualContextBundle");
   const listContextRecords = port(ports, "listVisualContextBundles");
@@ -62,8 +68,8 @@ export function createCinematicSequenceWorkspaceUseCases(ports) {
     if (!production) throw new UnuTvError("cinematic_production_not_found", `Cinematic production not found: ${productionId}`, 404);
     return production;
   }
-  async function requirePrevis(projectId, productionId, sequencePrevisId) {
-    const previs = await getPrevisRecord(projectId, productionId, sequencePrevisId);
+  async function requirePrevis(projectId, productionId, sequencePrevisId, includeStale = false) {
+    const previs = await getPrevisRecord(projectId, productionId, sequencePrevisId, includeStale);
     if (!previs) throw new UnuTvError("cinematic_sequence_previs_not_found", `Sequence previs not found: ${sequencePrevisId}`, 404);
     return previs;
   }
@@ -171,6 +177,40 @@ export function createCinematicSequenceWorkspaceUseCases(ports) {
     return saveTraceRecord(projectId, trace);
   }
 
+  async function recordSequencePrevisPlayback(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const productionId = requireText(input.productionId, "productionId");
+    await requireProduction(projectId, productionId);
+    const sequencePrevis = await requirePrevis(
+      projectId,
+      productionId,
+      requireText(input.sequencePrevisId, "sequencePrevisId"),
+    );
+    const submitted = requireObject(input.playback ?? input.playbackReceipt, "playback");
+    const receipt = {
+      ...submitted,
+      version: CINEMATIC_SEQUENCE_PREVIS_PLAYBACK_RECEIPT_VERSION,
+      playbackReceiptId: createId("sequence-playback"),
+      productionId,
+      sequencePrevisId: sequencePrevis.sequencePrevisId,
+      sequencePrevisRevision: sequencePrevis.revision,
+      durationSeconds: sequencePrevis.durationSeconds,
+      frameRate: sequencePrevis.frameRate,
+      createdAt: nowIso(),
+    };
+    assertValid("SequencePrevisPlaybackReceipt", validateSequencePrevisPlaybackReceipt(receipt));
+    const audit = auditSequencePrevisPlaybackReceipt(receipt, sequencePrevis);
+    if (!audit.ok) {
+      throw new UnuTvError(
+        "sequence_previs_playback_incomplete",
+        "Sequence Previs 必须从 0 到 duration 连续播放且无跳段，才能生成验收回执。",
+        409,
+        audit,
+      );
+    }
+    return savePlaybackReceiptRecord(projectId, receipt);
+  }
+
   async function reviewSequencePrevis(input = {}) {
     const projectId = requireText(input.projectId, "projectId"), productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
@@ -180,13 +220,15 @@ export function createCinematicSequenceWorkspaceUseCases(ports) {
     const state = requireEnum(input.state, ["accepted", "rejected"], "state");
     let audit = null;
     if (state === "accepted") {
-      const [visualContextBundles, reviews, mediaRecords] = await Promise.all([
+      const playbackReceiptId = requireText(input.playbackReceiptId, "playbackReceiptId");
+      const [visualContextBundles, reviews, mediaRecords, playbackReceipt] = await Promise.all([
         listContextRecords(projectId, productionId),
         ports.projects.listReviews(projectId),
-        Promise.all((sequencePrevis.shots ?? []).map((shot) => shot.frameMediaId ? getMedia(projectId, shot.frameMediaId) : null))
+        Promise.all((sequencePrevis.shots ?? []).map((shot) => shot.frameMediaId ? getMedia(projectId, shot.frameMediaId) : null)),
+        getPlaybackReceiptRecord(projectId, productionId, playbackReceiptId),
       ]);
-      audit = auditSequencePrevisForAcceptance({ mediaRecords, reviews, sequencePrevis, visualContextBundles });
-      if (!audit.ok) throw new UnuTvError("sequence_previs_acceptance_blocked", "连续预演仍缺少真实帧、像素验收、视觉上下文或有效切镜，不能写入 Owner ACCEPT。", 409, audit);
+      audit = auditSequencePrevisForAcceptance({ mediaRecords, playbackReceipt, reviews, sequencePrevis, visualContextBundles });
+      if (!audit.ok) throw new UnuTvError("sequence_previs_acceptance_blocked", "连续预演仍缺少完整播放回执、真实帧、像素验收、视觉上下文或有效切镜，不能写入 Owner ACCEPT。", 409, audit);
     }
     const review = await createReviewRecord(projectId, {
       id: createId("review"), targetType: CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE,
@@ -210,13 +252,37 @@ export function createCinematicSequenceWorkspaceUseCases(ports) {
 
   return {
     addCreativeDecisionTrace, addVisualTakeMemory, compileVisualContextBundle,
-    getSequencePrevis: async (input = {}) => requirePrevis(requireText(input.projectId, "projectId"), requireText(input.productionId, "productionId"), requireText(input.sequencePrevisId, "sequencePrevisId")),
+    getSequencePrevis: async (input = {}) => requirePrevis(
+      requireText(input.projectId, "projectId"),
+      requireText(input.productionId, "productionId"),
+      requireText(input.sequencePrevisId, "sequencePrevisId"),
+      input.includeStale === true
+    ),
     getSequenceWorkspaceEvidence,
+    listSequencePrevisPlaybackReceipts: async (input = {}) => listPlaybackReceiptRecords(
+      requireText(input.projectId, "projectId"),
+      requireText(input.productionId, "productionId"),
+      requireText(input.sequencePrevisId, "sequencePrevisId"),
+    ),
     listCreativeDecisionTraces: async (input = {}) => listTraceRecords(requireText(input.projectId, "projectId"), requireText(input.productionId, "productionId"), input.targetType, input.targetId),
-    listSequencePrevis: async (input = {}) => listPrevisRecords(requireText(input.projectId, "projectId"), requireText(input.productionId, "productionId")),
+    listSequencePrevis: async (input = {}) => listPrevisRecords(
+      requireText(input.projectId, "projectId"),
+      requireText(input.productionId, "productionId"),
+      input.includeStale === true
+    ),
     listSequencePrevisVersions: async (input = {}) => listPrevisVersionRecords(requireText(input.projectId, "projectId"), requireText(input.productionId, "productionId"), requireText(input.sequencePrevisId, "sequencePrevisId")),
-    listVisualContextBundles: async (input = {}) => listContextRecords(requireText(input.projectId, "projectId"), requireText(input.productionId, "productionId"), input.shotId),
-    listVisualTakeMemories: async (input = {}) => listMemoryRecords(requireText(input.projectId, "projectId"), requireText(input.productionId, "productionId"), input.generationUnitId),
-    reviewSequencePrevis, saveSequencePrevis, updateSequencePrevis
+    listVisualContextBundles: async (input = {}) => listContextRecords(
+      requireText(input.projectId, "projectId"),
+      requireText(input.productionId, "productionId"),
+      input.shotId,
+      input.includeStale === true
+    ),
+    listVisualTakeMemories: async (input = {}) => listMemoryRecords(
+      requireText(input.projectId, "projectId"),
+      requireText(input.productionId, "productionId"),
+      input.generationUnitId,
+      input.includeStale === true
+    ),
+    recordSequencePrevisPlayback, reviewSequencePrevis, saveSequencePrevis, updateSequencePrevis
   };
 }

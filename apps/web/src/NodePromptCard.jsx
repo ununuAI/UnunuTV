@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { PromptCard } from "./PromptCard.tsx";
+import { cinematicPromptFactsForNode } from "./cinematic-prompt-facts-view-model.js";
 import { imageGenerationStarterPrompt } from "@ununu/unutv-contracts";
 import { normalizePromptOutputMode, promptOutputModeForNode } from "./prompt-output-mode-policy.js";
 import { providerFrameReferenceSources, providerReferenceMediaIds } from "./node-provider-reference-policy.js";
@@ -173,6 +174,7 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
     assetRole: node.payload?.assetRole,
     blockedReason,
     canRun: !readOnly && !worldGenerationUnavailable && node.payload?.generationStatus !== "running" && !locallyRunning,
+    cinematicPromptFacts: cinematicPromptFactsForNode(node, prompt),
     cost: node.payload?.cost || (outputMode === "image" ? "GPT Image 2" : outputMode === "video" ? "Motion 1.0" : outputMode === "audio" ? "Seed Audio 1.0" : outputMode === "world" ? "3D 世界" : "纯文案"),
     generationActivity: locallyRunning ? { phase: runState.status } : node.payload?.generationStatus === "running" ? { phase: "running" } : undefined,
     id: node.id,

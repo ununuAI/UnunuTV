@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { deriveAssetAuthorityCandidates } from "../packages/core/src/asset-authority-operation-policy.mjs";
 import { createLocalRuntime } from "../packages/local-runtime/src/index.mjs";
 
 test("story facts derive candidate authorities with search, atomic approval, history, restore and impact", async (context) => {
@@ -34,12 +35,22 @@ test("story facts derive candidate authorities with search, atomic approval, his
     cinematography: { grammar: "克制跟随" }, lighting: { source: "站厅顶灯" }, color: { palette: "暖红与深灰" },
     productionDesign: { location: "暖红车站大厅", material: "旧瓷砖与金属站牌" }, characterLook: { 林岚: { wardrobe: "深色外套" }, 赵野: { wardrobe: "浅色制服" } },
     performance: { baseline: "自然克制" }, sound: { world: "大厅环境音" }, vfx: {}, continuityLocks: ["空间轴线连续"],
-    visualMotifs: [], colorArc: {}, spatialDramaturgy: {}, propSemantics: {}, costumeNarrative: {}, materialAging: {}, culturalResearchRefs: [], styleProhibitions: []
+    visualMotifs: [], colorArc: {}, spatialDramaturgy: {}, propSemantics: {
+      金属站牌: {
+        narrativeFunction: "林岚抵达与确认位置的视觉落点",
+        geometry: "竖立式矩形站牌",
+        material: "旧金属",
+        scale: "人物胸口以上高度",
+        wearState: "边缘磨损"
+      }
+    }, costumeNarrative: {}, materialAging: {}, culturalResearchRefs: [], styleProhibitions: []
   } });
   const planned = await runtime.app.planCinematicFromScript({ projectId: project.id, productionId: production.productionId, sourceNodeId: script.id, createStoryboard: false });
   const preview = await runtime.app.deriveAssetAuthoritiesFromStory({ projectId: project.id, productionId: production.productionId });
   assert.equal(preview.persisted, false);
-  assert.deepEqual(preview.candidates.map((entry) => entry.authorityType), ["character", "scene"]);
+  assert.deepEqual(preview.candidates.map((entry) => entry.authorityType), ["character", "scene", "prop"]);
+  assert.equal(preview.candidates.find((entry) => entry.authorityType === "scene").displayName, "暖红车站大厅");
+  assert.equal(preview.candidates.find((entry) => entry.authorityType === "prop").displayName, "金属站牌");
   const derived = await runtime.app.deriveAssetAuthoritiesFromStory({ projectId: project.id, productionId: production.productionId, persist: true });
   assert.equal(derived.persisted, true);
   assert.equal(derived.candidates.every((entry) => entry.status === "candidate"), true);
@@ -48,9 +59,9 @@ test("story facts derive candidate authorities with search, atomic approval, his
   assert.deepEqual(character.wardrobeMakeupHair, { wardrobe: "深色外套" }, "one character authority must not inherit another character's look");
 
   const search = await runtime.app.searchAssetAuthorities({ projectId: project.id, productionId: production.productionId, status: "candidate", pageSize: 1, sort: "name_asc" });
-  assert.equal(search.total, 2);
+  assert.equal(search.total, 3);
   assert.equal(search.items.length, 1);
-  assert.equal(search.pageCount, 2);
+  assert.equal(search.pageCount, 3);
   const characterSearch = await runtime.app.searchAssetAuthorities({ projectId: project.id, productionId: production.productionId, authorityType: "character", query: "林岚" });
   assert.equal(characterSearch.items[0].authorityId, character.authorityId);
 
@@ -94,4 +105,48 @@ test("story facts derive candidate authorities with search, atomic approval, his
   const impact = await runtime.app.getAssetAuthorityImpact({ projectId: project.id, productionId: production.productionId, authorityId: character.authorityId });
   assert.deepEqual(impact.counts, { shots: 1, storyboardShots: 1, generationUnits: 0 });
   assert.equal(impact.shots[0].shotId, planned.shots[0].shotId);
+});
+
+test("explicit story asset requirements drive scene and prop authority names before shots exist", () => {
+  const candidates = deriveAssetAuthorityCandidates({
+    storyPacket: {
+      characters: [{ name: "甲" }],
+      scenePurpose: "用危机建立群像关系",
+      causalEventChain: ["公共木箱裂开", "空白门牌被命名"],
+      assetRequirements: {
+        scenes: [{ displayName: "无名公寓入口", description: "窄入口与唯一通路" }],
+        props: [
+          { displayName: "公共木箱", material: "旧木", narrativeFunction: "制造入口危机" },
+          { displayName: "空白门牌", material: "旧木板", narrativeFunction: "完成命名" }
+        ]
+      }
+    },
+    visualBible: { characterLook: {}, productionDesign: {}, propSemantics: {}, lighting: {}, color: {} }
+  });
+  assert.deepEqual(candidates.map((entry) => [entry.authorityType, entry.displayName]), [
+    ["character", "甲"],
+    ["scene", "无名公寓入口"],
+    ["prop", "公共木箱"],
+    ["prop", "空白门牌"]
+  ]);
+});
+
+test("explicit single-instance prop aliases collapse to one authority candidate", () => {
+  const candidates = deriveAssetAuthorityCandidates({
+    storyPacket: {
+      characters: [],
+      scenePurpose: "入口危机",
+      causalEventChain: ["公共木箱裂开"],
+      assetRequirements: {
+        props: ["单实例公共木箱", "空白门牌"]
+      },
+      props: ["公共木箱", "记号笔"]
+    },
+    visualBible: { characterLook: {}, productionDesign: {}, propSemantics: {}, lighting: {}, color: {} }
+  });
+
+  assert.deepEqual(
+    candidates.filter((entry) => entry.authorityType === "prop").map((entry) => entry.displayName),
+    ["单实例公共木箱", "空白门牌", "记号笔"]
+  );
 });

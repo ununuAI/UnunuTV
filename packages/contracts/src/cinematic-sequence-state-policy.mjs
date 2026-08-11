@@ -69,9 +69,14 @@ export function validateCinematicSequenceState(value) {
   }
   if (value.relation === "sequence_first") {
     if (value.sourceEvaluationId !== undefined) issues.push(issue("sourceEvaluationId", "sequence_first must not bind a source evaluation", "sequence_source_conflict"));
+    if (value.awaitingAcceptedSource === true) issues.push(issue("awaitingAcceptedSource", "sequence_first cannot wait for a previous source", "sequence_source_conflict"));
   } else {
     requiredText(value.parentGenerationUnitId, "parentGenerationUnitId", issues);
-    requiredText(value.sourceEvaluationId, "sourceEvaluationId", issues);
+    if (value.awaitingAcceptedSource === true) {
+      if (value.sourceEvaluationId !== undefined) issues.push(issue("sourceEvaluationId", "a waiting sequence state cannot bind an unaccepted source evaluation", "sequence_source_conflict"));
+    } else {
+      requiredText(value.sourceEvaluationId, "sourceEvaluationId", issues);
+    }
   }
   if (value.relation === "reanchor_after_drift") {
     if (value.extensionDepth !== 0) issues.push(issue("extensionDepth", "reanchor_after_drift must reset extensionDepth to 0", "reanchor_reset_required"));
@@ -190,4 +195,55 @@ export function auditCinematicSequenceState({ generationUnit, sourceEvaluation }
     ok: errors.length === 0,
     sourceEvaluationId: sourceEvaluation?.evaluationId ?? null
   };
+}
+
+export function auditCinematicSequencePlan(units) {
+  const errors = [];
+  const groups = new Map();
+  for (const record of list(units)) {
+    const unit = record?.generationUnit ?? record;
+    const state = unit?.sequenceState;
+    if (!isRecord(state)) continue;
+    const items = groups.get(state.sceneId) ?? [];
+    items.push({ state, unit });
+    groups.set(state.sceneId, items);
+  }
+  for (const [sceneId, items] of groups) {
+    items.sort((left, right) => left.state.sequenceIndex - right.state.sequenceIndex);
+    const firstCount = items.filter((entry) => entry.state.relation === "sequence_first").length;
+    if (firstCount !== 1) errors.push({
+      code: "sequence_scene_first_count_invalid",
+      message: `${sceneId} 必须且只能有一个 sequence_first，当前为 ${firstCount}。`,
+      sceneId
+    });
+    for (const [index, entry] of items.entries()) {
+      const expectedIndex = index + 1;
+      if (entry.state.sequenceIndex !== expectedIndex) errors.push({
+        code: "sequence_index_not_contiguous",
+        message: `${sceneId} 的 sequenceIndex 必须从 1 连续递增。`,
+        actual: entry.state.sequenceIndex,
+        expected: expectedIndex,
+        generationUnitId: entry.unit?.generationUnitId,
+        sceneId
+      });
+      if (index > 0 && entry.state.relation === "sequence_first") errors.push({
+        code: "sequence_later_unit_cannot_be_first",
+        message: `${entry.unit?.generationUnitId || "后续单元"} 与前镜属于同一场，不能重置为独立第一镜。`,
+        generationUnitId: entry.unit?.generationUnitId,
+        sceneId
+      });
+      if (index > 0) {
+        const expectedParent = items[index - 1].unit?.generationUnitId;
+        if (entry.state.parentGenerationUnitId !== expectedParent) errors.push({
+          code: "sequence_parent_chain_broken",
+          message: `${entry.unit?.generationUnitId || "后续单元"} 未绑定同场紧邻上一单元。`,
+          actualParentGenerationUnitId: entry.state.parentGenerationUnitId ?? null,
+          expectedParentGenerationUnitId: expectedParent ?? null,
+          generationUnitId: entry.unit?.generationUnitId,
+          sceneId
+        });
+      }
+    }
+  }
+  return { errors, ok: errors.length === 0, sceneCount: groups.size };
 }

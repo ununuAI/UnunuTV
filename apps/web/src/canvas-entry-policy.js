@@ -1,8 +1,13 @@
 const PROJECT_LEVEL_ENTRY_KINDS = new Set(["cinematic"]);
 
+function isProjectLevelEntry(node) {
+  return PROJECT_LEVEL_ENTRY_KINDS.has(node?.kind)
+    && !node?.payload?.resourceType;
+}
+
 export function nodeHasCanvasPresentation(node) {
   return Boolean(node?.id)
-    && !PROJECT_LEVEL_ENTRY_KINDS.has(node.kind)
+    && !isProjectLevelEntry(node)
     && node?.payload?.productionPlanState !== "superseded";
 }
 

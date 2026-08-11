@@ -4,6 +4,13 @@ function text(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+export function resolveBootstrapStoryPacket(record) {
+  if (!record || typeof record !== "object") return null;
+  return record.storyPacket && typeof record.storyPacket === "object"
+    ? record.storyPacket
+    : record;
+}
+
 /**
  * Prepare the upstream contracts for the formal cinematic pipeline.
  *
@@ -49,10 +56,11 @@ export async function bootstrapEpisodeFromBrief({
     steps.push({ step: "story_packet", ok: true, revision: story.revision, source: "caller_structured_input" });
   }
   if (!story) throw new UnuTvError("story_packet_required", "StoryProductionPacket is missing; a brief cannot be expanded into characters or causal events automatically", 409);
-  if (story.status === "needs_story_authoring" || story.storyPacket?.status === "needs_story_authoring") {
+  const storyPacket = resolveBootstrapStoryPacket(story);
+  if (storyPacket?.status === "needs_story_authoring") {
     throw new UnuTvError("story_packet_incomplete", "Series ledger context is not a completed StoryPacket; supply authored causal events, dialogue and states before shot design", 409);
   }
-  if (!story.storyPacket?.characters?.length || !story.storyPacket?.causalEventChain?.length) {
+  if (!storyPacket?.characters?.length || !storyPacket?.causalEventChain?.length) {
     throw new UnuTvError("story_packet_incomplete", "StoryProductionPacket must contain characters and a causal event chain before shot design", 409);
   }
   if (!steps.some((entry) => entry.step === "story_packet")) steps.push({ step: "story_packet", ok: true, reused: true, revision: story.revision });

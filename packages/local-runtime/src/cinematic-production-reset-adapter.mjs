@@ -70,6 +70,7 @@ export function attachCinematicProductionResetMethods(prototype, recordEvent) {
       remove("generation_unit_versions", "generation_unit_id IN (SELECT id FROM generation_units WHERE production_id=?)", [productionId]);
       remove("generation_units", "production_id=?", [productionId]);
       remove("cinematic_visual_context_bundles", "production_id=?", [productionId]);
+      remove("cinematic_sequence_previs_playback_receipts", "production_id=?", [productionId]);
       remove("cinematic_sequence_previs_versions", "sequence_previs_id IN (SELECT id FROM cinematic_sequence_previs WHERE production_id=?)", [productionId]);
       remove("cinematic_sequence_previs", "production_id=?", [productionId]);
       remove("cinematic_creative_decision_traces", "production_id=?", [productionId]);

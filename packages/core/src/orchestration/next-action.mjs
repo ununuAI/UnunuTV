@@ -38,6 +38,8 @@ export function deriveNextActionFromTasks({
   seriesId = null,
   episodeNumber = null,
   promptAuthority = null,
+  screenplayAuthority = null,
+  screenplayRevisionContract = null,
   assetReuse = null,
   authoringGaps = [],
   layoutOverlaps = [],
@@ -55,6 +57,39 @@ export function deriveNextActionFromTasks({
     path: `/api/projects/${projectId}/cinematic-workflow/advance`,
     body: automationRunId ? { automationRunId } : {}
   };
+
+  if (screenplayRevisionContract) {
+    return buildNextAction({
+      actionId: createId("na"),
+      type: "author_episode",
+      phase: "screenplay_development",
+      seriesId,
+      episodeNumber,
+      worker: "episode-authoring",
+      command: {
+        cli: `ununu-unutv workflow cinematic-author --project ${projectId}${automationRunId ? ` --automation-run ${automationRunId}` : ""} --file EPISODE_PACKAGE.json`,
+        method: "POST",
+        path: `/api/projects/${projectId}/cinematic-workflow/author`,
+        body: {
+          ...(automationRunId ? { automationRunId } : {}),
+          package: "EpisodeAuthoringPackageV1",
+          requiredScreenplayRevisionContract: screenplayRevisionContract
+        }
+      },
+      blocker: {
+        code: "screenplay_revision_authoring_required",
+        message: "Author the explicitly requested complete screenplay revision before returning to development review",
+        targetType: "structured_script",
+        targetId: screenplayRevisionContract.sourceNodeId,
+        revision: screenplayRevisionContract.expectedRevision,
+        details: { screenplayRevisionContract }
+      },
+      promptAuthority,
+      assetReuse,
+      idempotencyKey: screenplayRevisionContract.contractId,
+      message: "Revise the complete screenplay and StoryPacket through cinematic-author using the exact persisted revision contract"
+    });
+  }
 
   if (Array.isArray(authoringGaps) && authoringGaps.length) {
     return buildNextAction({
@@ -83,6 +118,8 @@ export function deriveNextActionFromTasks({
   }
 
   if (Array.isArray(layoutOverlaps) && layoutOverlaps.length) {
+    const productionOverlapCount = layoutOverlaps.filter((overlap) => overlap.scope !== "cross_domain").length;
+    const globalOverlapCount = layoutOverlaps.length;
     return buildNextAction({
       actionId: createId("na"),
       type: "repair",
@@ -98,13 +135,17 @@ export function deriveNextActionFromTasks({
       },
       blocker: {
         code: "canvas_nodes_overlap",
-        message: "Cinematic canvas nodes overlap and must be reflowed before production continues",
-        details: { overlaps: layoutOverlaps }
+        message: "Current production nodes overlap visible canvas nodes and must be reflowed before production continues",
+        details: {
+          overlaps: layoutOverlaps,
+          productionOverlapCount,
+          globalOverlapCount
+        }
       },
       promptAuthority,
       assetReuse,
       idempotencyKey: `${automationRunId || "run"}:canvas-reflow:v1`,
-      message: "Reflow cinematic canvas nodes into collision-free production sections"
+      message: "Reflow current production nodes around fixed visible canvas obstacles"
     });
   }
 
@@ -198,6 +239,98 @@ export function deriveNextActionFromTasks({
         assetReuse,
         idempotencyKey: `${automationRunId || "run"}:${blocked.stage}:provider-reconcile:${runId || "unknown"}`,
         message: "Reconcile the existing provider intent without blindly submitting a duplicate"
+      });
+    }
+    const developmentReview = nested.find((entry) => entry.code === "cinematic_development_review_required");
+    if (developmentReview) {
+      const reviewGate = developmentReview.details ?? {};
+      const targetId = reviewGate.screenplayDocumentId
+        ?? screenplayAuthority?.targetId
+        ?? screenplayAuthority?.sourceNodeId
+        ?? null;
+      const revision = Number.isInteger(reviewGate.screenplayDocumentRevision)
+        ? reviewGate.screenplayDocumentRevision
+        : Number.isInteger(screenplayAuthority?.revision) ? screenplayAuthority.revision : null;
+      const contentChecksum = reviewGate.screenplayDocumentChecksum
+        ?? screenplayAuthority?.contentChecksum
+        ?? null;
+      return buildNextAction({
+        actionId: createId("na"),
+        type: "repair",
+        phase: "script_analysis",
+        seriesId,
+        episodeNumber,
+        worker: "cinematic-development-review",
+        command: baseCommand,
+        blocker: {
+          code: developmentReview.code,
+          message: developmentReview.message,
+          targetType: "screenplay_document",
+          targetId,
+          revision,
+          taskId: blocked.id,
+          details: {
+            ...reviewGate,
+            requiredRoles: ["script_doctor", "dialogue_editor", "platform_editor"],
+            sourceScreenplayDocumentChecksum: contentChecksum,
+            sourceScreenplayDocumentId: targetId,
+            sourceScreenplayDocumentRevision: revision,
+            sourceStoryPacketId: reviewGate.storyPacketId ?? null,
+            sourceStoryPacketRevision: reviewGate.storyPacketRevision ?? null
+          }
+        },
+        promptAuthority,
+        assetReuse,
+        idempotencyKey: `${automationRunId || "run"}:script-analysis:development-review:${targetId || "unknown"}:r${revision ?? "unknown"}:${contentChecksum?.slice(0, 12) || "no-checksum"}`,
+        message: "Complete all three reviews against the exact current StoryPacket and screenplay revision before rebuilding shot planning"
+      });
+    }
+    const shotFormationRepair = nested.find((entry) => entry.code === "cinematic_shot_formation_required");
+    if (shotFormationRepair) {
+      const targetId = screenplayAuthority?.targetId ?? screenplayAuthority?.sourceNodeId ?? null;
+      const revision = Number.isInteger(screenplayAuthority?.revision) ? screenplayAuthority.revision : null;
+      const contentChecksum = screenplayAuthority?.contentChecksum ?? null;
+      const repairContract = {
+        blockerCode: "cinematic_shot_formation_required",
+        targetType: "structured_script",
+        targetId,
+        expectedRevision: revision,
+        ...(contentChecksum ? { expectedContentChecksum: contentChecksum } : {})
+      };
+      return buildNextAction({
+        actionId: createId("na"),
+        type: "author_episode",
+        phase: blocked.stage,
+        seriesId,
+        episodeNumber,
+        worker: "episode-authoring",
+        command: {
+          cli: `ununu-unutv workflow cinematic-author --project ${projectId}${automationRunId ? ` --automation-run ${automationRunId}` : ""} --file EPISODE_PACKAGE.json`,
+          method: "POST",
+          path: `/api/projects/${projectId}/cinematic-workflow/author`,
+          body: {
+            ...(automationRunId ? { automationRunId } : {}),
+            package: "EpisodeAuthoringPackageV1",
+            requiredRepairContract: repairContract
+          }
+        },
+        blocker: {
+          code: shotFormationRepair.code,
+          message: shotFormationRepair.message,
+          targetType: "structured_script",
+          targetId,
+          revision,
+          taskId: blocked.id,
+          details: {
+            ...(shotFormationRepair.details ?? {}),
+            ...(contentChecksum ? { contentChecksum } : {}),
+            repairContract
+          }
+        },
+        promptAuthority,
+        assetReuse,
+        idempotencyKey: `${automationRunId || "run"}:${blocked.stage}:shot-formation:${targetId || "unknown"}:r${revision ?? "unknown"}:${contentChecksum?.slice(0, 12) || "no-checksum"}`,
+        message: "Restructure the same episode authoring package into complete executable shot rows, then re-author it through the cinematic Skill"
       });
     }
     const performanceRepair = nested.find((entry) => entry.code === "shot_performance_contract_required");

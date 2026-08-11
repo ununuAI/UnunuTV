@@ -57,16 +57,21 @@ test("advanced rendering applies transitions/effects and delivers multi-aspect, 
   await runtime.app.addTimelineEffect({ projectId: project.id, timelineId: timeline.id, clipId: first.id, kind: "color", parameters: { saturation: 0.8, contrast: 1.05 } });
   await runtime.app.addTimelineKeyframe({ projectId: project.id, timelineId: timeline.id, clipId: first.id, propertyPath: "transform.scale", timeMs: 250, value: 1.05 });
   const document = await runtime.app.getTimeline({ projectId: project.id, timelineId: timeline.id });
-  assert.deepEqual([compileRenderGraph(document, "h264_vertical").width, compileRenderGraph(document, "h264_vertical").height], [1080, 1920]);
-  assert.deepEqual([compileRenderGraph(document, "h264_square").width, compileRenderGraph(document, "h264_square").height], [1080, 1080]);
+  assert.deepEqual([compileRenderGraph(document, "h264_vertical").width, compileRenderGraph(document, "h264_vertical").height], [480, 854]);
+  assert.deepEqual([compileRenderGraph(document, "h264_square").width, compileRenderGraph(document, "h264_square").height], [480, 480]);
   assert.equal(compileRenderGraph(document, "h264_review").durationMs, 900);
 
-  const render = await runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, outputNodeId: videoOutputNode.id, preset: "h264_review", idempotencyKey: "advanced-review" });
+  const render = await runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, outputNodeId: videoOutputNode.id, preset: "h264_vertical", idempotencyKey: "advanced-delivery" });
   const finished = await waitForJob(runtime.app, project.id, render.id);
   assert.equal(finished.status, "succeeded", JSON.stringify(finished.error));
   const qc = await runtime.app.getTechnicalQcReport({ projectId: project.id, renderJobId: render.id });
-  assert.notEqual(qc.status, "fail");
+  assert.equal(qc.status, "pass");
+  for (const checkId of ["frame_size", "frame_rate", "video_codec", "audio_stream", "audio_codec", "audio_channels"]) {
+    assert.equal(qc.checks.find((check) => check.id === checkId)?.status, "pass", checkId);
+  }
   const delivery = await runtime.app.createDeliveryPackage({ projectId: project.id, renderJobId: render.id, acceptWarnings: true });
+  assert.equal(delivery.kind, "delivery");
+  assert.equal(delivery.status, "delivery_ready");
   const roles = new Set(delivery.deliverables.map((item) => item.role));
   for (const role of ["assPath", "srtPath", "vttPath", "edlPath", "fcpxmlPath", "mixWavPath", "stemTrack1WavPath"]) assert.ok(roles.has(role), role);
   for (const item of delivery.deliverables.filter((entry) => entry.role !== "primary_master")) assert.ok((await stat(item.pathOrMediaId)).size > 0, item.role);

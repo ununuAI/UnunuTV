@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertCircle, Check, Clapperboard, Crosshair, Layers3, LoaderCircle, Maximize2, ShieldCheck } from "lucide-react";
+import { cinematicDomainVisibleItems } from "./cinematic-controller-node-view-model.js";
 import { useCinematicControllerData } from "./use-cinematic-controller-data.js";
 
 const DEFINITIONS = Object.freeze({
@@ -23,10 +24,11 @@ export function CinematicDomainNode({ node, onOpen }) {
   if (!data.production) return <div className="cinematic-domain-loading is-error"><AlertCircle size={18} /><strong>尚未绑定影视项目</strong><span>从影视总控或剧本节点连线创建，可自动继承正式生产合同。</span></div>;
   const total = definition.total(data);
   const ready = definition.ready(data);
+  const visibleItems = cinematicDomainVisibleItems(node.kind, data, node);
   return <div className={`cinematic-domain-card domain-${node.kind}`}>
     <header><span><Icon size={15} />{definition.label}</span><em>{data.production.title}</em></header>
     <section><div><strong>{definition.note}</strong><small>合同版本 r{data.production.revision} · 稳定 ID 绑定</small></div><b className={total > 0 && ready >= total ? "is-ready" : "is-attention"}>{total > 0 && ready >= total ? <Check size={12} /> : <AlertCircle size={12} />}{ready} / {total}</b></section>
-    <dl><div><dt>总数</dt><dd>{total}</dd></div><div><dt>已通过</dt><dd>{ready}</dd></div><div><dt>待处理</dt><dd>{Math.max(0, total - ready)}</dd></div></dl>
+    {visibleItems.length ? <ol className="cinematic-domain-items nodrag nopan nowheel" onWheelCapture={(event) => event.stopPropagation()}>{visibleItems.map((item) => <li key={item.id}><div><strong>{item.label}</strong><small>{item.meta}</small></div><p>{item.detail}</p>{item.facts?.length ? <dl>{item.facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl> : null}</li>)}</ol> : <dl><div><dt>总数</dt><dd>{total}</dd></div><div><dt>已通过</dt><dd>{ready}</dd></div><div><dt>待处理</dt><dd>{Math.max(0, total - ready)}</dd></div></dl>}
     <footer><span>画布内展开后直接编辑，不跳出当前工作区</span><button className="nodrag nopan" onClick={(event) => { stop(event); onOpen(); }} type="button">展开<Maximize2 size={13} /></button></footer>
   </div>;
 }

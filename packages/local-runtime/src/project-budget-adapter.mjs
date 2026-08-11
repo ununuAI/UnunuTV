@@ -1,4 +1,5 @@
 import { UnuTvError } from "@ununu/unutv-contracts";
+import { runDatabaseTransaction } from "./project-transaction.mjs";
 
 const parse = (value) => value ? JSON.parse(value) : [];
 
@@ -38,10 +39,9 @@ export function attachProjectBudgetMethods(prototype, emitEvent) {
   };
   prototype.createBudgetReservation = function createBudgetReservation(projectId, reservation) {
     const database = this.database(projectId);
-    database.exec("BEGIN IMMEDIATE");
-    try {
+    const saved = runDatabaseTransaction(database, () => {
       const existing = reservationRow(database.prepare("SELECT * FROM budget_reservations WHERE grant_id=? AND idempotency_key=?").get(reservation.grantId, reservation.idempotencyKey));
-      if (existing) { database.exec("COMMIT"); return existing; }
+      if (existing) return existing;
       const updated = database.prepare(`
         UPDATE budget_grants SET reserved_amount=reserved_amount+?, updated_at=?
         WHERE id=? AND total_limit-reserved_amount-consumed_amount>=?
@@ -51,10 +51,12 @@ export function attachProjectBudgetMethods(prototype, emitEvent) {
         INSERT INTO budget_reservations (id, project_id, grant_id, automation_run_id, task_id, provider, model, task_type, amount, actual_amount, currency, status, idempotency_key, created_at, updated_at, consumed_at, released_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'reserved', ?, ?, ?, NULL, NULL)
       `).run(reservation.id, projectId, reservation.grantId, reservation.automationRunId, reservation.taskId, reservation.provider, reservation.model, reservation.taskType, reservation.amount, reservation.currency, reservation.idempotencyKey, reservation.createdAt, reservation.updatedAt);
-      database.exec("COMMIT");
-      emitEvent(database, "budget.reserved", reservation.id, { amount: reservation.amount, taskType: reservation.taskType, automationRunId: reservation.automationRunId });
       return reservation;
-    } catch (error) { database.exec("ROLLBACK"); throw error; }
+    });
+    if (saved === reservation) {
+      emitEvent(database, "budget.reserved", reservation.id, { amount: reservation.amount, taskType: reservation.taskType, automationRunId: reservation.automationRunId });
+    }
+    return saved;
   };
   prototype.getBudgetReservation = function getBudgetReservation(projectId, reservationId) {
     return reservationRow(this.database(projectId).prepare("SELECT * FROM budget_reservations WHERE id=?").get(reservationId));
@@ -64,11 +66,10 @@ export function attachProjectBudgetMethods(prototype, emitEvent) {
   };
   prototype.settleBudgetReservation = function settleBudgetReservation(projectId, reservationId, action, amount, timestamp) {
     const database = this.database(projectId);
-    database.exec("BEGIN IMMEDIATE");
-    try {
+    const outcome = runDatabaseTransaction(database, () => {
       const reservation = reservationRow(database.prepare("SELECT * FROM budget_reservations WHERE id=?").get(reservationId));
       if (!reservation) throw new UnuTvError("budget_reservation_not_found", `Budget reservation not found: ${reservationId}`, 404);
-      if (reservation.status === action) { database.exec("COMMIT"); return reservation; }
+      if (reservation.status === action) return { saved: reservation, changed: false };
       if (reservation.status !== "reserved") throw new UnuTvError("budget_reservation_settled", "Budget reservation is already settled", 409);
       if (action === "consumed") {
         const accounted = amount ?? reservation.amount;
@@ -80,16 +81,19 @@ export function attachProjectBudgetMethods(prototype, emitEvent) {
         database.prepare("UPDATE budget_grants SET reserved_amount=reserved_amount-?, updated_at=? WHERE id=?").run(reservation.amount, timestamp, reservation.grantId);
         database.prepare("UPDATE budget_reservations SET status='released', released_at=?, updated_at=? WHERE id=?").run(timestamp, timestamp, reservationId);
       }
-      database.exec("COMMIT");
-      const saved = this.getBudgetReservation(projectId, reservationId);
-      emitEvent(database, `budget.${action}`, reservationId, { amount: saved.actualAmount ?? saved.amount, automationRunId: saved.automationRunId });
-      return saved;
-    } catch (error) { database.exec("ROLLBACK"); throw error; }
+      return { saved: this.getBudgetReservation(projectId, reservationId), changed: true };
+    });
+    if (outcome.changed) {
+      emitEvent(database, `budget.${action}`, reservationId, {
+        amount: outcome.saved.actualAmount ?? outcome.saved.amount,
+        automationRunId: outcome.saved.automationRunId
+      });
+    }
+    return outcome.saved;
   };
   prototype.reconcileBudgetReservationCost = function reconcileBudgetReservationCost(projectId, reservationId, actualAmount, timestamp) {
     const database = this.database(projectId);
-    database.exec("BEGIN IMMEDIATE");
-    try {
+    const saved = runDatabaseTransaction(database, () => {
       const reservation = reservationRow(database.prepare("SELECT * FROM budget_reservations WHERE id=?").get(reservationId));
       if (!reservation) throw new UnuTvError("budget_reservation_not_found", `Budget reservation not found: ${reservationId}`, 404);
       if (reservation.status !== "consumed") throw new UnuTvError("budget_reconciliation_requires_consumed", "Only consumed reservations can be reconciled", 409);
@@ -101,11 +105,14 @@ export function attachProjectBudgetMethods(prototype, emitEvent) {
         .run(delta, timestamp, reservation.grantId, delta);
       if (!updated.changes) throw new UnuTvError("BUDGET_INSUFFICIENT", "Reconciled actual cost would exceed the project budget", 402);
       database.prepare("UPDATE budget_reservations SET actual_amount=?, updated_at=? WHERE id=?").run(actualAmount, timestamp, reservationId);
-      database.exec("COMMIT");
-      const saved = this.getBudgetReservation(projectId, reservationId);
-      emitEvent(database, "budget.reconciled", reservationId, { actualAmount: saved.actualAmount, accountedAmount: saved.actualAmount ?? saved.amount, previousAccounted });
-      return saved;
-    } catch (error) { database.exec("ROLLBACK"); throw error; }
+      return { saved: this.getBudgetReservation(projectId, reservationId), previousAccounted };
+    });
+    emitEvent(database, "budget.reconciled", reservationId, {
+      actualAmount: saved.saved.actualAmount,
+      accountedAmount: saved.saved.actualAmount ?? saved.saved.amount,
+      previousAccounted: saved.previousAccounted
+    });
+    return saved.saved;
   };
   prototype.listBudgetReservations = function listBudgetReservations(projectId, automationRunId = null) {
     const database = this.database(projectId);

@@ -59,6 +59,7 @@ function makeStoryboardShot(storyboardId, shot, unit, order, timestamp) {
     shotRevision: shot.revision,
     status: "ready_for_image",
     imageMediaId: null,
+    imageSourceNodeId: null,
     imageVersionId: null,
     imageChecksum: null,
     videoMediaId: null,
@@ -153,11 +154,19 @@ export function createStoryboardUseCases(ports, dependencies = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
-    return listRecords(projectId, productionId);
+    return listRecords(projectId, productionId, input.includeStale === true);
   }
 
   async function getStoryboard(input = {}) {
-    return requireStoryboard(requireText(input.projectId, "projectId"), requireText(input.productionId, "productionId"), requireText(input.storyboardId, "storyboardId"));
+    const projectId = requireText(input.projectId, "projectId");
+    const productionId = requireText(input.productionId, "productionId");
+    const storyboardId = requireText(input.storyboardId, "storyboardId");
+    if (input.includeStale === true) {
+      const storyboard = await getRecord(projectId, productionId, storyboardId, true);
+      if (!storyboard) throw new UnuTvError("storyboard_not_found", `Storyboard not found: ${storyboardId}`, 404);
+      return storyboard;
+    }
+    return requireStoryboard(projectId, productionId, storyboardId);
   }
 
   async function updateStoryboardShot(input = {}) {
@@ -173,6 +182,16 @@ export function createStoryboardUseCases(ports, dependencies = {}) {
     const current = storyboard.shots[index];
     const nextRevision = current.revision + 1;
     const sourceShotRevision = shotPatch.shotRevision ?? current.shotRevision;
+    if (shotPatch.imageMediaId) {
+      shotPatch.imageSourceShotRevision = shotPatch.imageSourceShotRevision ?? sourceShotRevision;
+    } else if (shotPatch.imageMediaId === null) {
+      shotPatch.imageSourceShotRevision = null;
+    }
+    if (shotPatch.videoMediaId) {
+      shotPatch.videoSourceShotRevision = shotPatch.videoSourceShotRevision ?? sourceShotRevision;
+    } else if (shotPatch.videoMediaId === null) {
+      shotPatch.videoSourceShotRevision = null;
+    }
     const mergedVideoReference = shotPatch.videoReference ? { ...current.videoReference, ...shotPatch.videoReference } : current.videoReference;
     const nextShot = {
       ...current,
@@ -246,9 +265,17 @@ export function createStoryboardUseCases(ports, dependencies = {}) {
   });
 
   async function setStoryboardShotMedia(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
     const patch = {};
+    if (input.retakeDirective !== undefined) {
+      patch.retakeDirective = input.retakeDirective === null
+        ? null
+        : requireObject(input.retakeDirective, "retakeDirective");
+    }
     if (input.imageMediaId !== undefined) {
       patch.imageMediaId = input.imageMediaId ? requireText(input.imageMediaId, "imageMediaId") : null;
+      const sourceMedia = input.imageMediaId ? await ports.media.open(projectId, patch.imageMediaId) : null;
+      patch.imageSourceNodeId = input.imageMediaId ? requireText(input.imageSourceNodeId ?? sourceMedia?.nodeId, "imageSourceNodeId") : null;
       patch.imageVersionId = input.imageVersionId ?? null;
       patch.imageChecksum = input.imageChecksum ?? null;
       patch.status = input.imageMediaId ? "image_ready" : "ready_for_image";
@@ -292,6 +319,7 @@ export function createStoryboardUseCases(ports, dependencies = {}) {
         storyboardId: storyboard.storyboardId,
         shotId: shot.shotId,
         mediaId: shot.imageMediaId,
+        sourceNodeId: shot.imageSourceNodeId,
         checksum: shot.imageChecksum,
         acceptanceProof: shot.videoReference.acceptanceProof ?? null,
         displayName: shot.title,

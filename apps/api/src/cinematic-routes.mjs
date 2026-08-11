@@ -31,6 +31,9 @@ if ((params = route(method, pathname, "PUT", "/api/projects/:projectId/cinematic
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/asset-authorities"))) {
   return json(response, 200, { assetAuthorities: await runtime.app.listAssetAuthorities(params) });
 }
+if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/asset-authority-aggregates"))) {
+  return json(response, 200, { aggregates: await runtime.app.listAssetAuthorityAggregates(params) });
+}
 if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-productions/:productionId/asset-authorities"))) {
   return json(response, 201, await runtime.app.saveAssetAuthority({ ...params, authority: await body(request) }));
 }
@@ -45,6 +48,9 @@ if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinemati
 }
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/asset-authorities/:authorityId"))) {
   return json(response, 200, await runtime.app.getAssetAuthority(params));
+}
+if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/asset-authorities/:authorityId/aggregate"))) {
+  return json(response, 200, await runtime.app.getAssetAuthorityAggregate(params));
 }
 if ((params = route(method, pathname, "PATCH", "/api/projects/:projectId/cinematic-productions/:productionId/asset-authorities/:authorityId"))) {
   return json(response, 200, await runtime.app.updateAssetAuthority({ ...params, patch: await body(request) }));
@@ -78,7 +84,10 @@ if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinemati
   return json(response, 200, await runtime.app.compileStoryboardPrompt({ ...params, ...(await body(request)) }));
 }
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/storyboards"))) {
-  return json(response, 200, { storyboards: await runtime.app.listStoryboards(params) });
+  return json(response, 200, { storyboards: await runtime.app.listStoryboards({
+    ...params,
+    includeStale: url.searchParams.get("includeStale") === "true"
+  }) });
 }
 if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-productions/:productionId/storyboards"))) {
   return json(response, 201, await runtime.app.createStoryboard({ ...params, ...(await body(request)) }));
@@ -117,7 +126,10 @@ if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinemati
   return json(response, 200, await runtime.app.compareStoryboardShotVersions({ ...params, ...(await body(request)) }));
 }
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/storyboards/:storyboardId"))) {
-  return json(response, 200, await runtime.app.getStoryboard(params));
+  return json(response, 200, await runtime.app.getStoryboard({
+    ...params,
+    includeStale: url.searchParams.get("includeStale") === "true"
+  }));
 }
 if ((params = route(method, pathname, "PATCH", "/api/projects/:projectId/cinematic-productions/:productionId/storyboards/:storyboardId/shots/:storyboardShotId"))) {
   return json(response, 200, await runtime.app.updateStoryboardShot({ ...params, patch: await body(request) }));
@@ -132,26 +144,38 @@ if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic
   return json(response, 200, { references: await runtime.app.getStoryboardVideoReferences(params) });
 }
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/shots"))) {
-  return json(response, 200, { shots: await runtime.app.listShots(params) });
+  return json(response, 200, { shots: await runtime.app.listShots({
+    ...params,
+    includeStale: url.searchParams.get("includeStale") === "true"
+  }) });
 }
 if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-productions/:productionId/shots"))) {
   return json(response, 201, await runtime.app.saveShot({ ...params, shot: await body(request) }));
 }
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/shots/:shotId"))) {
-  return json(response, 200, await runtime.app.getShot(params));
+  return json(response, 200, await runtime.app.getShot({
+    ...params,
+    includeStale: url.searchParams.get("includeStale") === "true"
+  }));
 }
 if ((params = route(method, pathname, "PATCH", "/api/projects/:projectId/cinematic-productions/:productionId/shots/:shotId"))) {
   return json(response, 200, await runtime.app.updateShot({ ...params, patch: await body(request) }));
 }
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/generation-units"))) {
-  return json(response, 200, { generationUnits: await runtime.app.listGenerationUnits(params) });
+  return json(response, 200, { generationUnits: await runtime.app.listGenerationUnits({
+    ...params,
+    includeStale: url.searchParams.get("includeStale") === "true"
+  }) });
 }
 if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-productions/:productionId/generation-units"))) {
   input = await body(request);
   return json(response, 201, await runtime.app.saveGenerationUnit({ ...params, generationUnit: input.generationUnit ?? input, referenceBindings: input.referenceBindings ?? [] }));
 }
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/generation-units/:generationUnitId"))) {
-  return json(response, 200, await runtime.app.getGenerationUnit(params));
+  return json(response, 200, await runtime.app.getGenerationUnit({
+    ...params,
+    includeStale: url.searchParams.get("includeStale") === "true"
+  }));
 }
 if ((params = route(method, pathname, "PATCH", "/api/projects/:projectId/cinematic-productions/:productionId/generation-units/:generationUnitId"))) {
   input = await body(request);
@@ -167,13 +191,21 @@ if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinemati
   return json(response, 200, await runtime.app.runGenerationUnit({ ...params, ...(await body(request)) }));
 }
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/evaluations"))) {
-  return json(response, 200, { evaluations: await runtime.app.listEvaluations(params) });
+  return json(response, 200, { evaluations: await runtime.app.listEvaluations({
+    ...params,
+    includeStale: url.searchParams.get("includeStale") === "true"
+  }) });
 }
 if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-productions/:productionId/evaluations"))) {
   return json(response, 201, await runtime.app.addEvaluation({ ...params, evaluation: await body(request) }));
 }
 if ((params = route(method, pathname, "GET", "/api/projects/:projectId/cinematic-productions/:productionId/contributions"))) {
-  return json(response, 200, { contributions: await runtime.app.listProfessionalContributions({ ...params, targetType: url.searchParams.get("targetType"), targetId: url.searchParams.get("targetId") }) });
+  return json(response, 200, { contributions: await runtime.app.listProfessionalContributions({
+    ...params,
+    targetType: url.searchParams.get("targetType"),
+    targetId: url.searchParams.get("targetId"),
+    includeStale: url.searchParams.get("includeStale") === "true"
+  }) });
 }
 if ((params = route(method, pathname, "POST", "/api/projects/:projectId/cinematic-productions/:productionId/contributions"))) {
   return json(response, 201, await runtime.app.addProfessionalContribution({ ...params, contribution: await body(request) }));

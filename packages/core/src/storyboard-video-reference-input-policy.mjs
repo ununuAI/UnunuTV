@@ -12,6 +12,7 @@ function storyboardBinding(storyboard, shot) {
     assetId: `storyboard:${storyboard.storyboardId}:${shot.shotId}`,
     versionId: shot.imageVersionId || `storyboard-image:${shot.imageChecksum || shot.imageMediaId}`,
     mediaId: shot.imageMediaId,
+    sourceNodeId: shot.imageSourceNodeId,
     displayName: shot.title,
     role: shot.videoReference.role,
     controls: shot.videoReference.controls,
@@ -34,9 +35,22 @@ function orderedBindings(mediaIds, configuredBindings, addedBinding = null) {
   });
 }
 
+function configuredShotReferences(configuration, shot) {
+  const key = shot?.storyboardShotId;
+  const mediaByShot = configuration?.referenceMediaIdsByStoryboardShotId;
+  const bindingsByShot = configuration?.referenceBindingsByStoryboardShotId;
+  const hasShotMedia = Boolean(key && mediaByShot && Object.hasOwn(mediaByShot, key));
+  const hasShotBindings = Boolean(key && bindingsByShot && Object.hasOwn(bindingsByShot, key));
+  return {
+    bindings: hasShotBindings ? bindingsByShot[key] : configuration.referenceBindings,
+    mediaIds: hasShotMedia ? mediaByShot[key] : configuration.referenceMediaIds
+  };
+}
+
 export function planStoryboardVideoProviderInput({ configuration = {}, kind, shot, storyboard }) {
-  const configuredMediaIds = unique(Array.isArray(configuration.referenceMediaIds) ? configuration.referenceMediaIds : []);
-  const configuredBindings = Array.isArray(configuration.referenceBindings) ? configuration.referenceBindings : [];
+  const configured = configuredShotReferences(configuration, shot);
+  const configuredMediaIds = unique(Array.isArray(configured.mediaIds) ? configured.mediaIds : []);
+  const configuredBindings = Array.isArray(configured.bindings) ? configured.bindings : [];
   if (kind !== "video") {
     return { mode: null, firstFrameMediaId: null, referenceMediaIds: configuredMediaIds, referenceBindings: orderedBindings(configuredMediaIds, configuredBindings) };
   }

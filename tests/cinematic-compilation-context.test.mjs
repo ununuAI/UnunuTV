@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { auditSelectedStoryboardReferences, buildExecutionGateEvidence, enforceProductionSignoffGates, selectProviderReferenceBindings } from "../packages/core/src/use-cases/cinematic-compilation-context.mjs";
+import { cinematicReferenceEdgeRole } from "../packages/core/src/cinematic-canvas-prompt-graph-policy.mjs";
 
 function tailBinding(patch = {}) {
   return {
@@ -94,6 +95,15 @@ test("ordinary image-reference mode preserves Director and authority bindings", 
   assert.deepEqual(selected.map((entry) => entry.mediaId), ["media-tail-frame", "media-director"]);
 });
 
+test("canvas reference edges use canonical temporal, semantic, and continuation H0/H1 roles", () => {
+  assert.equal(cinematicReferenceEdgeRole({ role: "first_frame" }), "cinematic_reference:temporal_first");
+  assert.equal(cinematicReferenceEdgeRole({ role: "last_frame" }), "cinematic_reference:temporal_last");
+  assert.equal(cinematicReferenceEdgeRole({ role: "shot_keyframe" }), "cinematic_reference:semantic");
+  assert.equal(cinematicReferenceEdgeRole({ role: "handoff_h0" }), "cinematic_reference:continuation_h0");
+  assert.equal(cinematicReferenceEdgeRole({ role: "handoff_h1" }), "cinematic_reference:continuation_h1");
+  assert.equal(cinematicReferenceEdgeRole({ role: "continuity_tail" }), "cinematic_reference:continuation_h1");
+});
+
 test("editor-only Director controls never enter Provider reference bindings", () => {
   const selected = selectProviderReferenceBindings({
     provider: "ark",
@@ -132,6 +142,7 @@ test("a selected storyboard composition must be present and supersede older comp
 
 test("Core makes revision-current knowledge and TeamManifest gates mandatory in production mode", () => {
   const unit = enforceProductionSignoffGates({ executionGates: { requireTimePlan: true, requiredProfessionalRoles: ["cinematography"] } }, { productionMode: "production" });
+  assert.equal(unit.canvasGraphPolicy, "required");
   assert.deepEqual(unit.executionGates, {
     requireTimePlan: true,
     requiredProfessionalRoles: ["cinematography"],
@@ -139,6 +150,8 @@ test("Core makes revision-current knowledge and TeamManifest gates mandatory in 
     requireOwnerShotReviews: true,
     requireOwnerStoryReview: true,
     requirePromptCoverage: true,
+    requireSequencePrevis: true,
+    requireSegmentSeamDecision: true,
     requireSequenceState: true,
     requireTeamManifest: true,
     requireCurrentArtifactSignoff: true,

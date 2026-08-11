@@ -30,6 +30,93 @@ export function createAutomationTaskUseCases(ports, dependencies = {}) {
     return listActivities(requireText(input.projectId, "projectId"), requireText(input.automationRunId, "automationRunId"), input.taskId ? requireText(input.taskId, "taskId") : null);
   }
 
+  async function invalidateAutomationTasks(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const automationRunId = requireText(input.automationRunId, "automationRunId");
+    const fromStage = requireText(input.fromStage, "fromStage");
+    const reason = requireObject(input.reason, "reason");
+    const tasks = await listTasks(projectId, automationRunId);
+    const root = tasks.find((task) => task.stage === fromStage);
+    if (!root) throw new UnuTvError("automation_task_not_found", `Automation task not found for stage: ${fromStage}`, 404);
+    const affectedKeys = new Set([root.taskKey]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const task of tasks) {
+        if (affectedKeys.has(task.taskKey) || !task.dependencies.some((key) => affectedKeys.has(key))) continue;
+        affectedKeys.add(task.taskKey);
+        changed = true;
+      }
+    }
+    const affected = tasks.filter((task) => affectedKeys.has(task.taskKey));
+    const running = affected.filter((task) => task.status === "running");
+    if (running.length) {
+      throw new UnuTvError(
+        "automation_invalidation_running_task",
+        "Cannot invalidate screenplay-dependent automation while a task is running",
+        409,
+        { taskIds: running.map((task) => task.id) }
+      );
+    }
+    const timestamp = nowIso();
+    const invalidated = [];
+    for (const task of affected) {
+      if (task.budgetReservationId && typeof ports.projects.getBudgetReservation === "function") {
+        const reservation = await ports.projects.getBudgetReservation(projectId, task.budgetReservationId);
+        if (reservation?.status === "reserved" && typeof dependencies.budget?.releaseBudgetReservation === "function") {
+          await dependencies.budget.releaseBudgetReservation({
+            projectId,
+            reservationId: reservation.id
+          });
+        }
+      }
+      const isRoot = task.id === root.id;
+      const rootBlocker = isRoot && input.rootBlocker && typeof input.rootBlocker === "object"
+        ? input.rootBlocker
+        : null;
+      const next = {
+        ...task,
+        status: rootBlocker ? "blocked" : "queued",
+        budgetReservationId: null,
+        input: {
+          ...task.input,
+          invalidatedBy: {
+            ...reason,
+            at: timestamp
+          }
+        },
+        output: null,
+        error: rootBlocker ? rootBlocker : null,
+        workerLeaseId: null,
+        heartbeatAt: null,
+        leaseExpiresAt: null,
+        updatedAt: timestamp,
+        startedAt: null,
+        completedAt: rootBlocker ? timestamp : null
+      };
+      assertAutomationTask(next);
+      const saved = await updateTask(projectId, next);
+      invalidated.push(saved);
+      await appendActivity(projectId, saved, {
+        kind: rootBlocker ? "warning" : "status",
+        message: rootBlocker?.message ?? `因 ${fromStage} 权威变化，任务已重新排队`,
+        progress: null,
+        idempotencyKey: `${saved.id}:invalidated:${reason.screenplayDocumentId ?? "screenplay"}:r${reason.screenplayDocumentRevision ?? "unknown"}`,
+        createdAt: timestamp,
+        details: {
+          code: rootBlocker?.code ?? "automation_dependency_invalidated",
+          fromStage,
+          reason
+        }
+      });
+    }
+    return {
+      affectedStages: affected.map((task) => task.stage),
+      rootTaskId: root.id,
+      tasks: invalidated
+    };
+  }
+
   async function requireTask(input) {
     const projectId = requireText(input.projectId, "projectId");
     const automationRunId = requireText(input.automationRunId, "automationRunId");
@@ -208,6 +295,6 @@ export function createAutomationTaskUseCases(ports, dependencies = {}) {
 
   return {
     bindAutomationTaskBudget, claimAutomationTask, completeAutomationTask, failAutomationTask, heartbeatAutomationTask, listAgentProfiles,
-    listAutomationTaskActivities, listAutomationTasks, reportAutomationTaskActivity
+    invalidateAutomationTasks, listAutomationTaskActivities, listAutomationTasks, reportAutomationTaskActivity
   };
 }

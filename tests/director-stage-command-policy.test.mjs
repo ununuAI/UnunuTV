@@ -100,3 +100,32 @@ test("Director Stage command validation requires an auditable actor and idempote
   assert.equal(invalid.issues.some((entry) => entry.path === "idempotencyKey"), true);
   assert.equal(invalid.issues.some((entry) => entry.path === "actor"), true);
 });
+
+test("Director Console whole-document edits use an atomic revision-checked command", () => {
+  const initialized = applyDirectorStageCommand(
+    undefined,
+    command("initialize", 0, {}, "replace-init"),
+    "2026-07-28T00:00:00.000Z",
+  );
+  const draft = {
+    ...initialized,
+    dimensions: { width: 12, depth: 8, height: 3, unit: "m" },
+    objects: [object()],
+  };
+  const replaced = applyDirectorStageCommand(
+    initialized,
+    command("replace_document", 1, { stage: draft }, "replace-document"),
+    "2026-07-28T00:00:01.000Z",
+  );
+  assert.equal(replaced.revision, 2);
+  assert.equal(replaced.objects[0].id, "object-actor-a");
+  assert.equal(replaced.createdAt, initialized.createdAt);
+  assert.throws(
+    () => applyDirectorStageCommand(
+      replaced,
+      command("replace_document", 1, { stage: replaced }, "replace-stale"),
+      "2026-07-28T00:00:02.000Z",
+    ),
+    /Expected director stage revision 1, found 2/,
+  );
+});

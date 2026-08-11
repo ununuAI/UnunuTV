@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CINEMATIC_SHOT_REVISION_REVIEW_TYPE, CINEMATIC_STORY_REVISION_REVIEW_TYPE, UnuTvError, cinematicRevisionReviewTargetId } from "@ununu/unutv-contracts";
+import { CINEMATIC_SHOT_REVISION_REVIEW_TYPE, CINEMATIC_STORY_REVISION_REVIEW_TYPE, CINEMATIC_VISUAL_STATE_DOMAINS, UnuTvError, cinematicRevisionReviewTargetId } from "@ununu/unutv-contracts";
 import { createLocalRuntime } from "../packages/local-runtime/src/index.mjs";
 import { cinematicPerformance } from "./fixtures/cinematic-performance.mjs";
 
@@ -109,15 +109,104 @@ async function setup(runtime, { withBudget = true, canvasGraphPolicy = null } = 
     projectId: project.id, targetType: CINEMATIC_SHOT_REVISION_REVIEW_TYPE,
     targetId: cinematicRevisionReviewTargetId("shot", savedShot.shotId, savedShot.revision), state: "accepted", note: "测试 Owner 接受当前分镜脚本 revision"
   });
+  const previsMediaRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-accepted-previs-frame-"));
+  const previsFramePath = path.join(previsMediaRoot, "accepted-previs-frame.png");
+  await writeFile(previsFramePath, Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64"
+  ));
+  const previsFrame = await runtime.app.importMedia({ projectId: project.id, filePath: previsFramePath, kind: "image" });
+  await rm(previsMediaRoot, { recursive: true, force: true });
+  const previsFrameReview = await runtime.app.reviewTarget({
+    projectId: project.id,
+    targetType: "media",
+    targetId: previsFrame.id,
+    state: "accepted",
+    note: "测试逐像素接受低模预演干净帧"
+  });
+  const sequencePrevis = await runtime.app.saveSequencePrevis({
+    projectId: project.id,
+    productionId: production.productionId,
+    sequencePrevis: {
+      sequencePrevisId: `sequence-previs-${savedShot.shotId}`,
+      productionId: production.productionId,
+      title: "雨夜校门正式生成连续预演",
+      status: "candidate",
+      storyPacketId: savedStory.storyPacketId,
+      storyPacketRevision: savedStory.revision,
+      durationSeconds: 5,
+      frameRate: 24,
+      shots: [{
+        previsShotId: `previs-shot-${savedShot.shotId}`,
+        shotId: savedShot.shotId,
+        shotRevision: savedShot.revision,
+        order: 1,
+        startSeconds: 0,
+        endSeconds: 5,
+        narrativeJob: savedShot.narrativeJob,
+        entryPhase: savedShot.openingState,
+        exitPhase: savedShot.endingState,
+        frameMediaId: previsFrame.id,
+        frameSourceRole: "low_poly_clean_start_frame",
+        cameraState: { movement: savedShot.cinematography.movementPath },
+        performanceState: { description: "林夏确认来人后才抬眼" },
+        spatialState: { description: "校门纵深轴与双人站位保持连续" },
+        audioCue: { description: "雨声连续，脚步先出现" }
+      }],
+      cutDecisions: [],
+      acceptedAuthorityIds: [],
+      storyboardIds: [],
+      directorCaptureIds: [],
+      rejectedExampleEvaluationIds: [],
+      revision: 1
+    }
+  });
+  const visualContext = await runtime.app.compileVisualContextBundle({
+    projectId: project.id,
+    productionId: production.productionId,
+    sequencePrevisId: sequencePrevis.sequencePrevisId,
+    shotId: savedShot.shotId
+  });
+  const playbackReceipt = await runtime.app.recordSequencePrevisPlayback({
+    projectId: project.id,
+    productionId: production.productionId,
+    sequencePrevisId: sequencePrevis.sequencePrevisId,
+    playback: {
+      playbackSessionId: `test-playback-${sequencePrevis.sequencePrevisId}`,
+      startedAt: "2026-07-28T00:00:00.000Z",
+      completedAt: "2026-07-28T00:00:05.000Z",
+      sampleCount: 121,
+      maxObservedStepMs: 42,
+      manualSeekCount: 0,
+      intervals: [{ startSeconds: 0, endSeconds: sequencePrevis.durationSeconds }]
+    }
+  });
+  const previsAcceptance = await runtime.app.reviewSequencePrevis({
+    projectId: project.id,
+    productionId: production.productionId,
+    sequencePrevisId: sequencePrevis.sequencePrevisId,
+    revision: sequencePrevis.revision,
+    state: "accepted",
+    playbackReceiptId: playbackReceipt.playbackReceiptId,
+    note: "测试 Owner 完整播放并接受连续预演"
+  });
+  assert.equal(previsAcceptance.audit.ok, true, JSON.stringify(previsAcceptance.audit));
   const unit = await runtime.app.saveGenerationUnit({
     projectId: project.id,
     productionId: production.productionId,
     generationUnit: {
       strategy: "single_shot",
+      segmentDecision: "new_shot",
       shotLinks: [{ shotId: savedShot.shotId, order: 1 }],
       visualAnchorPolicy: "NONE",
       requiredCapabilities: ["native_audio"],
       executionNodeId: video.id,
+      sequenceWorkspaceBinding: {
+        sequencePrevisId: sequencePrevis.sequencePrevisId,
+        sequencePrevisRevision: sequencePrevis.revision,
+        visualContextBundleId: visualContext.visualContextBundleId,
+        reviewId: previsAcceptance.review.id
+      },
       ...(canvasGraphPolicy ? { canvasGraphPolicy } : {}),
       controlIntent: controlIntent(),
       promptCoverage: promptCoverage(),
@@ -147,7 +236,101 @@ async function setup(runtime, { withBudget = true, canvasGraphPolicy = null } = 
       allowedProviders: ["ark"], allowedModels: [MODEL], allowedTaskTypes: ["video"]
     });
   }
-  return { canvas, compilation, production, project, unit, video };
+  return { canvas, compilation, previsFrame, previsFrameReview, production, project, unit, video };
+}
+
+async function createFormalCharacterAuthority(runtime, state) {
+  const authorityId = "character-authority-linxia";
+  const reviewId = "review-owner-linxia-r1";
+  const media = await runtime.app.importDataMedia({
+    projectId: state.project.id,
+    kind: "image",
+    title: "林夏正式身份图.png",
+    dataUrl: "data:image/png;base64,iVBORw0KGgo="
+  });
+  const asset = await runtime.app.createAsset({
+    projectId: state.project.id,
+    role: "character",
+    title: "林夏身份媒体权威"
+  });
+  const version = await runtime.app.addAssetVersion({
+    projectId: state.project.id,
+    assetId: asset.id,
+    mediaId: media.id,
+    payload: {
+      identityProvenance: {
+        role: "identity_authority",
+        sourceType: "verified_identity_derivative",
+        characterAuthorityId: authorityId,
+        authorityRevision: 1,
+        virtualPersonAssetId: "asset-20260310030618-88hlb",
+        verificationReviewId: reviewId,
+        mediaChecksum: media.sha256
+      }
+    }
+  });
+  const authority = await runtime.app.saveAssetAuthority({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    authority: {
+      authorityId,
+      authorityType: "character",
+      displayName: "林夏",
+      riskLevel: "high",
+      status: "accepted",
+      identityDescription: "Owner 锁定的林夏人物身份",
+      identityLocks: ["面孔", "年龄感", "体型"],
+      wardrobeMakeupHair: { wardrobe: "雨夜外套" },
+      viewSpecs: [{
+        viewId: "front",
+        label: "正面",
+        framing: "半身",
+        angle: "平视",
+        description: "中性表情",
+        background: "中性背景",
+        controls: ["人物身份"],
+        doesNotControl: ["最终镜头构图"],
+        required: true
+      }],
+      referenceAssetIds: [asset.id],
+      acceptanceCriteria: ["身份稳定"],
+      prohibitedChanges: ["不得换脸"],
+      externalProviderIdentity: {
+        provider: "ark",
+        capability: "virtual_person_asset",
+        assetId: "asset-20260310030618-88hlb",
+        source: "owner_locked_episode_authority"
+      }
+    }
+  });
+  await runtime.app.reviewTarget({
+    projectId: state.project.id,
+    reviewId,
+    targetType: "media",
+    targetId: media.id,
+    state: "accepted",
+    evidence: {
+      evidenceType: "owner_full_frame_pixel_v1",
+      reviewerRole: "owner",
+      reviewMode: "full_frame_pixel",
+      targetMediaId: media.id,
+      targetMediaChecksum: media.sha256,
+      assetId: asset.id,
+      mediaRevisionId: version.id,
+      characterAuthorityId: authority.authorityId,
+      authorityRevision: authority.revision,
+      fullFrameCoverage: true,
+      checks: {
+        identity: "pass",
+        face: "pass",
+        hair: "pass",
+        wardrobe: "pass",
+        makeup: "pass",
+        bodyProportion: "pass"
+      }
+    }
+  });
+  return authority;
 }
 
 function formalGenerationIntent(state) {
@@ -178,13 +361,21 @@ test("Skill-governed units persist compiled Prompt, connect typed reference edge
     runAutomationExecutor: false
   });
   context.after(() => runtime.close());
-  const state = await setup(runtime, { withBudget: false, canvasGraphPolicy: "required" });
+  const state = await setup(runtime, { withBudget: false });
+  assert.equal(state.unit.generationUnit.canvasGraphPolicy, undefined, "production compile/run must enforce the canvas policy even when direct API omitted it");
   const source = await runtime.app.createNode({
     projectId: state.project.id,
     canvasId: state.canvas.id,
     kind: "image",
     title: "林夏身份权威",
     payload: { assetId: "asset-linxia", currentMediaId: "media-linxia-authority" }
+  });
+  const carrierReview = await runtime.app.reviewTarget({
+    projectId: state.project.id,
+    targetType: "media",
+    targetId: "media-linxia-authority",
+    state: "accepted",
+    note: "测试逐像素接受当前镜头状态载体"
   });
   const binding = {
     sourceNodeId: source.id,
@@ -194,11 +385,21 @@ test("Skill-governed units persist compiled Prompt, connect typed reference edge
     displayName: "林夏身份权威",
     role: "shot_keyframe",
     shotId: state.unit.generationUnit.shotLinks[0].shotId,
+    checksum: "checksum-media-linxia-authority",
     authorityRevision: "authority-linxia-r1",
     controls: ["人物身份", "服装"],
     doesNotControl: ["动作时序", "运镜"],
     required: true,
     providerIndex: 1,
+    acceptanceProof: {
+      reviewId: carrierReview.id,
+      mediaId: "media-linxia-authority",
+      checksum: "checksum-media-linxia-authority",
+      shotId: state.unit.generationUnit.shotLinks[0].shotId,
+      shotRevision: 1,
+      pixelReviewed: true,
+      verifiedDomains: [...CINEMATIC_VISUAL_STATE_DOMAINS]
+    },
     semanticControl: { temporalRole: "static_state", preserve: ["人物身份", "服装"], replace: [], complete: [], ignore: [], styleOnly: [] }
   };
   const updated = await runtime.app.updateGenerationUnit({
@@ -221,12 +422,64 @@ test("Skill-governed units persist compiled Prompt, connect typed reference edge
   const prompt = await runtime.app.getNodePrompt({ projectId: state.project.id, nodeId: state.video.id });
   assert.equal(prompt.text, compilation.envelope.compiledContentPrompt);
   assert.equal(prompt.referenceNodeIds[0], source.id);
+  assert.deepEqual(prompt.parameters.referenceMediaIds, [binding.mediaId]);
+  assert.deepEqual(prompt.parameters.virtualPersonAssetIds, []);
+  assert.deepEqual(prompt.parameters.inputDecision, {
+    firstFrameMediaId: null,
+    lastFrameMediaId: null,
+    mode: "image_reference",
+    ok: true,
+    ordinaryReferenceMediaIds: [binding.mediaId],
+    rationale: "参考媒体只控制身份、场景、空间、构图或标注约束，不承担时间首帧职责。",
+    referenceBindings: [{
+      assetId: binding.assetId,
+      edgeRole: "cinematic_reference:semantic",
+      mediaId: binding.mediaId,
+      providerEligible: true,
+      providerIndex: 1,
+      required: true,
+      role: binding.role,
+      sourceNodeId: source.id,
+      versionId: binding.versionId
+    }],
+    referenceNodeIds: [source.id],
+    virtualAuthorityReferences: [],
+    virtualPersonAssetIds: [],
+    visualAnchorPolicy: "SHOT_FRAME_SET"
+  });
+  assert.equal(prompt.parameters.sourceVersions.canvasProductionGraph.ok, true);
+  const canvasWithPrompt = await runtime.app.openCanvas({ projectId: state.project.id, canvasId: state.canvas.id });
+  const executionNode = canvasWithPrompt.nodes.find((node) => node.id === state.video.id);
+  assert.deepEqual(executionNode.payload.cinematicInputDecision, prompt.parameters.inputDecision);
+  assert.deepEqual(executionNode.payload.cinematicSourceVersions, prompt.parameters.sourceVersions);
   const canvas = await runtime.app.openCanvas({ projectId: state.project.id, canvasId: state.canvas.id });
   const edge = canvas.edges.find((candidate) => candidate.fromNodeId === source.id
     && candidate.toNodeId === state.video.id
-    && candidate.role === "cinematic_reference:shot_keyframe");
+    && candidate.role === "cinematic_reference:semantic");
   assert.ok(edge);
   await runtime.app.disconnectEdge({ projectId: state.project.id, edgeId: edge.id });
+  await assert.rejects(
+    () => runtime.app.runGenerationUnit({
+      projectId: state.project.id,
+      productionId: state.production.productionId,
+      generationUnitId: updated.generationUnit.generationUnitId,
+      billingMode: "provider_account",
+      idempotencyKey: "unit-canvas-missing-edge-v1",
+      formalGenerationIntent: {
+        version: "formal_generation_intent_v1",
+        generationUnitId: updated.generationUnit.generationUnitId,
+        generationUnitRevision: updated.generationUnit.revision,
+        compilationId: compilation.compilationId,
+        payloadHash: compilation.envelope.payloadHash,
+        executionNodeId: state.video.id,
+        maxNewSubmissions: 1,
+        createdAt: new Date().toISOString()
+      }
+    }),
+    (error) => error.code === "canvas_production_graph_not_ready"
+      && error.details.errors.some((entry) => entry.code === "canvas_reference_edge_required")
+  );
+  assert.equal(calls, 0);
   const plainUnit = await runtime.app.updateGenerationUnit({
     projectId: state.project.id,
     productionId: state.production.productionId,
@@ -245,10 +498,22 @@ test("Skill-governed units persist compiled Prompt, connect typed reference edge
   });
   assert.equal(plainCompilation.envelope.lint.ok, true, JSON.stringify(plainCompilation.envelope.lint));
   assert.equal(plainCompilation.envelope.preflight.ok, true, JSON.stringify(plainCompilation.envelope.preflight));
+  const plainPrompt = await runtime.app.getNodePrompt({ projectId: state.project.id, nodeId: state.video.id });
   await runtime.app.saveNodePrompt({
     projectId: state.project.id,
     nodeId: state.video.id,
-    text: "被旁路篡改的 Prompt"
+    text: plainCompilation.envelope.compiledContentPrompt,
+    preserveText: true,
+    document: { type: "doc", version: 1, content: [{ type: "text", text: "被缩水覆盖的 PromptDocument" }] },
+    provider: plainPrompt.provider,
+    modelId: plainPrompt.modelId,
+    mode: plainPrompt.mode,
+    parameters: {
+      ...plainPrompt.parameters,
+      inputDecision: { ...plainPrompt.parameters.inputDecision, mode: "image_reference" }
+    },
+    referenceNodeIds: plainPrompt.referenceNodeIds,
+    referenceMediaIds: plainPrompt.referenceMediaIds
   });
   await assert.rejects(
     () => runtime.app.runGenerationUnit({
@@ -269,9 +534,398 @@ test("Skill-governed units persist compiled Prompt, connect typed reference edge
       }
     }),
     (error) => error.code === "canvas_production_graph_not_ready"
-      && error.details.errors.some((entry) => entry.code === "canvas_compiled_prompt_required")
+      && error.details.errors.some((entry) => entry.code === "canvas_prompt_document_mismatch")
+      && error.details.errors.some((entry) => entry.code === "canvas_input_decision_mismatch")
   );
   assert.equal(calls, 0);
+});
+
+test("unit design materializes virtual Authority identity edges and compile stays audit-only after edge deletion", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-virtual-authority-canvas-graph-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let providerCalls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: {
+      async run() { providerCalls += 1; return { status: "succeeded", artifacts: [] }; },
+      async poll() { throw new Error("not used"); }
+    },
+    recoverRenders: false,
+    recoverAutomation: false,
+    runAutomationExecutor: false
+  });
+  context.after(() => runtime.close());
+  const state = await setup(runtime, { withBudget: false });
+  const authority = await createFormalCharacterAuthority(runtime, state);
+  const authorityNode = await runtime.app.createNode({
+    projectId: state.project.id,
+    canvasId: state.canvas.id,
+    kind: "asset",
+    title: "林夏 · 人物 Authority",
+    payload: {
+      authorityId: authority.authorityId,
+      authorityRevision: authority.revision,
+      externalProviderIdentity: authority.externalProviderIdentity,
+      productionId: state.production.productionId
+    }
+  });
+  const shotId = state.unit.generationUnit.shotLinks[0].shotId;
+  await runtime.app.updateShot({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    shotId,
+    patch: { requiredAssetIds: [authority.authorityId] }
+  });
+  await runtime.app.designGenerationUnits({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationStrategies: {
+      video_generation: {
+        provider: "ark",
+        model: MODEL,
+        resolution: "480p",
+        perShotExecutionNodes: false,
+        executionNodeId: state.video.id
+      }
+    },
+    aspectRatio: "16:9"
+  });
+  const [designed] = await runtime.app.listGenerationUnits({
+    projectId: state.project.id,
+    productionId: state.production.productionId
+  });
+  assert.deepEqual(designed.generationUnit.characterAuthorityIds, [authority.authorityId]);
+  assert.deepEqual(designed.generationUnit.characterIdentitySourceVersions, [{
+    authorityId: authority.authorityId,
+    authorityRevision: authority.revision,
+    provider: "ark",
+    source: "owner_locked_episode_authority",
+    virtualPersonAssetId: authority.externalProviderIdentity.assetId
+  }]);
+  const materializedCanvas = await runtime.app.openCanvas({
+    projectId: state.project.id,
+    canvasId: state.canvas.id
+  });
+  const identityEdge = materializedCanvas.edges.find((edge) => (
+    edge.fromNodeId === authorityNode.id
+    && edge.toNodeId === state.video.id
+    && edge.role === "cinematic_reference:semantic_identity"
+  ));
+  assert.ok(identityEdge, "unit-design must make the typed identity edge visible before compile");
+  const executionNode = materializedCanvas.nodes.find((node) => node.id === state.video.id);
+  assert.deepEqual(
+    executionNode.payload.characterIdentitySourceVersions,
+    designed.generationUnit.characterIdentitySourceVersions
+  );
+
+  await runtime.app.disconnectEdge({ projectId: state.project.id, edgeId: identityEdge.id });
+  const blocked = await runtime.app.compileGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: designed.generationUnit.generationUnitId
+  });
+  assert.equal(blocked.envelope.sourceVersions.canvasProductionGraph.ok, false);
+  assert.equal(
+    blocked.envelope.preflight.errors.some((error) => error.code === "canvas_virtual_authority_edge_required"),
+    true
+  );
+  assert.equal(blocked.envelope.promptDraft.status, "preflight_blocked");
+  const canvasAfterCompile = await runtime.app.openCanvas({
+    projectId: state.project.id,
+    canvasId: state.canvas.id
+  });
+  assert.equal(
+    canvasAfterCompile.edges.some((edge) => (
+      edge.fromNodeId === authorityNode.id
+      && edge.toNodeId === state.video.id
+      && edge.role === "cinematic_reference:semantic_identity"
+    )),
+    false,
+    "compile must audit and must not silently repair a deleted identity edge"
+  );
+
+  assert.equal(providerCalls, 0);
+});
+
+test("formal run revalidates canonical virtual Authority receipt before Provider dispatch", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-virtual-authority-formal-run-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let providerCalls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: {
+      async run() { providerCalls += 1; return { status: "succeeded", artifacts: [] }; },
+      async poll() { throw new Error("not used"); }
+    },
+    recoverRenders: false,
+    recoverAutomation: false,
+    runAutomationExecutor: false
+  });
+  context.after(() => runtime.close());
+  const state = await setup(runtime, { withBudget: false });
+  const authority = await createFormalCharacterAuthority(runtime, state);
+  const authorityNode = await runtime.app.createNode({
+    projectId: state.project.id,
+    canvasId: state.canvas.id,
+    kind: "asset",
+    title: "林夏 · 人物 Authority",
+    payload: {
+      authorityId: authority.authorityId,
+      authorityRevision: authority.revision,
+      externalProviderIdentity: authority.externalProviderIdentity,
+      productionId: state.production.productionId
+    }
+  });
+  const identityShot = await runtime.app.updateShot({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    shotId: state.unit.generationUnit.shotLinks[0].shotId,
+    patch: { requiredAssetIds: [authority.authorityId] }
+  });
+  await runtime.app.reviewTarget({
+    projectId: state.project.id,
+    targetType: CINEMATIC_SHOT_REVISION_REVIEW_TYPE,
+    targetId: cinematicRevisionReviewTargetId("shot", identityShot.shotId, identityShot.revision),
+    state: "accepted",
+    note: "测试 Owner 接受绑定人物 Authority 后的当前分镜 revision"
+  });
+  const carrierNode = await runtime.app.createNode({
+    projectId: state.project.id,
+    canvasId: state.canvas.id,
+    kind: "image",
+    title: "雨夜校门逐镜状态载体",
+    payload: {
+      assetId: "asset-rain-gate-state-carrier",
+      currentMediaId: state.previsFrame.id
+    }
+  });
+  const carrierBinding = {
+    sourceNodeId: carrierNode.id,
+    assetId: "asset-rain-gate-state-carrier",
+    versionId: "asset-rain-gate-state-carrier-v1",
+    mediaId: state.previsFrame.id,
+    displayName: "雨夜校门逐镜状态载体",
+    role: "shot_keyframe",
+    shotId: identityShot.shotId,
+    checksum: "checksum-rain-gate-state-carrier",
+    authorityRevision: "previs-state-carrier-r1",
+    controls: ["人物身份", "空间站位", "镜头构图"],
+    doesNotControl: ["动作时序", "运镜"],
+    required: true,
+    providerIndex: 1,
+    acceptanceProof: {
+      reviewId: state.previsFrameReview.id,
+      mediaId: state.previsFrame.id,
+      checksum: "checksum-rain-gate-state-carrier",
+      shotId: identityShot.shotId,
+      shotRevision: identityShot.revision,
+      pixelReviewed: true,
+      verifiedDomains: [...CINEMATIC_VISUAL_STATE_DOMAINS]
+    },
+    semanticControl: {
+      temporalRole: "static_state",
+      preserve: ["人物身份", "空间站位", "镜头构图"],
+      replace: [],
+      complete: [],
+      ignore: ["动作时序", "运镜"],
+      styleOnly: []
+    }
+  };
+  await runtime.app.designGenerationUnits({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationStrategies: {
+      video_generation: {
+        provider: "ark",
+        model: MODEL,
+        resolution: "480p",
+        perShotExecutionNodes: false,
+        executionNodeId: state.video.id
+      }
+    },
+    aspectRatio: "16:9"
+  });
+  const [designed] = await runtime.app.listGenerationUnits({
+    projectId: state.project.id,
+    productionId: state.production.productionId
+  });
+  const runnable = await runtime.app.updateGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: designed.generationUnit.generationUnitId,
+    patch: {
+      visualAnchorPolicy: "SHOT_FRAME_SET",
+      requiredCapabilities: [...new Set([
+        ...(designed.generationUnit.requiredCapabilities ?? []),
+        "multi_reference"
+      ])],
+      generationParameters: {
+        mode: "image_reference",
+        referenceMediaIds: [carrierBinding.mediaId]
+      }
+    },
+    referenceBindings: [carrierBinding]
+  });
+  const compiled = await runtime.app.compileGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: runnable.generationUnit.generationUnitId
+  });
+  assert.equal(compiled.envelope.lint.ok, true, JSON.stringify(compiled.envelope.lint));
+  assert.equal(compiled.envelope.preflight.ok, true, JSON.stringify(compiled.envelope.preflight));
+  assert.equal(
+    runtime.projects.getPromptCompilationById(
+      state.project.id,
+      state.production.productionId,
+      runnable.generationUnit.generationUnitId,
+      compiled.compilationId
+    ).envelope.preflight.ok,
+    true
+  );
+  assert.equal(
+    runtime.projects.getPromptCompilation(
+      state.project.id,
+      state.production.productionId,
+      runnable.generationUnit.generationUnitId,
+      { compilationId: compiled.compilationId, includeInactive: true }
+    ).envelope.preflight.ok,
+    true
+  );
+  const formalGenerationIntent = {
+    version: "formal_generation_intent_v1",
+    generationUnitId: runnable.generationUnit.generationUnitId,
+    generationUnitRevision: runnable.generationUnit.revision,
+    compilationId: compiled.compilationId,
+    payloadHash: compiled.envelope.payloadHash,
+    executionNodeId: state.video.id,
+    maxNewSubmissions: 1,
+    createdAt: new Date().toISOString()
+  };
+  const compiledCanvas = await runtime.app.openCanvas({ projectId: state.project.id, canvasId: state.canvas.id });
+  const identityEdge = compiledCanvas.edges.find((edge) => (
+    edge.fromNodeId === authorityNode.id
+    && edge.toNodeId === state.video.id
+    && edge.role === "cinematic_reference:semantic_identity"
+  ));
+  assert.ok(identityEdge);
+  await runtime.app.disconnectEdge({ projectId: state.project.id, edgeId: identityEdge.id });
+  assert.equal(
+    runtime.projects.getPromptCompilationById(
+      state.project.id,
+      state.production.productionId,
+      runnable.generationUnit.generationUnitId,
+      compiled.compilationId
+    ).envelope.preflight.ok,
+    true
+  );
+  assert.equal(
+    runtime.projects.getPromptCompilation(
+      state.project.id,
+      state.production.productionId,
+      runnable.generationUnit.generationUnitId,
+      { compilationId: compiled.compilationId, includeInactive: true }
+    ).compilationId,
+    compiled.compilationId
+  );
+  await assert.rejects(
+    () => runtime.app.runGenerationUnit({
+      projectId: state.project.id,
+      productionId: state.production.productionId,
+      generationUnitId: runnable.generationUnit.generationUnitId,
+      billingMode: "provider_account",
+      idempotencyKey: "virtual-authority-deleted-edge-provider-zero",
+      formalGenerationIntent
+    }),
+    (error) => error.code === "canvas_production_graph_not_ready"
+      && error.details.errors.some((entry) => entry.code === "canvas_virtual_authority_edge_required")
+  );
+  assert.equal(providerCalls, 0);
+
+  await runtime.app.connectEdge({
+    projectId: state.project.id,
+    canvasId: state.canvas.id,
+    fromNodeId: authorityNode.id,
+    toNodeId: state.video.id,
+    role: "cinematic_reference:semantic_identity"
+  });
+  const restoredCanvas = await runtime.app.openCanvas({ projectId: state.project.id, canvasId: state.canvas.id });
+  const liveAuthorityNode = restoredCanvas.nodes.find((node) => node.id === authorityNode.id);
+  await runtime.app.updateNode({
+    projectId: state.project.id,
+    nodeId: authorityNode.id,
+    expectedRevision: liveAuthorityNode.revision,
+    payload: {
+      ...liveAuthorityNode.payload,
+      authorityRevision: liveAuthorityNode.payload.authorityRevision + 1
+    }
+  });
+  await assert.rejects(
+    () => runtime.app.runGenerationUnit({
+      projectId: state.project.id,
+      productionId: state.production.productionId,
+      generationUnitId: runnable.generationUnit.generationUnitId,
+      billingMode: "provider_account",
+      idempotencyKey: "virtual-authority-version-drift-provider-zero",
+      formalGenerationIntent
+    }),
+    (error) => error.code === "canvas_production_graph_not_ready"
+      && error.details.errors.some((entry) => entry.code === "canvas_virtual_authority_node_version_mismatch")
+  );
+  assert.equal(providerCalls, 0);
+});
+
+test("production direct API cannot bypass the canvas graph by omitting policy or self-referencing the execution node", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-generation-unit-canvas-self-loop-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  const runtime = createLocalRuntime({ dataRoot, recoverRenders: false, recoverAutomation: false, runAutomationExecutor: false });
+  context.after(() => runtime.close());
+  const state = await setup(runtime, { withBudget: false });
+  const media = await runtime.app.importDataMedia({
+    projectId: state.project.id,
+    nodeId: state.video.id,
+    kind: "image",
+    title: "错误地挂在执行节点上的参考图.png",
+    dataUrl: "data:image/png;base64,iVBORw0KGgo="
+  });
+  const binding = {
+    sourceNodeId: state.video.id,
+    assetId: "asset-self-loop",
+    versionId: "asset-self-loop-v1",
+    mediaId: media.id,
+    displayName: "错误自引用参考图",
+    role: "semantic_reference",
+    authorityRevision: "self-loop:r1",
+    controls: ["人物身份"],
+    doesNotControl: ["动作时序"],
+    required: true,
+    providerIndex: 1,
+    semanticControl: { temporalRole: "static_state", preserve: ["人物身份"], replace: [], complete: [], ignore: [], styleOnly: [] }
+  };
+  const updated = await runtime.app.updateGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: state.unit.generationUnit.generationUnitId,
+    patch: {
+      visualAnchorPolicy: "SHOT_FRAME_SET",
+      requiredCapabilities: ["native_audio", "multi_reference"],
+      generationParameters: { mode: "image_reference", referenceMediaIds: [media.id] }
+    },
+    referenceBindings: [binding]
+  });
+  assert.equal(updated.generationUnit.canvasGraphPolicy, undefined, "direct API fixture intentionally omits the policy");
+  const compilation = await runtime.app.compileGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: updated.generationUnit.generationUnitId
+  });
+  assert.equal(compilation.envelope.preflight.ok, false);
+  assert.equal(
+    compilation.envelope.preflight.errors.some((entry) => entry.code === "canvas_reference_source_must_be_distinct"),
+    true,
+    JSON.stringify(compilation.envelope.preflight.errors)
+  );
+  const canvas = await runtime.app.openCanvas({ projectId: state.project.id, canvasId: state.canvas.id });
+  assert.equal(canvas.edges.some((edge) => edge.fromNodeId === state.video.id && edge.toNodeId === state.video.id), false);
 });
 
 test("generation unit run reserves once, materializes video, updates its canvas node, and reuses the paid result", async (context) => {
@@ -436,9 +1090,12 @@ test("first-last-frame compilation keeps frame bindings out of the ordinary refe
   const runtime = createLocalRuntime({ dataRoot, recoverRenders: false, recoverAutomation: false, runAutomationExecutor: false });
   context.after(() => runtime.close());
   const state = await setup(runtime);
-  const first = await runtime.app.importDataMedia({ projectId: state.project.id, nodeId: state.video.id, kind: "image", title: "首帧.png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" });
-  const last = await runtime.app.importDataMedia({ projectId: state.project.id, nodeId: state.video.id, kind: "image", title: "尾帧.png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" });
+  const firstNode = await runtime.app.createNode({ projectId: state.project.id, canvasId: state.canvas.id, kind: "image", title: "首帧来源" });
+  const lastNode = await runtime.app.createNode({ projectId: state.project.id, canvasId: state.canvas.id, kind: "image", title: "尾帧来源" });
+  const first = await runtime.app.importDataMedia({ projectId: state.project.id, nodeId: firstNode.id, kind: "image", title: "首帧.png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" });
+  const last = await runtime.app.importDataMedia({ projectId: state.project.id, nodeId: lastNode.id, kind: "image", title: "尾帧.png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" });
   const bindings = [first, last].map((media, index) => ({
+    sourceNodeId: index === 0 ? firstNode.id : lastNode.id,
     assetId: `asset-frame-${index + 1}`,
     versionId: `asset-version-frame-${index + 1}`,
     mediaId: media.id,
@@ -478,6 +1135,22 @@ test("first-last-frame compilation keeps frame bindings out of the ordinary refe
   assert.equal(compilation.envelope.generationParameters.lastFrameMediaId, last.id);
   assert.deepEqual(compilation.envelope.referenceBindings.map((binding) => binding.mediaId), [first.id, last.id]);
   assert.equal(compilation.envelope.preflight.ok, true, JSON.stringify(compilation.envelope.preflight));
+  const prompt = await runtime.app.getNodePrompt({ projectId: state.project.id, nodeId: state.video.id });
+  assert.equal(prompt.parameters.firstFrameMediaId, first.id);
+  assert.equal(prompt.parameters.lastFrameMediaId, last.id);
+  assert.deepEqual(prompt.parameters.referenceMediaIds, []);
+  assert.deepEqual(prompt.parameters.inputDecision.referenceNodeIds, [firstNode.id, lastNode.id]);
+  assert.deepEqual(prompt.parameters.inputDecision.referenceBindings.map((binding) => binding.edgeRole), [
+    "cinematic_reference:temporal_first",
+    "cinematic_reference:temporal_last"
+  ]);
+  const canvas = await runtime.app.openCanvas({ projectId: state.project.id, canvasId: state.canvas.id });
+  assert.equal(canvas.edges.some((edge) => edge.fromNodeId === firstNode.id
+    && edge.toNodeId === state.video.id
+    && edge.role === "cinematic_reference:temporal_first"), true);
+  assert.equal(canvas.edges.some((edge) => edge.fromNodeId === lastNode.id
+    && edge.toNodeId === state.video.id
+    && edge.role === "cinematic_reference:temporal_last"), true);
 });
 
 test("generation unit legacy_budget path reserves budget before Provider and releases a known Provider failure", async (context) => {
@@ -590,6 +1263,162 @@ test("formal video refuses a missing or stale single-submission intent before Pr
       formalGenerationIntent: { ...formalGenerationIntent(state), payloadHash: "stale-payload-hash" }
     }),
     (error) => error.code === "stale_formal_generation_intent" && error.details.mismatches.includes("payloadHash")
+  );
+  assert.equal(calls, 0);
+  assert.equal((await runtime.app.listRuns({ projectId: state.project.id })).length, 0);
+});
+
+test("formal video rejects a manual Prompt preview before Provider dispatch", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-generation-unit-manual-prompt-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let calls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: { async run() { calls += 1; throw new Error("must not submit"); }, async poll() { throw new Error("must not poll"); } },
+    recoverRenders: false,
+    recoverAutomation: false,
+    runAutomationExecutor: false
+  });
+  context.after(() => runtime.close());
+  const state = await setup(runtime, { withBudget: false });
+  const manualCompilation = await runtime.app.compileGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: state.unit.generationUnit.generationUnitId,
+    manualOverride: true,
+    manualPrompt: "人工覆盖的自由文本预览，不得进入正式视频。"
+  });
+  assert.equal(manualCompilation.envelope.promptDraft.status, "preflight_blocked");
+  assert.equal(manualCompilation.envelope.preflight.errors.some((entry) => entry.code === "manual_prompt_not_formal_runnable"), true);
+  await assert.rejects(
+    () => runtime.app.runGenerationUnit({
+      projectId: state.project.id,
+      productionId: state.production.productionId,
+      generationUnitId: state.unit.generationUnit.generationUnitId,
+      billingMode: "provider_account",
+      idempotencyKey: "unit-manual-prompt-gate-v1",
+      formalGenerationIntent: {
+        ...formalGenerationIntent(state),
+        compilationId: manualCompilation.compilationId,
+        payloadHash: manualCompilation.envelope.payloadHash
+      }
+    }),
+    (error) => error.code === "manual_prompt_formal_generation_forbidden"
+  );
+  assert.equal(calls, 0);
+  assert.equal((await runtime.app.listRuns({ projectId: state.project.id })).length, 0);
+});
+
+test("formal video blocks a naked continuation segment before Provider dispatch", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-generation-unit-naked-seam-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let calls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: { async run() { calls += 1; throw new Error("must not submit"); }, async poll() { throw new Error("must not poll"); } },
+    recoverRenders: false,
+    recoverAutomation: false,
+    runAutomationExecutor: false
+  });
+  context.after(() => runtime.close());
+  const state = await setup(runtime, { withBudget: false });
+  const updated = await runtime.app.updateGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: state.unit.generationUnit.generationUnitId,
+    patch: { segmentDecision: "continuation_segment" }
+  });
+  const compilation = await runtime.app.compileGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: updated.generationUnit.generationUnitId
+  });
+  assert.equal(compilation.envelope.preflight.ok, false);
+  assert.equal(compilation.envelope.preflight.errors.some((entry) => entry.code === "segment_stable_tail_audit_required"), true);
+  assert.equal(compilation.envelope.sourceVersions.segmentSeamAudit.ok, false);
+  const compiledNode = (await runtime.app.openCanvas({
+    projectId: state.project.id,
+    canvasId: state.canvas.id
+  })).nodes.find((node) => node.id === state.video.id);
+  assert.equal(compiledNode.payload.cinematicSegmentDecision, "continuation_segment");
+  assert.equal(compiledNode.payload.cinematicSegmentSeam.ok, false);
+  await assert.rejects(
+    () => runtime.app.runGenerationUnit({
+      projectId: state.project.id,
+      productionId: state.production.productionId,
+      generationUnitId: updated.generationUnit.generationUnitId,
+      billingMode: "provider_account",
+      idempotencyKey: "unit-naked-seam-gate-v1",
+      formalGenerationIntent: {
+        version: "formal_generation_intent_v1",
+        generationUnitId: updated.generationUnit.generationUnitId,
+        generationUnitRevision: updated.generationUnit.revision,
+        compilationId: compilation.compilationId,
+        payloadHash: compilation.envelope.payloadHash,
+        executionNodeId: state.video.id,
+        maxNewSubmissions: 1,
+        createdAt: new Date().toISOString()
+      }
+    }),
+    (error) => error.code === "cinematic_preflight_failed"
+      && error.details.preflight.errors.some((entry) => entry.code === "segment_stable_tail_audit_required")
+  );
+  assert.equal(calls, 0);
+  assert.equal((await runtime.app.listRuns({ projectId: state.project.id })).length, 0);
+});
+
+test("formal video reports sequence_previs_required when a production unit has no binding", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-generation-unit-missing-previs-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let calls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: { async run() { calls += 1; throw new Error("must not submit"); }, async poll() { throw new Error("must not poll"); } },
+    recoverRenders: false,
+    recoverAutomation: false,
+    runAutomationExecutor: false
+  });
+  context.after(() => runtime.close());
+  const state = await setup(runtime, { withBudget: false });
+  const {
+    generationUnitId: _generationUnitId,
+    revision: _revision,
+    sequenceWorkspaceBinding: _sequenceWorkspaceBinding,
+    updatedAt: _updatedAt,
+    ...unboundDefinition
+  } = state.unit.generationUnit;
+  const unbound = await runtime.app.saveGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnit: unboundDefinition,
+    referenceBindings: []
+  });
+  const compilation = await runtime.app.compileGenerationUnit({
+    projectId: state.project.id,
+    productionId: state.production.productionId,
+    generationUnitId: unbound.generationUnit.generationUnitId
+  });
+  assert.equal(compilation.envelope.lint.errors.some((entry) => entry.code === "sequence_previs_required"), true);
+  assert.equal(compilation.envelope.preflight.errors.some((entry) => entry.code === "sequence_previs_required"), true);
+  await assert.rejects(
+    () => runtime.app.runGenerationUnit({
+      projectId: state.project.id,
+      productionId: state.production.productionId,
+      generationUnitId: unbound.generationUnit.generationUnitId,
+      billingMode: "provider_account",
+      idempotencyKey: "unit-missing-previs-gate-v1",
+      formalGenerationIntent: {
+        version: "formal_generation_intent_v1",
+        generationUnitId: unbound.generationUnit.generationUnitId,
+        generationUnitRevision: unbound.generationUnit.revision,
+        compilationId: compilation.compilationId,
+        payloadHash: compilation.envelope.payloadHash,
+        executionNodeId: state.video.id,
+        maxNewSubmissions: 1,
+        createdAt: new Date().toISOString()
+      }
+    }),
+    (error) => error.code === "sequence_previs_required"
   );
   assert.equal(calls, 0);
   assert.equal((await runtime.app.listRuns({ projectId: state.project.id })).length, 0);

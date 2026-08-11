@@ -196,7 +196,7 @@ test("professional agents cannot smuggle a separately written final Prompt into 
 
 test("the published V2 JSON Schema covers every persisted cinematic contract", async () => {
   const schema = JSON.parse(await readFile(new URL("../packages/contracts/schemas/cinematic-production-v2.schema.json", import.meta.url), "utf8"));
-  for (const name of ["CinematicProduction", "StoryProductionPacket", "VisualBible", "CharacterAuthoritySet", "SceneAuthoritySet", "PropAuthoritySpec", "StoryboardPromptSpec", "CinematicShotSpec", "GenerationUnit", "ProfessionalContribution", "CinematicPromptEnvelopeV2", "CinematicImagePromptEnvelopeV2", "CinematicEvaluationRecord"]) {
+  for (const name of ["CinematicProduction", "StoryProductionPacket", "ScreenplayAuthorityDocument", "VisualBible", "CharacterAuthoritySet", "SceneAuthoritySet", "PropAuthoritySpec", "StoryboardPromptSpec", "CinematicShotSpec", "GenerationUnit", "ProfessionalContribution", "CinematicPromptEnvelopeV2", "CinematicImagePromptEnvelopeV2", "CinematicEvaluationRecord"]) {
     assert.ok(schema.$defs[name], `missing schema definition: ${name}`);
   }
 });

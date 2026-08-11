@@ -10,7 +10,7 @@ function presetOutput(preset) {
   if (preset === "prores_master") return { extension: ".mov", videoArgs: ["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"], audioArgs: ["-c:a", "pcm_s24le"] };
   if (preset === "wav_mix") return { extension: ".wav", audioOnly: true, audioArgs: ["-c:a", "pcm_s24le", "-ar", "48000"] };
   if (preset === "h265_delivery") return { extension: ".mp4", videoArgs: ["-c:v", "libx265", "-crf", "20", "-tag:v", "hvc1", "-pix_fmt", "yuv420p"], audioArgs: ["-c:a", "aac", "-b:a", "192k"] };
-  return { extension: ".mp4", videoArgs: ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart"], audioArgs: ["-c:a", "aac", "-b:a", "192k"] };
+  return { extension: ".mp4", videoArgs: ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart"], audioArgs: ["-c:a", "aac", "-b:a", "192k", "-ac", "2"] };
 }
 
 function seconds(milliseconds) { return Math.max(0, milliseconds / 1000).toFixed(3); }

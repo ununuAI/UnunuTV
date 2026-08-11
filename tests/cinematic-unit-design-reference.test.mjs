@@ -52,7 +52,7 @@ test("unit design carries selected semantic storyboard references without freezi
   const input = saved[0];
   assert.equal(input.generationUnit.generationParameters.mode, "image_reference");
   assert.equal(input.generationUnit.generationParameters.duration, 12);
-  assert.equal(input.generationUnit.generationParameters.resolution, "720p");
+  assert.equal(input.generationUnit.generationParameters.resolution, "480p");
   assert.deepEqual(input.generationUnit.generationParameters.referenceMediaIds, ["media-scene"]);
   assert.equal(input.referenceBindings[0].mediaId, "media-scene");
   assert.deepEqual(input.referenceBindings[0].semanticControl.replace, []);
@@ -114,7 +114,7 @@ test("prompt reconciliation preserves authored contracts but synchronizes a repl
       mode: "image_reference",
       duration: 8,
       aspectRatio: "9:16",
-      resolution: "720p",
+      resolution: "480p",
       count: 1,
       generateAudio: true,
       referenceMediaIds: [oldBinding.mediaId]
@@ -169,7 +169,7 @@ test("prompt reconciliation preserves authored contracts but synchronizes a repl
       video_generation: {
         provider: "ark",
         model: "doubao-seedance-2-0-mini-260615",
-        resolution: "720p",
+        resolution: "480p",
         perShotExecutionNodes: false
       }
     },
@@ -196,30 +196,79 @@ test("unit design refuses a declared visual-anchor policy without a real binding
   );
 });
 
-test("unit design binds per-shot virtual-person assets and makes the capability mandatory", async () => {
+test("unit design derives per-shot virtual-person assets from accepted character Authority", async () => {
   const saved = [];
+  const characterAuthorityId = "character-xiali";
+  const virtualPersonAssetId = "asset-20260310030618-88hlb";
+  const nodes = [{
+    id: "video-node",
+    canvasId: "canvas-1",
+    kind: "video"
+  }, {
+    id: "asset-node-xiali",
+    canvasId: "canvas-1",
+    kind: "asset",
+    payload: {
+      authorityId: characterAuthorityId,
+      authorityRevision: 3,
+      externalProviderIdentity: {
+        provider: "ark",
+        assetId: virtualPersonAssetId,
+        source: "owner_locked_episode_authority"
+      }
+    }
+  }];
+  const edges = [];
   await ensureGenerationUnitsForProduction({
     projectId: "project-1",
     productionId: "production-1",
     cinematic: {
-      listShots: async () => [{ shotId: "shot-01", durationSeconds: 5 }],
+      listShots: async () => [{ shotId: "shot-01", durationSeconds: 5, characterAuthorityIds: [characterAuthorityId] }],
       listGenerationUnits: async () => [],
+      listAssetAuthorities: async () => [{
+        authorityId: characterAuthorityId,
+        authorityType: "character",
+        displayName: "夏梨",
+        status: "accepted",
+        revision: 3,
+        externalProviderIdentity: {
+          provider: "ark",
+          capability: "virtual_person_asset",
+          assetId: virtualPersonAssetId,
+          source: "owner_locked_episode_authority"
+        }
+      }],
       saveGenerationUnit: async (input) => { saved.push(input); return input; }
     },
-    projects: { open: async () => ({ rootCanvasId: "canvas-1" }), openCanvas: async () => ({ nodes: [{ id: "video-node", kind: "video" }] }) },
+    projects: {
+      open: async () => ({ rootCanvasId: "canvas-1" }),
+      openCanvas: async () => ({ nodes, edges }),
+      getNode: async (_projectId, nodeId) => nodes.find((node) => node.id === nodeId) ?? null
+    },
+    connectEdge: async (edge) => {
+      const created = { id: "edge-xiali-identity", ...edge };
+      edges.push(created);
+      return created;
+    },
     generationStrategies: {
       video_generation: {
         provider: "ark",
         model: "doubao-seedance-2-0-mini-260615",
-        requireVirtualPersonAssets: true,
-        virtualPersonAssetIdsByShotId: {
-          "shot-01": ["asset-20260310030618-88hlb"]
-        }
+        requireVirtualPersonAssets: true
       }
     }
   });
-  assert.deepEqual(saved[0].generationUnit.generationParameters.virtualPersonAssetIds, ["asset-20260310030618-88hlb"]);
+  assert.deepEqual(saved[0].generationUnit.characterAuthorityIds, [characterAuthorityId]);
+  assert.deepEqual(saved[0].generationUnit.generationParameters.virtualPersonAssetIds, [virtualPersonAssetId]);
+  assert.equal(saved[0].generationUnit.generationParameters.mode, "image_reference");
+  assert.equal(saved[0].generationUnit.visualAnchorPolicy, "SHOT_FRAME_SET");
+  assert.equal(saved[0].generationUnit.characterIdentitySourceVersions[0].authorityRevision, 3);
   assert.equal(saved[0].generationUnit.requiredCapabilities.includes("virtual_person_asset"), true);
+  assert.deepEqual(edges.map(({ fromNodeId, toNodeId, role }) => ({ fromNodeId, toNodeId, role })), [{
+    fromNodeId: "asset-node-xiali",
+    toNodeId: "video-node",
+    role: "cinematic_reference:semantic_identity"
+  }]);
 });
 
 test("unit design blocks a person-required shot before payment when its virtual-person binding is missing", async () => {
@@ -243,4 +292,86 @@ test("unit design blocks a person-required shot before payment when its virtual-
     }),
     (error) => error?.code === "virtual_person_asset_required"
   );
+});
+
+test("unit design packs an eight-character ensemble as eight Authority identities plus one accepted composite previs", async () => {
+  const saved = [];
+  const characterAuthorityIds = Array.from({ length: 8 }, (_, index) => `character-ensemble-${index + 1}`);
+  const authorities = characterAuthorityIds.map((authorityId, index) => ({
+    authorityId,
+    authorityType: "character",
+    displayName: `群像角色${index + 1}`,
+    status: "accepted",
+    revision: 1,
+    externalProviderIdentity: {
+      provider: "ark",
+      capability: "virtual_person_asset",
+      assetId: `asset-2026031003061${index}-person${index}`,
+      source: "owner_locked_episode_authority"
+    }
+  }));
+  const composite = {
+    assetId: "asset-composite-previs",
+    versionId: "asset-composite-previs-v1",
+    mediaId: "media-composite-previs",
+    displayName: "八人群像合成预演",
+    role: "visual_context_composite",
+    controls: ["场景", "站位", "道具关系"],
+    doesNotControl: ["人物身份"],
+    required: true,
+    authorityRevision: "previs:r1",
+    acceptanceProof: { pixelReviewed: true }
+  };
+  const tail = {
+    ...composite,
+    assetId: "asset-tail",
+    versionId: "asset-tail-v1",
+    mediaId: "media-tail",
+    displayName: "上一段尾帧",
+    role: "continuity_tail",
+    acceptanceProof: undefined
+  };
+  const nodes = [{
+    id: "video-node",
+    canvasId: "canvas-1",
+    kind: "video"
+  }, ...authorities.map((authority) => ({
+    id: `asset-node-${authority.authorityId}`,
+    canvasId: "canvas-1",
+    kind: "asset",
+    payload: {
+      authorityId: authority.authorityId,
+      authorityRevision: authority.revision,
+      externalProviderIdentity: authority.externalProviderIdentity
+    }
+  }))];
+  const edges = [];
+  await ensureGenerationUnitsForProduction({
+    projectId: "project-ensemble",
+    productionId: "production-ensemble",
+    cinematic: {
+      listShots: async () => [{ shotId: "shot-ensemble", order: 1, durationSeconds: 5, boundaryClass: "same_scene_continuation", characterAuthorityIds }],
+      listGenerationUnits: async () => [],
+      listAssetAuthorities: async () => authorities,
+      saveGenerationUnit: async (input) => { saved.push(input); return input; }
+    },
+    projects: {
+      open: async () => ({ rootCanvasId: "canvas-1" }),
+      openCanvas: async () => ({ nodes, edges }),
+      getNode: async (_projectId, nodeId) => nodes.find((node) => node.id === nodeId) ?? null
+    },
+    connectEdge: async (edge) => {
+      const created = { id: `edge-identity-${edges.length + 1}`, ...edge };
+      edges.push(created);
+      return created;
+    },
+    generationStrategies: { video_generation: { provider: "ark", model: "doubao-seedance-2-0-mini-260615" } },
+    referenceBindings: [tail, composite]
+  });
+  const designed = saved[0];
+  assert.equal(designed.generationUnit.generationParameters.virtualPersonAssetIds.length, 8);
+  assert.deepEqual(designed.generationUnit.generationParameters.referenceMediaIds, [composite.mediaId]);
+  assert.deepEqual(designed.referenceBindings.map((binding) => binding.mediaId), [composite.mediaId]);
+  assert.equal(designed.generationUnit.generationParameters.mode, "image_reference");
+  assert.equal(edges.filter((edge) => edge.role === "cinematic_reference:semantic_identity").length, 8);
 });

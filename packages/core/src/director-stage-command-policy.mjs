@@ -68,8 +68,17 @@ export function applyDirectorStageCommand(currentStage, command, timestamp) {
     throw new UnuTvError("revision_conflict", `Expected director stage revision ${command.expectedRevision}, found ${currentStage.revision}`, 409);
   }
 
-  const next = clone(currentStage);
+  let next = clone(currentStage);
   const payload = command.payload;
+  if (command.type === "replace_document") {
+    next = {
+      ...clone(payload.stage),
+      version: DIRECTOR_STAGE_VERSION,
+      revision: currentStage.revision,
+      createdAt: currentStage.createdAt,
+      updatedAt: currentStage.updatedAt
+    };
+  }
   if (command.type === "set_environment") next.environment = clone(payload.environment);
   if (command.type === "clear_environment") delete next.environment;
   if (command.type === "upsert_object") next.objects = replaceById(next.objects, clone(payload.object));

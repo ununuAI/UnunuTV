@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -38,6 +38,110 @@ test("render graph preserves main-track timing and rejects unresolved overlaps",
   ] }, "h264_review"), (error) => error.code === "render_track_overlap" && error.status === 409);
 });
 
+test("render graph blocks repaired sources until original audio is disabled and the remix is time-aligned", () => {
+  const base = {
+    id: "timeline-repaired",
+    frameRate: 24,
+    width: 480,
+    height: 854,
+    colorSpace: "Rec.709",
+    tracks: [
+      { id: "video-track", kind: "video", order: 0, visible: true, muted: false, solo: false },
+      { id: "audio-track", kind: "audio", order: 1, visible: true, muted: false, solo: false }
+    ]
+  };
+  const videoClip = {
+    id: "video-clip",
+    mediaId: "video-source",
+    track: 0,
+    startMs: 0,
+    durationMs: 1000,
+    trimInMs: 250,
+    payload: {
+      includeEmbeddedAudio: true,
+      sourceAudioRepair: { status: "repaired", remixMediaId: "audio-remix" }
+    }
+  };
+  assert.throws(
+    () => compileRenderGraph({ ...base, clips: [videoClip] }, "h264_vertical"),
+    (error) => error.code === "render_repaired_source_audio_not_disabled"
+  );
+  assert.throws(
+    () => compileRenderGraph({ ...base, clips: [{ ...videoClip, payload: { ...videoClip.payload, includeEmbeddedAudio: false } }] }, "h264_vertical"),
+    (error) => error.code === "render_repaired_source_remix_missing"
+  );
+  const remix = {
+    id: "audio-clip",
+    mediaId: "audio-remix",
+    track: 1,
+    startMs: 0,
+    durationMs: 1000,
+    trimInMs: 250,
+    payload: { sourceVideoClipId: "video-clip" }
+  };
+  const graph = compileRenderGraph({
+    ...base,
+    clips: [{ ...videoClip, payload: { ...videoClip.payload, includeEmbeddedAudio: false } }, remix]
+  }, "h264_vertical");
+  assert.equal(graph.clips[0].includeEmbeddedAudio, false);
+  assert.equal(graph.audioClips[0].mediaId, "audio-remix");
+});
+
+test("render graph requires an applied ambience or J-L bridge across every canonical segment seam", () => {
+  const base = {
+    id: "timeline-seam",
+    frameRate: 24,
+    width: 480,
+    height: 854,
+    colorSpace: "Rec.709",
+    tracks: [
+      { id: "video-track", kind: "video", order: 0, visible: true, muted: false, solo: false },
+      { id: "audio-track", kind: "audio", order: 1, visible: true, muted: false, solo: false }
+    ]
+  };
+  const videoClips = [
+    { id: "segment-1", mediaId: "media-1", track: 0, startMs: 0, durationMs: 1000, trimInMs: 0, payload: {} },
+    {
+      id: "segment-2",
+      mediaId: "media-2",
+      track: 0,
+      startMs: 1000,
+      durationMs: 1000,
+      trimInMs: 250,
+      payload: {
+        segmentBoundaryBefore: {
+          atMs: 1000,
+          boundaryId: "segment-boundary:unit-1:unit-2",
+          createsEditPoint: false,
+          seamAction: "tail_continue"
+        }
+      }
+    }
+  ];
+  assert.throws(
+    () => compileRenderGraph({ ...base, clips: videoClips }, "h264_vertical"),
+    (error) => error.code === "render_segment_seam_audio_bridge_missing"
+  );
+  const ambience = {
+    id: "seam-ambience",
+    mediaId: "ambience-media",
+    track: 1,
+    startMs: 750,
+    durationMs: 750,
+    trimInMs: 0,
+    payload: {
+      segmentSeam: {
+        audioEdit: "continuous_ambience",
+        boundaryId: "segment-boundary:unit-1:unit-2",
+        seamAction: "tail_continue"
+      }
+    }
+  };
+  const graph = compileRenderGraph({ ...base, clips: [...videoClips, ambience] }, "h264_vertical");
+  assert.equal(graph.clips[1].segmentBoundaryBefore.seamAction, "tail_continue");
+  assert.equal(graph.audioClips[0].segmentSeam.audioEdit, "continuous_ambience");
+});
+
 test("local render preserves embedded audio from a video-track clip", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-render-embedded-audio-"));
   context.after(async () => rm(dataRoot, { recursive: true, force: true }));
@@ -64,13 +168,44 @@ test("local render preserves embedded audio from a video-track clip", async (con
   assert.equal(qc.checks.find((check) => check.id === "audio_stream").status, "pass");
 });
 
-test("technical QC reports missing audio as a warning without hiding video failures", () => {
+test("technical QC keeps missing audio as a review warning", () => {
   const report = buildTechnicalQcReport({
-    graph: { frameRate: 24, width: 64, height: 64, durationMs: 1000 }, mediaId: "media-1", projectId: "project-1", renderJobId: "render-1",
+    graph: { frameRate: 24, width: 64, height: 64, durationMs: 1000, preset: "h264_review" }, mediaId: "media-1", projectId: "project-1", renderJobId: "render-1",
     probe: { streams: [{ codec_type: "video", codec_name: "h264", width: 64, height: 64, avg_frame_rate: "24/1" }], format: { duration: "1.0" } }
   });
   assert.equal(report.status, "warning");
   assert.equal(report.checks.find((check) => check.id === "audio_stream").status, "warning");
+});
+
+test("final delivery QC hard-fails missing audio, mono audio, and wrong codecs", () => {
+  const graph = { frameRate: 24, width: 480, height: 854, durationMs: 1000, preset: "h264_vertical" };
+  const base = { mediaId: "media-final", projectId: "project-final", renderJobId: "render-final" };
+  const video = { codec_type: "video", codec_name: "h264", width: 480, height: 854, avg_frame_rate: "24/1" };
+  const stereo = { codec_type: "audio", codec_name: "aac", channels: 2, channel_layout: "stereo", sample_rate: "48000" };
+
+  const missingAudio = buildTechnicalQcReport({ ...base, graph, probe: { streams: [video], format: { duration: "1.0" } } });
+  assert.equal(missingAudio.status, "fail");
+  assert.equal(missingAudio.checks.find((check) => check.id === "audio_stream").status, "fail");
+
+  const mono = buildTechnicalQcReport({
+    ...base,
+    graph,
+    probe: { streams: [video, { ...stereo, channels: 1, channel_layout: "mono" }], format: { duration: "1.0" } }
+  });
+  assert.equal(mono.status, "fail");
+  assert.equal(mono.checks.find((check) => check.id === "audio_channels").status, "fail");
+
+  const wrongCodecs = buildTechnicalQcReport({
+    ...base,
+    graph,
+    probe: {
+      streams: [{ ...video, codec_name: "hevc" }, { ...stereo, codec_name: "pcm_s16le" }],
+      format: { duration: "1.0" }
+    }
+  });
+  assert.equal(wrongCodecs.status, "fail");
+  assert.equal(wrongCodecs.checks.find((check) => check.id === "video_codec").status, "fail");
+  assert.equal(wrongCodecs.checks.find((check) => check.id === "audio_codec").status, "fail");
 });
 
 test("timeline render refuses hidden output and incompatible canvas nodes", async (context) => {
@@ -130,14 +265,11 @@ test("local FFmpeg render creates an auditable H.264 candidate master without du
   assert.equal(qc.checks.find((check) => check.id === "video_stream").status, "pass");
   assert.equal(qc.checks.find((check) => check.id === "frame_size").actual, "64x64");
   assert.equal(qc.checks.find((check) => check.id === "audio_stream").status, "pass");
-  const delivery = await runtime.app.createDeliveryPackage({ projectId: project.id, renderJobId: completed.id });
-  const deliveryReplay = await runtime.app.createDeliveryPackage({ projectId: project.id, renderJobId: completed.id });
-  assert.equal(delivery.status, "review_ready");
-  assert.equal(delivery.kind, "review");
-  assert.equal(delivery.checksum, output.sha256);
-  assert.equal(delivery.deliverables[0].pathOrMediaId, completed.outputMediaId);
-  assert.equal(deliveryReplay.id, delivery.id);
-  assert.equal((await runtime.app.listDeliveryPackages({ projectId: project.id, renderJobId: completed.id })).length, 1);
+  await assert.rejects(
+    () => runtime.app.createDeliveryPackage({ projectId: project.id, renderJobId: completed.id, acceptWarnings: true }),
+    (error) => error.code === "delivery_render_preset_required"
+  );
+  assert.equal((await runtime.app.listDeliveryPackages({ projectId: project.id, renderJobId: completed.id })).length, 0);
   const sidecarBase = completed.outputPath.slice(0, -path.extname(completed.outputPath).length);
   assert.ok(existsSync(`${sidecarBase}.srt`));
   assert.ok(existsSync(`${sidecarBase}.vtt`));
@@ -180,4 +312,254 @@ test("a stale running render resumes after a local runtime restart without creat
   const completed = await waitForTerminal(secondRuntime.app, project.id, started.id);
   assert.equal(completed.status, "succeeded", completed.error?.message);
   assert.equal((await secondRuntime.app.listRenderJobs({ projectId: project.id, timelineId: timeline.id })).length, 1);
+});
+
+test("an in-flight render invalidated before completion stays historical and cannot publish current media, QC, master, or delivery", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-render-inactive-completion-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let resolveStarted;
+  let resolveRender;
+  const started = new Promise((resolve) => { resolveStarted = resolve; });
+  const render = {
+    cancel: () => false,
+    close: () => {},
+    start: () => {
+      resolveStarted();
+      return new Promise((resolve) => { resolveRender = resolve; });
+    }
+  };
+  const runtime = createLocalRuntime({
+    dataRoot,
+    recoverAutomation: false,
+    recoverRenders: false,
+    render
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject({ title: "失活在途渲染" });
+  const outputNode = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "compose",
+    title: "旧候选母版"
+  });
+  const timeline = await runtime.app.createTimeline({
+    projectId: project.id,
+    title: "旧剧本时间线",
+    frameRate: 24,
+    width: 480,
+    height: 854
+  });
+  await runtime.app.addTimelineClip({
+    projectId: project.id,
+    timelineId: timeline.id,
+    mediaId: "historical-source-media",
+    track: 0,
+    startMs: 0,
+    durationMs: 1000,
+    trimInMs: 0
+  });
+  const job = await runtime.app.createRenderJob({
+    projectId: project.id,
+    timelineId: timeline.id,
+    outputNodeId: outputNode.id,
+    preset: "h264_vertical",
+    idempotencyKey: "screenplay-r1-candidate"
+  });
+  await started;
+  const database = runtime.projects.database(project.id);
+  database.prepare("UPDATE render_jobs SET is_active=0 WHERE id=?").run(job.id);
+  database.prepare("UPDATE timelines SET is_active=0 WHERE id=?").run(timeline.id);
+  resolveRender({
+    kind: "video",
+    outputPath: path.join(dataRoot, "historical-result.mp4"),
+    sidecars: {}
+  });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  await assert.rejects(
+    () => runtime.app.getRenderJob({ projectId: project.id, renderJobId: job.id }),
+    (error) => error.code === "render_job_not_found"
+  );
+  const historical = await runtime.app.getRenderJob({
+    projectId: project.id,
+    renderJobId: job.id,
+    includeStale: true
+  });
+  assert.equal(historical.id, job.id, "the inactive render job remains in history");
+  const currentNode = await runtime.app.openCanvas({ projectId: project.id, canvasId: canvas.id });
+  assert.equal(
+    currentNode.nodes.find((node) => node.id === outputNode.id).payload.currentMediaId,
+    undefined,
+    "inactive completion must not replace the current candidate media"
+  );
+  assert.equal(runtime.projects.getTechnicalQcReport(project.id, job.id, true), undefined);
+  assert.equal(runtime.projects.getExportMasterByRenderJob(project.id, job.id, true), undefined);
+  await assert.rejects(
+    () => runtime.app.createDeliveryPackage({
+      projectId: project.id,
+      renderJobId: job.id,
+      acceptWarnings: true
+    }),
+    (error) => error.code === "render_job_not_found"
+  );
+  assert.deepEqual(
+    await runtime.app.listDeliveryPackages({
+      projectId: project.id,
+      renderJobId: job.id,
+      includeStale: true
+    }),
+    []
+  );
+});
+
+test("an in-flight render whose active timeline hash changes fails as stale before publishing current artifacts", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-render-lineage-change-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  let resolveStarted;
+  let resolveRender;
+  const started = new Promise((resolve) => { resolveStarted = resolve; });
+  const runtime = createLocalRuntime({
+    dataRoot,
+    recoverAutomation: false,
+    recoverRenders: false,
+    render: {
+      cancel: () => false,
+      close: () => {},
+      start: () => {
+        resolveStarted();
+        return new Promise((resolve) => { resolveRender = resolve; });
+      }
+    }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject({ title: "在途谱系变化" });
+  const outputNode = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "compose",
+    title: "候选母版"
+  });
+  const timeline = await runtime.app.createTimeline({
+    projectId: project.id,
+    title: "当前时间线",
+    frameRate: 24,
+    width: 480,
+    height: 854
+  });
+  await runtime.app.addTimelineClip({
+    projectId: project.id,
+    timelineId: timeline.id,
+    mediaId: "source-before-revision",
+    track: 0,
+    startMs: 0,
+    durationMs: 1000,
+    trimInMs: 0
+  });
+  const job = await runtime.app.createRenderJob({
+    projectId: project.id,
+    timelineId: timeline.id,
+    outputNodeId: outputNode.id,
+    preset: "h264_vertical",
+    idempotencyKey: "candidate-before-timeline-revision"
+  });
+  await started;
+  await runtime.app.addTimelineMarker({
+    projectId: project.id,
+    timelineId: timeline.id,
+    timeMs: 0,
+    title: "剧本 revision 2",
+    operationContext: { actorType: "owner", actorId: "test-owner" }
+  });
+  resolveRender({
+    kind: "video",
+    outputPath: path.join(dataRoot, "stale-result.mp4"),
+    sidecars: {}
+  });
+  const failed = await waitForTerminal(runtime.app, project.id, job.id);
+
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.error?.code, "render_timeline_lineage_stale");
+  const currentCanvas = await runtime.app.openCanvas({ projectId: project.id, canvasId: canvas.id });
+  assert.equal(currentCanvas.nodes.find((node) => node.id === outputNode.id).payload.currentMediaId, undefined);
+  assert.equal(runtime.projects.getTechnicalQcReport(project.id, job.id, true), undefined);
+  assert.equal(runtime.projects.getExportMasterByRenderJob(project.id, job.id, true), undefined);
+});
+
+test("invalidation while probing a staged render cannot commit current media, QC, master, or success", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-render-probe-race-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  const outputPath = path.join(dataRoot, "staged-old-render.mp4");
+  await writeFile(outputPath, "historical render bytes");
+  let releaseProbe;
+  let notifyProbeStarted;
+  const probeStarted = new Promise((resolve) => { notifyProbeStarted = resolve; });
+  const runtime = createLocalRuntime({
+    dataRoot,
+    recoverAutomation: false,
+    recoverRenders: false,
+    render: {
+      cancel: () => false,
+      close: () => {},
+      start: async () => ({ kind: "video", outputPath, sidecars: {} }),
+      probe: async () => {
+        notifyProbeStarted();
+        await new Promise((resolve) => { releaseProbe = resolve; });
+        return {
+          format: { duration: "1" },
+          streams: [
+            { codec_type: "video", codec_name: "h264", width: 480, height: 854, avg_frame_rate: "24/1" },
+            { codec_type: "audio", codec_name: "aac", channels: 2, channel_layout: "stereo" }
+          ]
+        };
+      }
+    }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject({ title: "probe race" });
+  const outputNode = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "compose",
+    title: "旧候选母版"
+  });
+  const timeline = await runtime.app.createTimeline({
+    projectId: project.id,
+    frameRate: 24,
+    width: 480,
+    height: 854
+  });
+  await runtime.app.addTimelineClip({
+    projectId: project.id,
+    timelineId: timeline.id,
+    mediaId: "historical-source",
+    track: 0,
+    startMs: 0,
+    durationMs: 1000,
+    trimInMs: 0
+  });
+  const job = await runtime.app.createRenderJob({
+    projectId: project.id,
+    timelineId: timeline.id,
+    outputNodeId: outputNode.id,
+    preset: "h264_vertical",
+    idempotencyKey: "probe-race-old-lineage"
+  });
+  await probeStarted;
+  const database = runtime.projects.database(project.id);
+  database.prepare("UPDATE render_jobs SET is_active=0 WHERE id=?").run(job.id);
+  database.prepare("UPDATE timelines SET is_active=0 WHERE id=?").run(timeline.id);
+  releaseProbe();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  const historical = await runtime.app.getRenderJob({
+    projectId: project.id,
+    renderJobId: job.id,
+    includeStale: true
+  });
+  assert.notEqual(historical.status, "succeeded");
+  assert.equal(historical.outputMediaId, null);
+  const currentCanvas = await runtime.app.openCanvas({ projectId: project.id, canvasId: canvas.id });
+  assert.equal(currentCanvas.nodes.find((node) => node.id === outputNode.id).payload.currentMediaId, undefined);
+  assert.equal(runtime.projects.getTechnicalQcReport(project.id, job.id, true), undefined);
+  assert.equal(runtime.projects.getExportMasterByRenderJob(project.id, job.id, true), undefined);
 });

@@ -16,7 +16,7 @@ const promptCoverage = {
   counterexampleClosures: []
 };
 
-const imageParameters = { provider: "ununu", model: "openai/gpt-image-2", aspectRatio: "16:9", resolution: "2048x1152", count: 1, referenceMediaIds: [] };
+const imageParameters = { provider: "ununu", model: "openai/gpt-image-2", aspectRatio: "3:2", resolution: "1536x1024", background: "opaque", count: 1, referenceMediaIds: [] };
 const view = { viewId: "front", label: "正面", framing: "半身", angle: "正面平视", description: "自然站姿", background: "中性灰", controls: ["人物身份"], doesNotControl: ["最终场景"], required: true };
 const authority = {
   authorityId: "character-1", authorityType: "character", displayName: "角色甲", riskLevel: "high", status: "candidate",
@@ -36,7 +36,7 @@ test("character authority compiles a named, parameter-separated image Prompt", (
   const result = compileCharacterAuthorityPrompt({ authority, visualBible: bible, generationParameters: imageParameters, referenceBindings: [] });
   assert.equal(result.protocolId, "ununu.character.v2");
   assert.match(result.compiledContentPrompt, /角色甲/u);
-  assert.doesNotMatch(result.compiledContentPrompt, /16\s*:\s*9|2048x1152|openai\/gpt-image-2/u);
+  assert.doesNotMatch(result.compiledContentPrompt, /3\s*:\s*2|1536x1024|openai\/gpt-image-2/u);
   assert.equal(result.lint.ok, true, JSON.stringify(result.lint));
   assert.equal(result.authorityBoard.boardId, "identity-master");
   assert.match(result.compiledContentPrompt, /完整头肩特写/u);
@@ -46,6 +46,54 @@ test("character authority compiles a named, parameter-separated image Prompt", (
   assert.match(result.compiledContentPrompt, /双手自然放松且不持物/u);
   assert.match(result.compiledContentPrompt, /独立道具、表演、技能或伤势板件/u);
   assert.equal(result.sourceVersions.visualBibleRevision, 1);
+});
+
+test("image compiler projects abstract intent only through static concrete clauses", () => {
+  const abstractAuthority = { ...authority, abstractIntentLabels: ["精美", "悬疑"] };
+  const concreteBible = {
+    ...bible,
+    cinematography: {
+      ...bible.cinematography,
+      lensPreference: "50mm 等效焦段",
+      aperture: "T4",
+      focus: "焦点锁定双眼，背景轻微虚化",
+      cameraPlacement: "与人物双眼等高的正面机位",
+      composition: "头肩像位于中央，背景保持两层景深"
+    },
+    productionDesign: { architecture: "旧公寓狭窄玄关", materials: "磨砂墙漆、氧化黄铜门牌、旧木门" },
+    lighting: {
+      direction: "门外右后方侧逆光",
+      contrast: "4:1 明暗比",
+      colorTemperature: "室外4300K、室内3200K",
+      exposureProtection: "皮肤高光低于剪切阈值"
+    }
+  };
+  const result = compileCharacterAuthorityPrompt({
+    authority: abstractAuthority,
+    visualBible: concreteBible,
+    generationParameters: imageParameters,
+    referenceBindings: []
+  });
+  assert.equal(result.abstractIntentResolution.target, "image");
+  assert.equal(result.abstractIntentResolution.ok, true, JSON.stringify(result.abstractIntentResolution));
+  assert.match(result.compiledContentPrompt, /【抽象意图具体化】/u);
+  assert.match(result.compiledContentPrompt, /材质与生产设计：[^。]*氧化黄铜门牌/u);
+  assert.match(result.compiledContentPrompt, /焦段、光圈与焦点：[^。]*T4/u);
+  assert.equal(result.abstractIntentResolution.requiredFacets.includes("performance"), false);
+  assert.equal(result.abstractIntentResolution.requiredFacets.includes("sound"), false);
+  assert.doesNotMatch(result.compiledContentPrompt, /精美|悬疑感/u);
+});
+
+test("image compiler blocks an abstract label that has no measurable static support", () => {
+  const result = compileCharacterAuthorityPrompt({
+    authority: { ...authority, abstractIntentLabels: ["高级感"] },
+    visualBible: bible,
+    generationParameters: imageParameters,
+    referenceBindings: []
+  });
+  assert.equal(result.lint.ok, false);
+  assert.equal(result.lint.errors.some((entry) => entry.code === "abstract_cinematic_intent_unresolved"), true);
+  assert.equal(result.requiresPreflight, true);
 });
 
 test("an authority board that requires Prompt coverage cannot reach paid preflight with a missing domain", () => {
@@ -203,6 +251,43 @@ test("scene authority boards compile and persist one independently reviewable sc
   );
 });
 
+test("a scene authority without boardSpecs compiles its required views directly", () => {
+  const scene = {
+    authorityId: "scene-no-boards", authorityType: "scene", displayName: "无名公寓", riskLevel: "high", status: "candidate",
+    architecture: "窄入口、门槛、狭长前厅与公共客厅", materials: "湿墙、旧木门与磨损地面",
+    spatialLogic: { entrance: "前方", livingRoom: "后方" }, lightingBaseline: { source: "室内旧灯" }, palette: { base: ["旧木褐"] },
+    viewSpecs: [{ ...view, viewId: "space-master", label: "空间母版", description: "入口到客厅的完整空间关系", controls: ["空间拓扑"] }],
+    referenceAssetIds: [], acceptanceCriteria: ["空间连续"], prohibitedChanges: ["镜像空间"], revision: 1
+  };
+  const result = compileSceneAuthorityPrompt({ authority: scene, visualBible: bible, generationParameters: imageParameters, referenceBindings: [] });
+  assert.equal(result.authorityBoard, undefined);
+  assert.equal(result.lint.ok, true, JSON.stringify(result.lint));
+  assert.match(result.compiledContentPrompt, /无名公寓/u);
+  assert.match(result.compiledContentPrompt, /入口到客厅的完整空间关系/u);
+  assert.match(result.compiledContentPrompt, /干净的纯环境参考/u);
+  assert.match(result.compiledContentPrompt, /不得出现人物、演员、面孔、身体、手脚、人物剪影、人物倒影、群像或角色表演/u);
+  assert.match(result.compiledContentPrompt, /人物数量、动作和对白只解释空间用途，不得画进场景权威像素/u);
+});
+
+test("portrait scene parameters compile observable vertical depth without leaking technical size text", () => {
+  const scene = {
+    authorityId: "scene-portrait", authorityType: "scene", displayName: "竖屏旧公寓", riskLevel: "high", status: "candidate",
+    architecture: "窄入口通向客厅与楼梯", materials: "湿墙与旧木门",
+    spatialLogic: { entrance: "前景", livingRoom: "后景" }, lightingBaseline: { source: "入口冷天光" }, palette: { base: ["灰蓝"] },
+    viewSpecs: [{ ...view, viewId: "space", label: "空间母版", description: "入口至客厅的连续空间" }],
+    referenceAssetIds: [], acceptanceCriteria: ["路径清楚"], prohibitedChanges: ["镜像空间"], revision: 1
+  };
+  const result = compileSceneAuthorityPrompt({
+    authority: scene,
+    visualBible: bible,
+    generationParameters: { ...imageParameters, aspectRatio: "2:3", resolution: "1024x1536" },
+    referenceBindings: []
+  });
+  assert.match(result.compiledContentPrompt, /竖向空间纵深构图/u);
+  assert.match(result.compiledContentPrompt, /入口与门槛位于前景/u);
+  assert.doesNotMatch(result.compiledContentPrompt, /1024x1536|2\s*:\s*3/u);
+});
+
 test("storyboard compiler preserves shot meaning while isolating grids and proxy style", () => {
   const result = compileStoryboardPrompt({
     storyboard: { storyboardId: "storyboard-1", layout: "storyboard_sheet", shotIds: [shot.shotId], panelSpecs: [{ shotId: shot.shotId, label: "等待转身" }], continuityLocks: [], styleIsolation: ["把网格带入成片"], revision: 1 },
@@ -251,6 +336,9 @@ test("single-keyframe compiler describes one frozen instant and strips temporal 
   assert.match(result.compiledContentPrompt, /唯一冻结时刻：最近酒客刚完成转头/u);
   assert.match(result.compiledContentPrompt, /参考图1「入口空间调度底图」 = 人物站位与摄影机方位。/u);
   assert.match(result.compiledContentPrompt, /只生成一个明确时刻/u);
+  assert.match(result.compiledContentPrompt, /纵向竖屏画布/u);
+  assert.match(result.compiledContentPrompt, /参考图是横幅，也不得继承其画布比例/u);
+  assert.match(result.compiledContentPrompt, /一个景别、一个机位和一个焦平面/u);
   assert.doesNotMatch(result.compiledContentPrompt, /跨过门槛|尸傀封堵后出口|完整四秒推轨/u);
   assert.doesNotMatch(result.compiledContentPrompt, /directorStageBinding|cameraSnapshot|directorStageCamera|media-internal|cam-internal/u);
   assert.doesNotMatch(result.compiledContentPrompt, /最终镜头时长|16\s*:\s*9/u);

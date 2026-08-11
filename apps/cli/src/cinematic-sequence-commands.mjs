@@ -14,7 +14,23 @@ export async function executeCinematicSequenceCommand(app, area, action, flags) 
   if (area === "sequence-previs" && action === "get") return { handled: true, value: await app.getSequencePrevis({ projectId, productionId, sequencePrevisId: required(flags, "previs") }) };
   if (area === "sequence-previs" && action === "update") return { handled: true, value: await app.updateSequencePrevis({ projectId, productionId, sequencePrevisId: required(flags, "previs"), patch: data(flags) }) };
   if (area === "sequence-previs" && action === "versions") return { handled: true, value: { versions: await app.listSequencePrevisVersions({ projectId, productionId, sequencePrevisId: required(flags, "previs") }) } };
-  if (area === "sequence-previs" && action === "review") return { handled: true, value: await app.reviewSequencePrevis({ projectId, productionId, sequencePrevisId: required(flags, "previs"), revision: flags.revision ? Number(flags.revision) : undefined, state: required(flags, "state"), note: flags.note }) };
+  if (area === "sequence-previs" && action === "playback-receipt") return { handled: true, value: await app.recordSequencePrevisPlayback({ projectId, productionId, sequencePrevisId: required(flags, "previs"), playback: data(flags) }) };
+  if (area === "sequence-previs" && action === "playback-receipts") return { handled: true, value: { playbackReceipts: await app.listSequencePrevisPlaybackReceipts({ projectId, productionId, sequencePrevisId: required(flags, "previs") }) } };
+  if (area === "sequence-previs" && action === "review") {
+    const submitted = data(flags);
+    return {
+      handled: true,
+      value: await app.reviewSequencePrevis({
+        ...submitted,
+        projectId,
+        productionId,
+        sequencePrevisId: required(flags, "previs"),
+        revision: flags.revision ? Number(flags.revision) : submitted.revision,
+        state: flags.state || submitted.state || required(flags, "state"),
+        note: flags.note ?? submitted.note,
+      }),
+    };
+  }
   if (area === "visual-context" && action === "compile") return { handled: true, value: await app.compileVisualContextBundle({ projectId, productionId, sequencePrevisId: required(flags, "previs"), shotId: required(flags, "shot") }) };
   if (area === "visual-context" && action === "list") return { handled: true, value: { visualContextBundles: await app.listVisualContextBundles({ projectId, productionId, shotId: flags.shot }) } };
   if (area === "take-memory" && action === "add") return { handled: true, value: await app.addVisualTakeMemory({ projectId, productionId, visualTakeMemory: data(flags) }) };

@@ -9,22 +9,17 @@ import {
   evaluatePromptConstraintCoverage
 } from "./cinematic-prompt-coverage-policy.mjs";
 import { scopeAuthorityBoardConstraints } from "./authority-board-constraint-scope-policy.mjs";
+import { resolveCinematicAbstractIntent } from "./cinematic-abstract-intent-policy.mjs";
+import {
+  DEFAULT_CHARACTER_IDENTITY_BOARD_ID,
+  assertCharacterAuthorityImageOutputParameters,
+  characterAuthorityBoardSpecs,
+  renderCharacterAuthorityBoardLayout
+} from "./cinematic-character-authority-prompt-policy.mjs";
 
 export const CINEMATIC_IMAGE_PROMPT_COMPILER_VERSION = "2.8.0";
-export const DEFAULT_CHARACTER_IDENTITY_BOARD_ID = "identity-master";
+export { DEFAULT_CHARACTER_IDENTITY_BOARD_ID };
 export const DEFAULT_SCENE_SPACE_BOARD_ID = "space-master";
-
-const DEFAULT_CHARACTER_IDENTITY_BOARD = Object.freeze({
-  boardId: DEFAULT_CHARACTER_IDENTITY_BOARD_ID,
-  boardType: "identity",
-  label: "特写＋六视图身份母版",
-  purpose: "锁定单一角色的面孔、头骨、体型、服装妆发、比例、轮廓与中性状态，作为后续所有表演、动作、技能、伤势和道具交互板的身份来源",
-  viewSpecIds: [],
-  referencePolicy: "none",
-  acceptanceCriteria: ["完整头肩特写与六个视图属于同一身份", "头、手、腿、鞋和服装轮廓完整可验收"],
-  prohibitedChanges: ["新增第二个身份", "用动作姿态替代中性身份基准", "把武器、技能特效或伤势状态混入中性身份母版", "加入文字、编号、水印或界面"],
-  required: true
-});
 
 const TECHNICAL_PATTERNS = [
   { code: "aspect_ratio_leak", pattern: /(?:画幅|宽高比|比例)?\s*(?:16\s*:\s*9|9\s*:\s*16|1\s*:\s*1)/iu },
@@ -168,7 +163,19 @@ function renderAuthorityVisualStyle(visualBible, authority, authorityBoard = nul
   return [...common, exactLook ? `本角色造型：${clean(exactLook)}` : "", ...styleProhibitions.map((item) => `不得${item.replace(/^(?:不得|禁止)/u, "")}`)].filter(Boolean);
 }
 
-function renderAuthorityOutputDiscipline(authorityType, authorityBoard = null) {
+function renderParameterDrivenComposition(authorityType, generationParameters) {
+  const [width, height] = String(generationParameters?.resolution || "").split("x").map(Number);
+  if (!(width > 0 && height > 0) || width === height) return [];
+  if (height > width && authorityType === "scene") return [
+    "使用竖向空间纵深构图：入口与门槛位于前景，主行动路径沿画面长轴进入中景，客厅落点与楼梯作为后景锚点；空间本体覆盖完整画面，不得把横向画面缩小后置于上下补边中。"
+  ];
+  if (height > width) return [
+    "使用竖向资产构图：主体完整居中，沿画面长轴组织留白与尺度，不得把横向画面缩小后置于上下补边中。"
+  ];
+  return ["使用横向资产构图：所有规定视图沿画面宽轴完整排布，等比例、等基线，不得裁切主体。"];
+}
+
+function renderAuthorityOutputDiscipline(authorityType, authorityBoard = null, generationParameters = null) {
   const annotatedControl = authorityBoard?.pixelMode === "annotated_control";
   const common = annotatedControl
     ? [
@@ -177,9 +184,28 @@ function renderAuthorityOutputDiscipline(authorityType, authorityBoard = null) {
         "标注必须与人物像素和 Prompt 完全一致；每条标记只控制其声明的几何事实。后续干净候选必须去除全部标记，标注控制板不得直接成为角色 Authority、关键帧或视频参考。"
       ]
     : ["输出为纯视觉资产板，不得出现任何可读文字、数字、标题、注释、编号、标尺字符、字幕、水印、徽标或界面元素；板件语义由结构化合同保存，不写进像素。"];
-  if (authorityType === "prop") return [...common, "道具权威只展示道具本体、状态碎片和必要的匿名手部或前臂；不得生成有身份的完整人物、面孔、发型、服装或角色表演。", "所有视图中的道具几何、材质、尺度和状态必须属于同一件资产；匿名手部只用于说明握法、左右手或接触点，不控制角色身份。"];
-  if (authorityType === "scene") return [...common, "场景权威只控制空间、建筑、材质、固定锚点、灯光和破坏状态；不得生成承担角色身份的清晰人物特写。"];
-  return [...common, annotatedControl ? "字母和线条只能辅助可见解剖结构，不能代替正确的正面、侧面、背面或头肩像素。" : "角色身份母版不得用文字标签代替可见的正面、侧面、背面、全身或头肩视图。"];
+  if (authorityType === "prop") return [
+    ...common,
+    ...renderParameterDrivenComposition(authorityType, generationParameters),
+    "道具权威只展示道具本体、状态碎片和必要的匿名手部或前臂；不得生成有身份的完整人物、面孔、发型、服装或角色表演。",
+    "所有视图中的道具几何、材质、尺度和状态必须属于同一件资产；匿名手部只用于说明握法、左右手或接触点，不控制角色身份。",
+    "道具轮廓之外使用单一、无渐变、无纹理的中性浅灰背景 #D2D2CE；不得出现摄影棚墙角、地平线、布景或环境反射。"
+  ];
+  if (authorityType === "scene") return [
+    ...common,
+    ...renderParameterDrivenComposition(authorityType, generationParameters),
+    "场景权威是干净的纯环境参考，只控制空间、建筑、材质、固定锚点、灯光和破坏状态。",
+    "画面中不得出现人物、演员、面孔、身体、手脚、人物剪影、人物倒影、群像或角色表演；剧作中的人物数量、动作和对白只解释空间用途，不得画进场景权威像素。"
+  ];
+  if (authorityBoard?.boardType === "appearance_external_identity") {
+    return [
+      ...common,
+      ...renderParameterDrivenComposition(authorityType, generationParameters),
+      "当前板件是虚拟人物配套造型权威，不是脸部身份图；不得生成可被误认为身份来源的清晰具体五官。",
+      "只展示服装、妆发轮廓、体态比例、鞋履与材质，面孔职责由结构化绑定的 Ark virtual_person_asset 独占。"
+    ];
+  }
+  return [...common, ...renderParameterDrivenComposition(authorityType, generationParameters), annotatedControl ? "字母和线条只能辅助可见解剖结构，不能代替正确的正面、侧面、背面或头肩像素。" : "角色身份母版不得用文字标签代替可见的正面、侧面、背面、全身或头肩视图。"];
 }
 
 function renderControlAnnotations(authorityBoard) {
@@ -191,10 +217,11 @@ function boardScopedConstraints(authorityItems, boardItems, authorityBoard, subj
   return scopeAuthorityBoardConstraints({ authorityItems, boardItems, authorityBoard, subjectMode });
 }
 
-export function lintCinematicImagePrompt({ compiledContentPrompt, generationParameters, referenceBindings = [] }) {
+export function lintCinematicImagePrompt({ abstractIntentResolution = null, compiledContentPrompt, generationParameters, referenceBindings = [] }) {
   const errors = [];
   const warnings = [];
   const prompt = clean(compiledContentPrompt);
+  errors.push(...(Array.isArray(abstractIntentResolution?.errors) ? abstractIntentResolution.errors : []));
   if (UNBOUND_IMAGE_PATTERN.test(prompt)) errors.push({ code: "unbound_image_reference", message: "Prompt contains an image placeholder that is not bound to the final payload order." });
   for (const entry of TECHNICAL_PATTERNS) if (entry.pattern.test(prompt)) errors.push({ code: entry.code, message: "Generation parameters and CLI arguments must remain outside the content Prompt." });
   for (const value of [generationParameters?.provider, generationParameters?.model].filter(Boolean)) {
@@ -218,8 +245,8 @@ export function lintCinematicImagePrompt({ compiledContentPrompt, generationPara
   return { bytes: utf8Bytes(compiledContentPrompt), errors, ok: errors.length === 0, warnings };
 }
 
-function envelope({ authority, protocolId, prompt, generationParameters, referenceBindings, negatives, manualOverride, authorityBoard = null, coverageAudit = null, visualBible = null }) {
-  const lint = lintCinematicImagePrompt({ compiledContentPrompt: prompt, generationParameters, referenceBindings });
+function envelope({ abstractIntentResolution = null, authority, protocolId, prompt, generationParameters, referenceBindings, negatives, manualOverride, authorityBoard = null, coverageAudit = null, visualBible = null }) {
+  const lint = lintCinematicImagePrompt({ abstractIntentResolution, compiledContentPrompt: prompt, generationParameters, referenceBindings });
   const result = {
     protocolId,
     protocolVersion: "2.0.0",
@@ -232,6 +259,7 @@ function envelope({ authority, protocolId, prompt, generationParameters, referen
     negativeConstraints: [...new Set(negatives.map(clean).filter(Boolean))],
     referenceBindings,
     generationParameters,
+    abstractIntentResolution,
     compilerVersion: CINEMATIC_IMAGE_PROMPT_COMPILER_VERSION,
     payloadHash: "",
     lint,
@@ -240,21 +268,12 @@ function envelope({ authority, protocolId, prompt, generationParameters, referen
     requiresPreflight: manualOverride || !lint.ok || coverageAudit?.ok === false
   };
   if (authorityBoard) result.authorityBoard = authorityBoard;
-  result.payloadHash = hash({ protocolId, prompt, referenceBindings: referenceBindings.map(({ mediaId, providerIndex, role }) => ({ mediaId, providerIndex, role })), generationParameters, targetId: result.targetId, revision: authority.revision, visualBibleRevision: visualBible?.revision ?? null, authorityBoard });
+  result.payloadHash = hash({ abstractIntentResolution, protocolId, prompt, referenceBindings: referenceBindings.map(({ mediaId, providerIndex, role }) => ({ mediaId, providerIndex, role })), generationParameters, targetId: result.targetId, revision: authority.revision, visualBibleRevision: visualBible?.revision ?? null, authorityBoard });
   assertCinematicContract("CinematicImagePromptEnvelopeV2", result);
   return result;
 }
 
-export function characterAuthorityBoardSpecs(authority) {
-  const explicit = Array.isArray(authority?.boardSpecs) ? authority.boardSpecs : [];
-  const identity = explicit.find((entry) => entry?.boardId === DEFAULT_CHARACTER_IDENTITY_BOARD_ID);
-  const fallbackIdentity = authority?.subjectMode === "ensemble" ? {
-    ...DEFAULT_CHARACTER_IDENTITY_BOARD,
-    label: "群像变体身份母版",
-    purpose: "锁定群体共同物种规则、时代服装、材质与变体边界，同时保留可辨识的个体差异"
-  } : DEFAULT_CHARACTER_IDENTITY_BOARD;
-  return [identity ? { ...fallbackIdentity, ...identity, boardType: "identity", required: true } : fallbackIdentity, ...explicit.filter((entry) => entry?.boardId !== DEFAULT_CHARACTER_IDENTITY_BOARD_ID)];
-}
+export { characterAuthorityBoardSpecs };
 
 function characterBoard(authority, boardId) {
   const resolved = characterAuthorityBoardSpecs(authority).find((entry) => entry.boardId === (boardId || DEFAULT_CHARACTER_IDENTITY_BOARD_ID));
@@ -273,22 +292,13 @@ function sceneBoard(authority, boardId) {
   return resolved;
 }
 
-function renderIdentityBoardLayout() {
-  return [
-    "横版画布固定分为左右两区：左侧约 60% 为 2×3 六个等尺寸面板，右侧约 40% 为一张大尺寸完整头肩特写。",
-    "左侧上排依次为完整头部正面、标准侧面或清晰三分之四侧面、头部背面；下排依次为全身正面、标准侧面或清晰三分之四侧面、全身背面。",
-    "右侧特写必须完整包含头顶、全部头发、发际线、双耳、完整脸型、下颌、颈部与双肩，不得裁切。",
-    "六视图与特写保持同一面孔、头骨、五官比例、年龄、肤色、体型、发型和基础服装；中性站姿与中性表情，纯净摄影棚背景。",
-    "身份母版只锁人物身份：双手自然放松且不持物，不展示武器、技能特效、伤势或剧情动作；这些内容必须进入引用已验收身份的独立道具、表演、技能或伤势板件。"
-  ];
-}
-
 function compileAuthority({ authority, visualBible = null, generationParameters, referenceBindings = [], manualOverride = false, manualPrompt = "", boardId = DEFAULT_CHARACTER_IDENTITY_BOARD_ID }) {
   const contract = authority.authorityType === "character" ? "CharacterAuthoritySet" : authority.authorityType === "scene" ? "SceneAuthoritySet" : "PropAuthoritySpec";
   assertCinematicContract(contract, authority);
   const parameterValidation = validateCinematicImageGenerationParameters(generationParameters);
   if (!parameterValidation.ok) assertCinematicContract("CinematicImageGenerationParameters", generationParameters);
   const references = renderReferences(referenceBindings);
+  const abstractIntentResolution = resolveCinematicAbstractIntent({ authority, target: "image", visualBible });
   let body;
   let protocolId = "ununu.image.v2";
   let authorityBoard = null;
@@ -296,6 +306,7 @@ function compileAuthority({ authority, visualBible = null, generationParameters,
   if (authority.authorityType === "character") {
     protocolId = "ununu.character.v2";
     authorityBoard = characterBoard(authority, boardId);
+    assertCharacterAuthorityImageOutputParameters(generationParameters, authorityBoard.boardId);
     coverageAudit = evaluatePromptConstraintCoverage({
       coverage: authorityBoard.promptCoverage,
       required: authorityBoard.requirePromptCoverage === true
@@ -304,25 +315,45 @@ function compileAuthority({ authority, visualBible = null, generationParameters,
       throw Object.assign(new Error(`Character board ${authorityBoard.boardId} requires an accepted authority reference`), { code: "character_board_reference_required" });
     }
     const selectedViewIds = new Set(authorityBoard.viewSpecIds);
-    const selectedViews = selectedViewIds.size ? authority.viewSpecs.filter((view) => selectedViewIds.has(view.viewId)) : authority.viewSpecs;
-    const acceptance = boardScopedConstraints(authority.acceptanceCriteria, authorityBoard.acceptanceCriteria, authorityBoard, authority.subjectMode);
+    const externalIdentityAppearance = authorityBoard.boardType === "appearance_external_identity";
+    const selectedViews = externalIdentityAppearance
+      ? []
+      : selectedViewIds.size ? authority.viewSpecs.filter((view) => selectedViewIds.has(view.viewId)) : authority.viewSpecs;
+    const authorityAcceptance = externalIdentityAppearance
+      ? list(authority.acceptanceCriteria).filter((item) => !/(?:面孔|五官|身份图)/u.test(item))
+      : authority.acceptanceCriteria;
+    const acceptance = boardScopedConstraints(authorityAcceptance, authorityBoard.acceptanceCriteria, authorityBoard, authority.subjectMode);
     const prohibited = boardScopedConstraints(authority.prohibitedChanges, authorityBoard.prohibitedChanges, authorityBoard, authority.subjectMode);
     body = [
       section("参考图映射", references),
       section("项目视觉媒介与风格权威", renderAuthorityVisualStyle(visualBible, authority, authorityBoard)),
-      section("输出图形纪律", renderAuthorityOutputDiscipline(authority.authorityType, authorityBoard)),
-      section("人物身份权威", [`${authority.displayName}：${authority.identityDescription}`, `主体模式：${authority.subjectMode === "ensemble" ? "群像变体" : "单一角色"}`, `身份锁：${list(authority.identityLocks).join("；")}`, `服装妆发：${record(authority.wardrobeMakeupHair)}`]),
+      section("抽象意图具体化", abstractIntentResolution.providerClauses),
+      section("输出图形纪律", renderAuthorityOutputDiscipline(authority.authorityType, authorityBoard, generationParameters)),
+      section(externalIdentityAppearance ? "人物造型权威与身份职责分离" : "人物身份权威", [
+        `${authority.displayName}：${authority.identityDescription}`,
+        `主体模式：${authority.subjectMode === "ensemble" ? "群像变体" : "单一角色"}`,
+        `身份锁：${list(authority.identityLocks).join("；")}`,
+        `服装妆发：${record(authority.wardrobeMakeupHair)}`,
+        externalIdentityAppearance
+          ? "面孔身份职责：只由已绑定的 Ark virtual_person_asset 承担；当前图片不得声称由该 ID 生成或复制其面孔。"
+          : ""
+      ]),
       section("本次角色板件", [`${authorityBoard.label}（${authorityBoard.boardType}）`, `用途：${authorityBoard.purpose}`, `参考策略：${authorityBoard.referencePolicy}`]),
       section("控制标注图例", renderControlAnnotations(authorityBoard)),
       section("逐域 Prompt 覆盖", renderPromptCoverage(authorityBoard.promptCoverage)),
-      authorityBoard.boardId === DEFAULT_CHARACTER_IDENTITY_BOARD_ID && authority.subjectMode !== "ensemble" ? section("身份母版固定版式", renderIdentityBoardLayout()) : "",
+      authorityBoard.boardId === DEFAULT_CHARACTER_IDENTITY_BOARD_ID && authority.subjectMode !== "ensemble"
+        ? section(
+            externalIdentityAppearance ? "造型母版固定版式" : "身份母版固定版式",
+            renderCharacterAuthorityBoardLayout({ externalIdentityAppearance })
+          )
+        : "",
       section("权威视图", renderViews(selectedViews)),
       section("验收", acceptance),
       section("禁止改变", prohibited.map((item) => `不得${item.replace(/^不得/u, "")}`))
     ];
   } else if (authority.authorityType === "scene") {
     authorityBoard = sceneBoard(authority, boardId === DEFAULT_CHARACTER_IDENTITY_BOARD_ID ? null : boardId);
-    if (authorityBoard?.referencePolicy !== "none" && referenceBindings.length === 0) {
+    if (authorityBoard && authorityBoard.referencePolicy !== "none" && referenceBindings.length === 0) {
       throw Object.assign(new Error(`Scene board ${authorityBoard.boardId} requires an accepted authority reference`), { code: "scene_board_reference_required" });
     }
     const selectedViewIds = new Set(authorityBoard?.viewSpecIds ?? []);
@@ -332,7 +363,8 @@ function compileAuthority({ authority, visualBible = null, generationParameters,
     body = [
       section("参考图映射", references),
       section("项目视觉媒介与风格权威", renderAuthorityVisualStyle(visualBible, authority, authorityBoard)),
-      section("输出图形纪律", renderAuthorityOutputDiscipline(authority.authorityType, authorityBoard)),
+      section("抽象意图具体化", abstractIntentResolution.providerClauses),
+      section("输出图形纪律", renderAuthorityOutputDiscipline(authority.authorityType, authorityBoard, generationParameters)),
       section("场景空间权威", authorityBoard
         ? [`${authority.displayName}：${authority.architecture}`, `固定尺寸与锚点：${record({ dimensionsMeters: authority.spatialLogic?.dimensionsMeters, anchors: authority.spatialLogic?.anchors })}`, `材质：${authority.materials}`, ...(authorityBoard.boardType === "lighting_continuity" || authorityBoard.boardId === DEFAULT_SCENE_SPACE_BOARD_ID ? [`基准光源：${clean(authority.lightingBaseline?.source)}`, `基础色卡：${list(authority.palette?.base).join("；")}`] : [])]
         : [`${authority.displayName}：${authority.architecture}`, `空间逻辑：${record(authority.spatialLogic)}`, `材质：${authority.materials}`, `基准灯光：${record(authority.lightingBaseline)}`, `综合色卡：${record(authority.palette)}`]),
@@ -346,7 +378,8 @@ function compileAuthority({ authority, visualBible = null, generationParameters,
     body = [
       section("参考图映射", references),
       section("项目视觉媒介与风格权威", renderAuthorityVisualStyle(visualBible, authority, authorityBoard)),
-      section("输出图形纪律", renderAuthorityOutputDiscipline(authority.authorityType, authorityBoard)),
+      section("抽象意图具体化", abstractIntentResolution.providerClauses),
+      section("输出图形纪律", renderAuthorityOutputDiscipline(authority.authorityType, authorityBoard, generationParameters)),
       section("道具权威", [`${authority.displayName}；叙事功能：${authority.narrativeFunction}`, `几何：${authority.geometry}`, `材质：${authority.material}`, `尺度：${authority.scale}`, `磨损状态：${authority.wearState}`, `交互规则：${record(authority.interactionRules)}`]),
       section("权威视图", renderViews(authority.viewSpecs)),
       section("验收", list(authority.acceptanceCriteria)),
@@ -358,7 +391,7 @@ function compileAuthority({ authority, visualBible = null, generationParameters,
     ...boardScopedConstraints(authority.prohibitedChanges, authorityBoard?.prohibitedChanges, authorityBoard, authority.subjectMode),
     ...list(visualBible?.styleProhibitions)
   ];
-  return envelope({ authority, protocolId, prompt, generationParameters, referenceBindings, negatives: negativeConstraints, manualOverride, authorityBoard, coverageAudit, visualBible });
+  return envelope({ abstractIntentResolution, authority, protocolId, prompt, generationParameters, referenceBindings, negatives: negativeConstraints, manualOverride, authorityBoard, coverageAudit, visualBible });
 }
 
 export function compileCharacterAuthorityPrompt(input) {
@@ -377,6 +410,7 @@ export function compileStoryboardPrompt({ storyboard, shots, visualBible, genera
   assertCinematicContract("StoryboardPromptSpec", storyboard);
   assertCinematicContract("VisualBible", visualBible);
   for (const shot of shots) assertCinematicContract("CinematicShotSpec", shot);
+  const abstractIntentResolution = resolveCinematicAbstractIntent({ shots, target: "image", visualBible });
   const shotById = new Map(shots.map((shot) => [shot.shotId, shot]));
   const isSingleKeyframe = storyboard.panelSpecs.length === 1 && Boolean(clean(storyboard.panelSpecs[0]?.keyframeMoment));
   if (isSingleKeyframe && referenceBindings.length > 5) {
@@ -391,16 +425,21 @@ export function compileStoryboardPrompt({ storyboard, shots, visualBible, genera
       section("参考", renderKeyframeReferences(referenceBindings)),
       section("单帧任务", [
         "只生成一个明确时刻的一张满幅叙事关键帧：单一摄影机、单一曝光、单一连续空间，不生成整段动作过程。",
+        "输出必须使用纵向竖屏画布，画布高度明显大于宽度；绝不能输出横屏、宽银幕或横向全景。像素尺寸由生成参数锁定，不得从参考图比例或摄影机运动词推断画布方向。",
+        "参考图只在各自声明的职责范围内提供内容证据；即使某张参考图是横幅，也不得继承其画布比例、留白、边框或排版。",
+        "摄影机路径、摇移、拉焦与景别变化只用于确定冻结时刻的机位和焦点；本帧只能呈现该时刻的一个景别、一个机位和一个焦平面，不得把运镜过程横向铺开。",
         "画面从左到右、从上到下必须属于同一个时刻；不得使用任何内部边框、横向或纵向分割、重复人物或时间跳切。",
+        "所有叙事主体、关键动作接触点和场景锚点必须位于中央安全构图区；左右边缘只保留可裁切的环境延伸，不得把脸、手、关键道具或文字信息贴近边缘。",
         "不得把动作前后多个时刻同时画进一张图；不得输出拼贴、蒙太奇拼图、分屏、连环画、多宫格、接触表、六视图、角色设定板、文字、箭头、编号、水印或界面。",
         "导演台参考只锁定空间站位、视线轴、摄影机方位与前后景层级；代理人物、网格和线框不得进入最终画面。"
       ]),
       section("视觉风格", visualStyle),
+      section("抽象意图具体化", abstractIntentResolution.providerClauses),
       renderSingleKeyframePanel(panel, shot, 0),
       section("风格隔离", list(storyboard.styleIsolation).map((item) => `不得${item.replace(/^不得/u, "")}`))
     ];
     const prompt = manualOverride ? clean(manualPrompt) : body.filter(Boolean).join("\n\n");
-    return envelope({ authority: storyboard, protocolId: "ununu.storyboard.keyframe.v1", prompt, generationParameters, referenceBindings, negatives: [...storyboard.styleIsolation, ...list(shot.mustNotAppearYet)], manualOverride });
+    return envelope({ abstractIntentResolution, authority: storyboard, protocolId: "ununu.storyboard.keyframe.v1", prompt, generationParameters, referenceBindings, negatives: [...storyboard.styleIsolation, ...list(shot.mustNotAppearYet)], manualOverride });
   }
   const panels = storyboard.panelSpecs.map((panel, index) => {
     const shot = shotById.get(panel.shotId);
@@ -427,12 +466,13 @@ export function compileStoryboardPrompt({ storyboard, shots, visualBible, genera
       `画面必须让主体站位、视线目标、动作接触点、前后景层级和摄影机方位可被直接验收，不用文字、箭头、编号或UI解释。`
     ]),
     section("项目视觉连续性", [`视觉母题：${list(visualBible.visualMotifs).join("；")}`, `色彩弧线：${record(visualBible.colorArc)}`, `空间戏剧：${record(visualBible.spatialDramaturgy)}`]),
+    section("抽象意图具体化", abstractIntentResolution.providerClauses),
     section("有序画格", panels),
     section("连续性锁", [...list(storyboard.continuityLocks), ...list(visualBible.continuityLocks)]),
     section("风格隔离", list(storyboard.styleIsolation).map((item) => `不得${item.replace(/^不得/u, "")}`))
   ];
   const prompt = manualOverride ? clean(manualPrompt) : body.filter(Boolean).join("\n\n");
-  return envelope({ authority: storyboard, protocolId: "ununu.storyboard.v2", prompt, generationParameters, referenceBindings, negatives: storyboard.styleIsolation, manualOverride });
+  return envelope({ abstractIntentResolution, authority: storyboard, protocolId: "ununu.storyboard.v2", prompt, generationParameters, referenceBindings, negatives: storyboard.styleIsolation, manualOverride });
 }
 
 export function routeAssetAuthorityRisk({ storyPacket, shots = [] }) {

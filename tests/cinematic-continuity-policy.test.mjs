@@ -198,6 +198,50 @@ test("Core derives continuity audit evidence from the persisted evaluation inste
   assert.equal(evidence.continuityAudit.checks.sourceChecksum, source.checksum);
 });
 
+test("Core always projects a continuity audit for a generation unit, including an initial unstructured shot", () => {
+  const evidence = buildExecutionGateEvidence([], [], {
+    evaluations: [],
+    generationUnit: {},
+    shots: [{ shotId: "shot-initial", revision: 1 }]
+  });
+  assert.ok(evidence.continuityAudit);
+  assert.equal(typeof evidence.continuityAudit.ok, "boolean");
+});
+
+test("current Sequence Previs plus scene topology can carry a single-shot continuity boundary", () => {
+  const audit = auditCinematicContinuity({
+    generationUnit: {
+      sequenceState: {
+        sceneId: "scene-1",
+        plannedStartState: { blocking: "八人在入口承重" },
+        plannedEndState: { blocking: "八人在入口停稳" }
+      },
+      sequenceWorkspaceBinding: {
+        sequencePrevisId: "sequence-previs-1",
+        sequencePrevisRevision: 2,
+        visualContextBundleId: "visual-context-1"
+      },
+      sceneAuthorityBinding: {
+        authorityId: "scene-authority-1",
+        authorityRevision: 3,
+        topologyRevision: "topology-r1"
+      }
+    },
+    shots: [{ shotId: "shot-1" }]
+  });
+  assert.equal(audit.ok, true, JSON.stringify(audit.errors));
+  assert.equal(audit.checks.sequenceBoundaryShots, 1);
+  assert.equal(audit.warnings[0].code, "continuity_sequence_workspace_boundary_used");
+});
+
+test("an unstructured shot without accepted sequence and scene bindings remains blocked", () => {
+  const audit = auditCinematicContinuity({
+    generationUnit: { sequenceState: { plannedStartState: { blocking: "入口" }, plannedEndState: { blocking: "客厅" } } },
+    shots: [{ shotId: "shot-1" }]
+  });
+  assert.equal(audit.errors.some((entry) => entry.code === "continuity_plan_required"), true);
+});
+
 test("a later Owner REJECT revokes an earlier ACCEPT for automation reuse", () => {
   const evaluations = [
     {

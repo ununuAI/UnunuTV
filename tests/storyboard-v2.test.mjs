@@ -63,7 +63,8 @@ test("cinematic storyboard persists shot lineage and only exports selected image
   await runtime.app.saveVisualBible({ projectId: project.id, productionId: production.productionId, visualBible: visualBible() });
   const savedShot = await runtime.app.saveShot({ projectId: project.id, productionId: production.productionId, shot: shot() });
   const unit = await runtime.app.saveGenerationUnit({ projectId: project.id, productionId: production.productionId, generationUnit: {
-    strategy: "single_shot", shotLinks: [{ shotId: savedShot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [], executionNodeId: video.id,
+    strategy: "single_shot", segmentDecision: "new_shot", segmentSeam: { explicitCut: "deliberate_cut" },
+    shotLinks: [{ shotId: savedShot.shotId, order: 1 }], visualAnchorPolicy: "NONE", requiredCapabilities: [], executionNodeId: video.id,
     generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 5,
       aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} }
   }, referenceBindings: [] });

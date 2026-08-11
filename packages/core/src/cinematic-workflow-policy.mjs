@@ -5,12 +5,17 @@ import {
   CINEMATIC_WORKFLOW_SKILL_VERSION,
   UnuTvError,
   assertCinematicWorkflowManifest,
-  nowIso
+  nowIso,
+  resolveCinematicFormatProfile
 } from "@ununu/unutv-contracts";
 
 export const FORMAL_GENERATION_UNIT_RUN = Symbol("formal-generation-unit-run");
 
 export function buildCinematicWorkflowManifest(input = {}) {
+  const formatProfile = resolveCinematicFormatProfile({
+    aspectRatio: input.aspectRatio,
+    projectType: input.projectType
+  });
   const manifest = {
     format: "UnunuCinematicWorkflowManifest",
     contractVersion: CINEMATIC_WORKFLOW_CONTRACT_VERSION,
@@ -19,6 +24,8 @@ export function buildCinematicWorkflowManifest(input = {}) {
     skillVersion: input.skillVersion ?? CINEMATIC_WORKFLOW_SKILL_VERSION,
     productionId: input.productionId,
     sourceNodeId: input.sourceNodeId,
+    aspectRatio: formatProfile.aspectRatio,
+    formatProfile,
     phases: [...CINEMATIC_WORKFLOW_PHASES],
     targetDurationSeconds: input.targetDurationSeconds ?? 30,
     deliveryMode: input.deliveryMode ?? "single_request_orchestration",

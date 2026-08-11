@@ -14,6 +14,8 @@ const SECTION_ORDER = Object.freeze([
   "other"
 ]);
 
+export const CINEMATIC_CANVAS_GUTTER = 48;
+
 function sectionFor(node) {
   const stage = node.payload?.stage;
   const resourceType = node.payload?.resourceType;
@@ -29,6 +31,24 @@ function size(node) {
     width: Math.max(320, Number(node.width) || 560),
     height: Math.max(240, Number(node.height) || 372)
   };
+}
+
+function isVisible(node) {
+  return (
+    node?.hidden !== true
+    && node?.payload?.hidden !== true
+    && node?.payload?.visible !== false
+    && node?.payload?.canvasVisible !== false
+  );
+}
+
+function rectanglesOverlap(left, right, padding) {
+  return !(
+    left.x + left.width + padding <= right.x
+    || right.x + right.width + padding <= left.x
+    || left.y + left.height + padding <= right.y
+    || right.y + right.height + padding <= left.y
+  );
 }
 
 function stableNodeOrder(left, right) {
@@ -52,11 +72,21 @@ export function buildCinematicCanvasLayout(nodes, {
   gapY = 72,
   sectionGap = 120,
   startX = 80,
-  startY = 80
+  startY = 80,
+  obstacles = [],
+  padding = CINEMATIC_CANVAS_GUTTER
 } = {}) {
   const groups = new Map(SECTION_ORDER.map((section) => [section, []]));
   for (const node of nodes || []) groups.get(sectionFor(node)).push(node);
   const placements = [];
+  const occupied = (obstacles || [])
+    .filter(isVisible)
+    .map((node) => ({
+      nodeId: node.id,
+      x: Number(node.x) || 0,
+      y: Number(node.y) || 0,
+      ...size(node)
+    }));
   let sectionY = startY;
   for (const section of SECTION_ORDER) {
     const entries = groups.get(section).sort(stableNodeOrder);
@@ -68,7 +98,15 @@ export function buildCinematicCanvasLayout(nodes, {
       let rowHeight = 0;
       for (const node of row) {
         const dimensions = size(node);
+        let candidate = { nodeId: node.id, x, y: rowY, ...dimensions };
+        let collisions = occupied.filter((entry) => rectanglesOverlap(candidate, entry, padding));
+        while (collisions.length) {
+          x = Math.max(...collisions.map((entry) => entry.x + entry.width + gapX));
+          candidate = { nodeId: node.id, x, y: rowY, ...dimensions };
+          collisions = occupied.filter((entry) => rectanglesOverlap(candidate, entry, padding));
+        }
         placements.push({ nodeId: node.id, section, x, y: rowY });
+        occupied.push(candidate);
         x += dimensions.width + gapX;
         rowHeight = Math.max(rowHeight, dimensions.height);
       }
@@ -79,21 +117,53 @@ export function buildCinematicCanvasLayout(nodes, {
   return placements;
 }
 
-export function findCinematicCanvasOverlaps(nodes, { padding = 24 } = {}) {
-  const entries = (nodes || []).map((node) => ({ node, ...size(node) }));
+export function findCinematicCanvasOverlaps(nodes, { padding = CINEMATIC_CANVAS_GUTTER } = {}) {
+  const entries = (nodes || []).map((node) => ({
+    node,
+    x: Number(node.x) || 0,
+    y: Number(node.y) || 0,
+    ...size(node)
+  }));
   const overlaps = [];
   for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
     const left = entries[leftIndex];
     for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
       const right = entries[rightIndex];
-      const separated = (
-        (Number(left.node.x) || 0) + left.width + padding <= (Number(right.node.x) || 0)
-        || (Number(right.node.x) || 0) + right.width + padding <= (Number(left.node.x) || 0)
-        || (Number(left.node.y) || 0) + left.height + padding <= (Number(right.node.y) || 0)
-        || (Number(right.node.y) || 0) + right.height + padding <= (Number(left.node.y) || 0)
-      );
-      if (!separated) overlaps.push({ leftNodeId: left.node.id, rightNodeId: right.node.id });
+      if (rectanglesOverlap(left, right, padding)) {
+        overlaps.push({ leftNodeId: left.node.id, rightNodeId: right.node.id });
+      }
     }
   }
   return overlaps;
+}
+
+export function auditCinematicCanvasOverlaps(canvas, productionId, options = {}) {
+  const productionNodes = cinematicProductionNodes(canvas, productionId);
+  const productionNodeIds = new Set(productionNodes.map((node) => node.id));
+  const visibleForeignNodes = (canvas?.nodes || [])
+    .filter(isVisible)
+    .filter((node) => !productionNodeIds.has(node.id));
+  const productionOverlaps = findCinematicCanvasOverlaps(productionNodes, options);
+  const globalOverlaps = findCinematicCanvasOverlaps(
+    [...visibleForeignNodes, ...productionNodes],
+    options
+  )
+    .filter((overlap) => (
+      productionNodeIds.has(overlap.leftNodeId)
+      || productionNodeIds.has(overlap.rightNodeId)
+    ))
+    .map((overlap) => ({
+      ...overlap,
+      scope: productionNodeIds.has(overlap.leftNodeId) && productionNodeIds.has(overlap.rightNodeId)
+        ? "production"
+        : "cross_domain"
+    }));
+  return {
+    productionNodes,
+    visibleForeignNodes,
+    productionOverlaps,
+    globalOverlaps,
+    productionOverlapCount: productionOverlaps.length,
+    globalOverlapCount: globalOverlaps.length
+  };
 }

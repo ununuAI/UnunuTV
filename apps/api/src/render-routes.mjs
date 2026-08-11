@@ -9,13 +9,23 @@ export async function handleRenderRoutes({ body, json, method, pathname, request
     json(response, 202, await runtime.app.createRenderJob({ ...params, ...(await body(request)) })); return true;
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/render-jobs"))) {
-    json(response, 200, { jobs: await runtime.app.listRenderJobs({ ...params, timelineId: url.searchParams.get("timelineId") }) }); return true;
+    json(response, 200, { jobs: await runtime.app.listRenderJobs({
+      ...params,
+      timelineId: url.searchParams.get("timelineId"),
+      includeStale: url.searchParams.get("includeStale") === "true"
+    }) }); return true;
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/render-jobs/:renderJobId"))) {
-    json(response, 200, await runtime.app.getRenderJob(params)); return true;
+    json(response, 200, await runtime.app.getRenderJob({
+      ...params,
+      includeStale: url.searchParams.get("includeStale") === "true"
+    })); return true;
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/render-jobs/:renderJobId/qc"))) {
-    json(response, 200, await runtime.app.getTechnicalQcReport(params)); return true;
+    json(response, 200, await runtime.app.getTechnicalQcReport({
+      ...params,
+      includeStale: url.searchParams.get("includeStale") === "true"
+    })); return true;
   }
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/render-jobs/:renderJobId/cancel"))) {
     json(response, 200, await runtime.app.cancelRenderJob(params)); return true;
@@ -27,10 +37,17 @@ export async function handleRenderRoutes({ body, json, method, pathname, request
     json(response, 201, await runtime.app.createDeliveryPackage({ ...params, ...(await body(request)) })); return true;
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/delivery-packages"))) {
-    json(response, 200, { packages: await runtime.app.listDeliveryPackages({ ...params, renderJobId: url.searchParams.get("renderJobId") }) }); return true;
+    json(response, 200, { packages: await runtime.app.listDeliveryPackages({
+      ...params,
+      renderJobId: url.searchParams.get("renderJobId"),
+      includeStale: url.searchParams.get("includeStale") === "true"
+    }) }); return true;
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/delivery-packages/:packageId"))) {
-    json(response, 200, await runtime.app.getDeliveryPackage(params)); return true;
+    json(response, 200, await runtime.app.getDeliveryPackage({
+      ...params,
+      includeStale: url.searchParams.get("includeStale") === "true"
+    })); return true;
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/delivery-packages/:packageId/files/:role"))) {
     const manifest = await runtime.app.getDeliveryPackage(params);

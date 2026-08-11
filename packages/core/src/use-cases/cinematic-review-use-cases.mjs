@@ -62,7 +62,7 @@ export function createCinematicReviewUseCases({ ports, requireProduction, getUni
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
-    return listEvaluationRecords(projectId, productionId);
+    return listEvaluationRecords(projectId, productionId, input.includeStale === true);
   }
 
   return { addEvaluation, listEvaluations };

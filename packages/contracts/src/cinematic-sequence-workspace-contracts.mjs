@@ -1,4 +1,5 @@
 export const CINEMATIC_SEQUENCE_PREVIS_REVIEW_TYPE = "cinematic_sequence_previs_revision";
+export const CINEMATIC_SEQUENCE_PREVIS_PLAYBACK_RECEIPT_VERSION = "sequence_previs_playback_receipt_v1";
 export const CINEMATIC_SEQUENCE_PREVIS_STATES = Object.freeze(["draft", "candidate", "accepted", "rejected"]);
 export const CINEMATIC_CUT_TRANSITIONS = Object.freeze(["cut", "match_cut", "audio_bridge", "occlusion_cut", "whip_pan", "continuous_no_cut"]);
 
@@ -52,6 +53,74 @@ function validateCutDecision(cut, index, issues) {
   if (!CINEMATIC_CUT_TRANSITIONS.includes(cut.transitionType)) issues.push(issue(`${base}.transitionType`, `${base}.transitionType is invalid`, "invalid_enum"));
   positive(cut.atSeconds, `${base}.atSeconds`, issues, true);
   if (cut.overlapSeconds !== undefined) positive(cut.overlapSeconds, `${base}.overlapSeconds`, issues, true);
+  if (Number(cut.overlapSeconds) > 0) {
+    const handoff = cut.handoffEvidence;
+    if (!record(handoff)) {
+      issues.push(issue(`${base}.handoffEvidence`, "有重叠的连续镜必须提供 H0/H1 handoff 事实。", "sequence_handoff_evidence_required"));
+    } else {
+      for (const field of ["mode", "h0MediaId", "h1MediaId", "verificationId"]) requiredText(handoff[field], `${base}.handoffEvidence.${field}`, issues);
+      positive(handoff.h0Seconds, `${base}.handoffEvidence.h0Seconds`, issues, true);
+      positive(handoff.h1Seconds, `${base}.handoffEvidence.h1Seconds`, issues);
+      positive(handoff.trimStartSeconds, `${base}.handoffEvidence.trimStartSeconds`, issues, true);
+      positive(handoff.trimEndSeconds, `${base}.handoffEvidence.trimEndSeconds`, issues);
+      if (handoff.mode !== "DUPLICATE_HANDOFF") issues.push(issue(`${base}.handoffEvidence.mode`, "重叠 handoff 必须是 DUPLICATE_HANDOFF。", "sequence_handoff_mode_invalid"));
+      if (text(handoff.h0MediaId) && handoff.h0MediaId === handoff.h1MediaId) issues.push(issue(`${base}.handoffEvidence.h1MediaId`, "H0 与 H1 必须是不同的真实帧。", "sequence_handoff_frames_must_differ"));
+      if (Number(handoff.h1Seconds) <= Number(handoff.h0Seconds)) issues.push(issue(`${base}.handoffEvidence.h1Seconds`, "H1 时间必须晚于 H0。", "sequence_handoff_time_invalid"));
+      if (Number(handoff.trimEndSeconds) <= Number(handoff.trimStartSeconds)) issues.push(issue(`${base}.handoffEvidence.trimEndSeconds`, "handoff trim 结束必须晚于开始。", "sequence_handoff_trim_invalid"));
+      if (handoff.fullPlaybackVerified !== true) issues.push(issue(`${base}.handoffEvidence.fullPlaybackVerified`, "handoff 必须记录完整播放核验。", "sequence_handoff_playback_required"));
+    }
+  }
+}
+
+export function validateSequencePrevisPlaybackReceipt(value) {
+  const issues = [];
+  if (!record(value)) return output([issue("playbackReceipt", "playbackReceipt must be an object", "invalid_type")]);
+  if (value.version !== CINEMATIC_SEQUENCE_PREVIS_PLAYBACK_RECEIPT_VERSION) issues.push(issue("version", `version must be ${CINEMATIC_SEQUENCE_PREVIS_PLAYBACK_RECEIPT_VERSION}`, "invalid_version"));
+  for (const field of ["playbackReceiptId", "playbackSessionId", "productionId", "sequencePrevisId", "startedAt", "completedAt", "createdAt"]) requiredText(value[field], field, issues);
+  revision(value.sequencePrevisRevision, "sequencePrevisRevision", issues);
+  positive(value.durationSeconds, "durationSeconds", issues);
+  positive(value.frameRate, "frameRate", issues);
+  positive(value.sampleCount, "sampleCount", issues);
+  positive(value.maxObservedStepMs, "maxObservedStepMs", issues, true);
+  positive(value.manualSeekCount, "manualSeekCount", issues, true);
+  requiredArray(value.intervals, "intervals", issues, 1);
+  for (const [index, interval] of (Array.isArray(value.intervals) ? value.intervals : []).entries()) {
+    if (!record(interval)) {
+      issues.push(issue(`intervals[${index}]`, "playback interval must be an object", "invalid_type"));
+      continue;
+    }
+    positive(interval.startSeconds, `intervals[${index}].startSeconds`, issues, true);
+    positive(interval.endSeconds, `intervals[${index}].endSeconds`, issues);
+    if (Number(interval.endSeconds) <= Number(interval.startSeconds)) issues.push(issue(`intervals[${index}].endSeconds`, "playback interval end must be after start", "invalid_range"));
+  }
+  return output(issues);
+}
+
+export function auditSequencePrevisPlaybackReceipt(playbackReceipt, sequencePrevis) {
+  const errors = [...validateSequencePrevisPlaybackReceipt(playbackReceipt).issues];
+  if (!sequencePrevis || !record(playbackReceipt)) return { errors, ok: false };
+  if (playbackReceipt.sequencePrevisId !== sequencePrevis.sequencePrevisId) errors.push(issue("sequencePrevisId", "播放回执不属于当前 Sequence Previs。", "sequence_playback_receipt_target_mismatch"));
+  if (Number(playbackReceipt.sequencePrevisRevision) !== Number(sequencePrevis.revision)) errors.push(issue("sequencePrevisRevision", "播放回执不是当前 Sequence Previs revision。", "sequence_playback_receipt_stale"));
+  if (Math.abs(Number(playbackReceipt.durationSeconds) - Number(sequencePrevis.durationSeconds)) > 0.01) errors.push(issue("durationSeconds", "播放回执时长与当前 Sequence Previs 不一致。", "sequence_playback_duration_mismatch"));
+  if (Number(playbackReceipt.manualSeekCount) !== 0) errors.push(issue("manualSeekCount", "完整播放期间发生了手动跳转。", "sequence_playback_manual_seek_forbidden"));
+  // requestAnimationFrame may briefly stall while a large read-only canvas paints
+  // or the OS schedules another process. A sub-second stall still advances the
+  // same continuous timeline interval and is not a seek. Longer stalls remain a
+  // fail-closed signal that the sequence was not visibly observed continuously.
+  const maximumStepMs = Math.max(1000, 2000 / Math.max(1, Number(playbackReceipt.frameRate)));
+  if (Number(playbackReceipt.maxObservedStepMs) > maximumStepMs) errors.push(issue("maxObservedStepMs", `播放步进 ${playbackReceipt.maxObservedStepMs}ms 超过连续播放上限 ${maximumStepMs}ms。`, "sequence_playback_step_gap"));
+  const intervals = [...(Array.isArray(playbackReceipt.intervals) ? playbackReceipt.intervals : [])]
+    .filter(record)
+    .sort((left, right) => Number(left.startSeconds) - Number(right.startSeconds));
+  let cursor = 0;
+  for (const [index, interval] of intervals.entries()) {
+    const start = Number(interval.startSeconds), end = Number(interval.endSeconds);
+    if (start > cursor + 0.01) errors.push(issue(`intervals[${index}]`, `播放在 ${cursor.toFixed(3)}s→${start.toFixed(3)}s 存在跳段。`, "sequence_playback_coverage_gap"));
+    cursor = Math.max(cursor, end);
+  }
+  if (cursor + 0.01 < Number(sequencePrevis.durationSeconds)) errors.push(issue("intervals", `播放只覆盖到 ${cursor.toFixed(3)}s，未到 ${Number(sequencePrevis.durationSeconds).toFixed(3)}s。`, "sequence_playback_coverage_incomplete"));
+  if (intervals.length && Number(intervals[0].startSeconds) > 0.01) errors.push(issue("intervals[0].startSeconds", "完整播放必须从 0s 开始。", "sequence_playback_start_required"));
+  return { errors, ok: errors.length === 0 };
 }
 
 export function validateSequencePrevisDocument(value) {
@@ -155,8 +224,9 @@ function auditPrevisStructure(sequencePrevis, { mediaRecords = [], reviews = [] 
   return errors;
 }
 
-export function auditSequencePrevisForAcceptance({ mediaRecords = [], reviews = [], sequencePrevis, visualContextBundles = [] } = {}) {
+export function auditSequencePrevisForAcceptance({ mediaRecords = [], playbackReceipt, reviews = [], sequencePrevis, visualContextBundles = [] } = {}) {
   const errors = auditPrevisStructure(sequencePrevis, { mediaRecords, reviews });
+  errors.push(...auditSequencePrevisPlaybackReceipt(playbackReceipt, sequencePrevis).errors);
   if (sequencePrevis) {
     for (const shot of sequencePrevis.shots ?? []) {
       const context = (Array.isArray(visualContextBundles) ? visualContextBundles : [])

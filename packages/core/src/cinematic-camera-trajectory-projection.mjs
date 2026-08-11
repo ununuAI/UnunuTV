@@ -65,10 +65,13 @@ export function deriveCameraTrajectoryPlan({
   const rawPoints = Array.isArray(route.points) && route.points.length
     ? route.points
     : [camera.position, camera.position];
+  const routeStartMs = Number.isFinite(Number(route.startMs))
+    ? Number(route.startMs)
+    : 0;
   const points = rawPoints.map((entry, index) => ({
     ...vector(entry, vector(camera.position)),
     atMs: Number.isFinite(Number(entry?.atMs))
-      ? Number(entry.atMs)
+      ? Number(entry.atMs) - routeStartMs
       : Math.round((durationSeconds * 1000 * index) / Math.max(1, rawPoints.length - 1))
   }));
   const startPosition = vector(points[0], vector(camera.position));

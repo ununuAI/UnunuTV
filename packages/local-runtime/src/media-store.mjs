@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -55,9 +55,19 @@ function runProcess(command, args, options = {}) {
       else child.kill("SIGTERM");
     });
     child.stderr.on("data", (chunk) => { stderr = `${stderr}${chunk.toString()}`.slice(-12000); });
-    child.on("error", (error) => reject(new UnuTvError("media_preparation_tool_unavailable", `无法启动媒体准备工具：${error.message}`, 500)));
+    child.on("error", (error) => reject(new UnuTvError(
+      options.unavailableCode ?? "media_preparation_tool_unavailable",
+      options.unavailableMessage ?? `无法启动媒体准备工具：${error.message}`,
+      500,
+      { command, cause: error.message }
+    )));
     child.on("close", (code, signal) => {
-      if (signal || code !== 0) return reject(new UnuTvError("media_preparation_failed", `媒体准备进程退出：${signal || code}`, 500, { stderr }));
+      if (signal || code !== 0) return reject(new UnuTvError(
+        options.failureCode ?? "media_preparation_failed",
+        options.failureMessage ?? `媒体准备进程退出：${signal || code}`,
+        500,
+        { command, stderr }
+      ));
       resolve(Buffer.concat(stdout));
     });
   });
@@ -85,6 +95,8 @@ export class LocalMediaStore {
     this.projects = projects;
     this.ffmpegPath = options.ffmpegPath ?? process.env.UNUTV_FFMPEG_PATH ?? "ffmpeg";
     this.ffprobePath = options.ffprobePath ?? process.env.UNUTV_FFPROBE_PATH ?? (path.isAbsolute(this.ffmpegPath) ? path.join(path.dirname(this.ffmpegPath), "ffprobe") : "ffprobe");
+    this.audioSeparatorPath = options.audioSeparatorPath ?? process.env.UNUTV_AUDIO_SEPARATOR_PATH ?? "demucs";
+    this.audioSeparatorModel = options.audioSeparatorModel ?? process.env.UNUTV_AUDIO_SEPARATOR_MODEL ?? "htdemucs";
   }
 
   async importFile(input) {
@@ -115,6 +127,10 @@ export class LocalMediaStore {
     });
   }
 
+  async stageRenderFile(input) {
+    return this.importFile({ ...input, nodeId: null, generated: true });
+  }
+
   async importBytes(input) {
     const bytes = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes);
     if (!bytes.length) throw new Error("Generated media bytes are empty");
@@ -138,6 +154,7 @@ export class LocalMediaStore {
       sizeBytes: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex"),
       source: "generated",
+      makeCurrent: input.makeCurrent !== false,
       createdAt: nowIso()
     });
   }
@@ -166,6 +183,67 @@ export class LocalMediaStore {
       bytes,
       title: input.title || `${opened.title} · ${input.seconds}s 权威尾帧`
     });
+  }
+
+  async separateAudioStems(input) {
+    const opened = this.open(input.projectId, input.mediaId);
+    if (!opened) throw new UnuTvError("media_not_found", `Media not found: ${input.mediaId}`, 404);
+    if (!["audio", "video"].includes(opened.kind)) {
+      throw new UnuTvError("audio_source_media_required", "Audio separation requires audio or video media", 400);
+    }
+    const projectRoot = projectDirectory(this.dataRoot, input.projectId);
+    const temporaryRoot = await mkdtemp(path.join(projectRoot, ".audio-separation-"));
+    const sourceBaseName = path.basename(opened.filePath, path.extname(opened.filePath));
+    const originalMixPath = path.join(temporaryRoot, "original_mix.wav");
+    const outputRoot = path.join(temporaryRoot, "demucs");
+    try {
+      await runProcess(this.ffmpegPath, [
+        "-hide_banner", "-loglevel", "error", "-y", "-i", opened.filePath,
+        "-map", "0:a:0", "-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s24le", originalMixPath
+      ], {
+        failureCode: "source_audio_extract_failed",
+        failureMessage: "源媒体没有可供分离的有效音频轨。"
+      });
+      await runProcess(this.audioSeparatorPath, [
+        "--two-stems", "vocals",
+        "--name", this.audioSeparatorModel,
+        "--out", outputRoot,
+        opened.filePath
+      ], {
+        unavailableCode: "audio_separator_unavailable",
+        unavailableMessage: "缺少真正的音源分离引擎。请安装 Python 版 Demucs，或通过 UNUTV_AUDIO_SEPARATOR_PATH 配置兼容命令。",
+        failureCode: "audio_separation_failed",
+        failureMessage: "音源分离失败；不得用左右声道拆分冒充对白/背景分离。"
+      });
+      const separatedDirectory = path.join(outputRoot, this.audioSeparatorModel, sourceBaseName);
+      const definitions = [
+        { filePath: originalMixPath, role: "original_mix", title: "原始混音（审计母本）" },
+        { filePath: path.join(separatedDirectory, "vocals.wav"), role: "dialogue_candidate", title: "对白/人声候选 stem（待审核）" },
+        { filePath: path.join(separatedDirectory, "no_vocals.wav"), role: "background_candidate", title: "环境/音乐/拟音候选 stem（待审核）" }
+      ];
+      const stems = [];
+      for (const definition of definitions) {
+        const media = await this.importFile({
+          projectId: input.projectId,
+          nodeId: null,
+          filePath: definition.filePath,
+          kind: "audio",
+          generated: true,
+          title: `${input.title || opened.title} · ${definition.title}`
+        });
+        stems.push({ ...definition, filePath: undefined, media, reviewState: "candidate" });
+      }
+      return {
+        engine: "demucs",
+        model: this.audioSeparatorModel,
+        mode: "dialogue_background_candidates",
+        sourceMediaId: opened.id,
+        sourceChecksum: opened.sha256,
+        stems
+      };
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
   }
 
   async prepare(input) {

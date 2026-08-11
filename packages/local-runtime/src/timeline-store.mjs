@@ -23,14 +23,15 @@ export function insertTimeline(database, timeline) {
   }
 }
 
-export function selectTimelines(database) {
+export function selectTimelines(database, includeInactive = false) {
   return database.prepare(`
     SELECT t.id, t.title, s.frame_rate AS frameRate, s.width, s.height, s.color_space AS colorSpace,
       t.created_at AS createdAt, t.updated_at AS updatedAt,
       COUNT(c.id) AS clipCount
     FROM timelines t
     LEFT JOIN timeline_settings s ON s.timeline_id=t.id
-    LEFT JOIN timeline_clips c ON c.timeline_id=t.id
+    LEFT JOIN timeline_clips c ON c.timeline_id=t.id ${includeInactive ? "" : "AND c.is_active=1"}
+    WHERE ${includeInactive ? "1=1" : "t.is_active=1"}
     GROUP BY t.id ORDER BY t.created_at
   `).all();
 }
@@ -46,7 +47,7 @@ export function insertTimelineClip(database, clip) {
 export function insertStoryboardTimelineClip(database, clip) {
   database.exec("BEGIN IMMEDIATE");
   try {
-    database.prepare("UPDATE timeline_clips SET start_ms=start_ms+? WHERE timeline_id=? AND track=? AND start_ms>=?")
+    database.prepare("UPDATE timeline_clips SET start_ms=start_ms+? WHERE timeline_id=? AND track=? AND start_ms>=? AND is_active=1")
       .run(clip.durationMs, clip.timelineId, clip.track, clip.startMs);
     insertTimelineClip(database, clip);
     database.prepare("UPDATE timelines SET updated_at=? WHERE id=?").run(clip.createdAt, clip.timelineId);
@@ -58,8 +59,11 @@ export function insertStoryboardTimelineClip(database, clip) {
   }
 }
 
-export function selectTimeline(database, timelineId) {
-  const timeline = database.prepare("SELECT id, title, created_at AS createdAt, updated_at AS updatedAt FROM timelines WHERE id=?").get(timelineId);
+export function selectTimeline(database, timelineId, includeInactive = false) {
+  const timeline = database.prepare(`
+    SELECT id, title, created_at AS createdAt, updated_at AS updatedAt
+    FROM timelines WHERE id=? ${includeInactive ? "" : "AND is_active=1"}
+  `).get(timelineId);
   if (!timeline) throw new UnuTvError("timeline_not_found", `Timeline not found: ${timelineId}`, 404);
   const settings = database.prepare("SELECT frame_rate AS frameRate, width, height, color_space AS colorSpace, payload_json FROM timeline_settings WHERE timeline_id=?").get(timelineId);
   const tracks = database.prepare(`
@@ -70,7 +74,9 @@ export function selectTimeline(database, timelineId) {
     SELECT id, timeline_id AS timelineId, node_id AS nodeId, media_id AS mediaId, track,
       start_ms AS startMs, duration_ms AS durationMs, trim_in_ms AS trimInMs,
       payload_json, created_at AS createdAt
-    FROM timeline_clips WHERE timeline_id=? ORDER BY track, start_ms
+    FROM timeline_clips
+    WHERE timeline_id=? ${includeInactive ? "" : "AND is_active=1"}
+    ORDER BY track, start_ms
   `).all(timelineId).map((clip) => ({
     ...clip,
     payload: clip.payload_json ? JSON.parse(clip.payload_json) : {},
@@ -79,8 +85,14 @@ export function selectTimeline(database, timelineId) {
   const transitions = database.prepare(`
     SELECT id, timeline_id AS timelineId, track_id AS trackId, from_clip_id AS fromClipId, to_clip_id AS toClipId,
       kind, duration_ms AS durationMs, payload_json, created_at AS createdAt, updated_at AS updatedAt
-    FROM timeline_transitions WHERE timeline_id=? ORDER BY created_at
-  `).all(timelineId).map((entry) => ({ ...entry, payload: entry.payload_json ? JSON.parse(entry.payload_json) : {}, payload_json: undefined }));
+    FROM timeline_transitions
+    WHERE timeline_id=? ${includeInactive ? "" : `
+      AND from_clip_id IN (SELECT id FROM timeline_clips WHERE timeline_id=? AND is_active=1)
+      AND to_clip_id IN (SELECT id FROM timeline_clips WHERE timeline_id=? AND is_active=1)
+    `}
+    ORDER BY created_at
+  `).all(...(includeInactive ? [timelineId] : [timelineId, timelineId, timelineId]))
+    .map((entry) => ({ ...entry, payload: entry.payload_json ? JSON.parse(entry.payload_json) : {}, payload_json: undefined }));
   const markers = database.prepare(`
     SELECT id, timeline_id AS timelineId, time_ms AS timeMs, title, color, payload_json, created_at AS createdAt, updated_at AS updatedAt
     FROM timeline_markers WHERE timeline_id=? ORDER BY time_ms, created_at
@@ -88,13 +100,23 @@ export function selectTimeline(database, timelineId) {
   const keyframes = database.prepare(`
     SELECT id, timeline_id AS timelineId, clip_id AS clipId, property_path AS propertyPath, time_ms AS timeMs,
       value_json, easing, created_at AS createdAt, updated_at AS updatedAt
-    FROM timeline_keyframes WHERE timeline_id=? ORDER BY clip_id, property_path, time_ms
-  `).all(timelineId).map((entry) => ({ ...entry, value: entry.value_json ? JSON.parse(entry.value_json) : null, value_json: undefined }));
+    FROM timeline_keyframes
+    WHERE timeline_id=? ${includeInactive ? "" : `
+      AND clip_id IN (SELECT id FROM timeline_clips WHERE timeline_id=? AND is_active=1)
+    `}
+    ORDER BY clip_id, property_path, time_ms
+  `).all(...(includeInactive ? [timelineId] : [timelineId, timelineId]))
+    .map((entry) => ({ ...entry, value: entry.value_json ? JSON.parse(entry.value_json) : null, value_json: undefined }));
   const effects = database.prepare(`
     SELECT id, timeline_id AS timelineId, clip_id AS clipId, kind, enabled, order_index AS "order", parameters_json,
       created_at AS createdAt, updated_at AS updatedAt
-    FROM timeline_effects WHERE timeline_id=? ORDER BY clip_id, order_index
-  `).all(timelineId).map((entry) => ({ ...entry, enabled: Boolean(entry.enabled), parameters: entry.parameters_json ? JSON.parse(entry.parameters_json) : {}, parameters_json: undefined }));
+    FROM timeline_effects
+    WHERE timeline_id=? ${includeInactive ? "" : `
+      AND clip_id IN (SELECT id FROM timeline_clips WHERE timeline_id=? AND is_active=1)
+    `}
+    ORDER BY clip_id, order_index
+  `).all(...(includeInactive ? [timelineId] : [timelineId, timelineId]))
+    .map((entry) => ({ ...entry, enabled: Boolean(entry.enabled), parameters: entry.parameters_json ? JSON.parse(entry.parameters_json) : {}, parameters_json: undefined }));
   return {
     ...timeline,
     frameRate: settings?.frameRate ?? 30,
@@ -251,7 +273,7 @@ function applyClipSnapshots(database, timelineId, snapshots) {
     INSERT INTO timeline_clips (id, timeline_id, node_id, media_id, track, start_ms, duration_ms, trim_in_ms, payload_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET node_id=excluded.node_id, media_id=excluded.media_id, track=excluded.track, start_ms=excluded.start_ms,
-      duration_ms=excluded.duration_ms, trim_in_ms=excluded.trim_in_ms, payload_json=excluded.payload_json
+      duration_ms=excluded.duration_ms, trim_in_ms=excluded.trim_in_ms, payload_json=excluded.payload_json, is_active=1
   `);
   for (const clip of snapshots) upsert.run(clip.id, timelineId, clip.nodeId, clip.mediaId, clip.track, clip.startMs, clip.durationMs, clip.trimInMs, JSON.stringify(clip.payload ?? {}), clip.createdAt);
 }

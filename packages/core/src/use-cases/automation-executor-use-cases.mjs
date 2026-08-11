@@ -1,5 +1,6 @@
 import { UnuTvError, createId, latestCinematicEvaluationsByUnit, nowIso, requireText } from "@ununu/unutv-contracts";
 import { taskDependenciesReady } from "../automation-dag-policy.mjs";
+import { startAutomationExecutorLeaseHeartbeat } from "./automation-executor-lease-heartbeat.mjs";
 import { buildAutomationRetryConfiguration, generationStrategy } from "./automation-provider-strategy-policy.mjs";
 import { createAutomationStageExecutor } from "./automation-stage-executor.mjs";
 
@@ -77,7 +78,10 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
     const projectId = requireText(input.projectId, "projectId");
     const automationRunId = requireText(input.automationRunId, "automationRunId");
     const resolved = await context(projectId, automationRunId);
-    if (resolved.session.state !== "auto_running" || resolved.configuration.execute !== true) return { status: "idle", session: resolved.session };
+    if (
+      resolved.session.state !== "auto_running"
+      || (resolved.configuration.execute !== true && input.forceOneStep !== true)
+    ) return { status: "idle", session: resolved.session };
     const leaseContext = {
       actorType: "automation",
       actorId: "director",
@@ -137,6 +141,37 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
     }
     operationContext = { ...operationContext, taskLeaseId: task.workerLeaseId };
     task = await dependencies.automationTasks.heartbeatAutomationTask({ projectId, automationRunId, taskId: task.id, operationContext });
+    const stageLeaseHeartbeat = startAutomationExecutorLeaseHeartbeat({
+      leaseTtlMs: resolved.session.payload?.controlLeaseTtlMs,
+      renew: async () => {
+        const renewed = await dependencies.projectControl.heartbeatAutomation({
+          projectId,
+          automationRunId,
+          operationContext: leaseContext
+        });
+        const renewedTask = renewed.tasks.find((entry) => entry.id === task.id);
+        if (!renewedTask || renewedTask.workerLeaseId !== operationContext.taskLeaseId) {
+          throw new UnuTvError(
+            "AUTOMATION_TASK_LEASE_MISMATCH",
+            "Long-running stage lost its worker lease during heartbeat",
+            409,
+            { taskId: task.id }
+          );
+        }
+        resolved.session = renewed.session;
+        task = renewedTask;
+        return { session: renewed.session, task: renewedTask };
+      }
+    });
+    let stageLeaseHeartbeatStopped = false;
+    async function stopStageLeaseHeartbeat() {
+      if (stageLeaseHeartbeatStopped) return null;
+      stageLeaseHeartbeatStopped = true;
+      const renewed = await stageLeaseHeartbeat.stop();
+      if (renewed?.session) resolved.session = renewed.session;
+      if (renewed?.task) task = renewed.task;
+      return renewed;
+    }
     try {
       if (task.stage === "sound_design" && !isBudgetlessWorkflow(resolved) && !task.budgetReservationId) {
         const budgetInput = resolved.configuration.paidTaskBudgets?.[task.stage] ?? generationStrategy(resolved, task.stage);
@@ -154,6 +189,7 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
       }
       const result = await handleStage(projectId, task, resolved, operationContext);
       if (result.waiting) {
+        await stopStageLeaseHeartbeat();
         if (input.releaseWaitingLease === true) {
           task = await ports.projects.updateAutomationTask(projectId, {
             ...task,
@@ -176,10 +212,16 @@ export function createAutomationExecutorUseCases(ports, dependencies) {
         };
       }
       if (task.stage === "sound_design" && task.budgetReservationId && result.reused !== true) await settleTaskBudget(projectId, task, "consume");
+      await stopStageLeaseHeartbeat();
       const completed = await dependencies.automationTasks.completeAutomationTask({ projectId, automationRunId, taskId: task.id, output: result.output, reused: result.reused, operationContext });
       ownedWorkerLeases.delete(`${automationRunId}:${task.id}`);
       return { status: "advanced", task: completed };
     } catch (error) {
+      try {
+        await stopStageLeaseHeartbeat();
+      } catch (heartbeatError) {
+        error = heartbeatError;
+      }
       if (task.stage === "sound_design" && error.code !== "paid_submission_outcome_unknown") {
         const settled = await settleTaskBudget(projectId, task, "release");
         if (settled?.status === "released") task = await ports.projects.updateAutomationTask(projectId, { ...task, budgetReservationId: null, updatedAt: nowIso() });

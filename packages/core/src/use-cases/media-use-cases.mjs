@@ -52,6 +52,80 @@ export function createMediaUseCases(ports, actions = {}) {
     });
   }
 
+  async function separateMediaAudio(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const mediaId = requireText(input.mediaId, "mediaId");
+    const sourceNodeId = requireText(input.sourceNodeId, "sourceNodeId");
+    if (typeof ports.media?.separateAudioStems !== "function") {
+      throw new UnuTvError("audio_separator_unavailable", "当前媒体端口未提供真正的音源分离能力。", 500);
+    }
+    if (typeof actions.createNode !== "function" || typeof actions.connectEdge !== "function") {
+      throw new TypeError("Audio separation requires canvas mutation actions");
+    }
+    const sourceMedia = await ports.projects.getMedia(projectId, mediaId);
+    if (!sourceMedia || !["audio", "video"].includes(sourceMedia.kind)) {
+      throw new UnuTvError("audio_source_media_required", "Audio separation requires audio or video media", 400);
+    }
+    const sourceNode = await ports.projects.getNode(projectId, sourceNodeId);
+    if (!sourceNode) throw new UnuTvError("node_not_found", `Node not found: ${sourceNodeId}`, 404);
+    const canvas = await ports.projects.openCanvas(projectId, sourceNode.canvasId);
+    const existingNodes = canvas.nodes.filter((node) => (
+      node.payload?.resourceType === "cinematic_audio_stem"
+      && node.payload?.sourceMediaId === mediaId
+      && node.payload?.sourceChecksum === sourceMedia.sha256
+    ));
+    if (existingNodes.length >= 3) {
+      return { reused: true, nodes: existingNodes, sourceMediaId: mediaId };
+    }
+    const separation = await ports.media.separateAudioStems({
+      projectId,
+      mediaId,
+      title: optionalText(input.title, sourceNode.title || sourceMedia.title)
+    });
+    const nodes = [];
+    const edges = [];
+    for (const [index, stem] of separation.stems.entries()) {
+      const node = await actions.createNode({
+        projectId,
+        canvasId: sourceNode.canvasId,
+        kind: "audio",
+        title: stem.media.title,
+        x: 80 + index * 520,
+        y: 0,
+        size: { width: 444, height: 250 },
+        payload: {
+          productionId: sourceNode.payload?.productionId ?? null,
+          stage: "sound_design",
+          resourceType: "cinematic_audio_stem",
+          resourceId: `${mediaId}:${stem.role}`,
+          currentMediaId: stem.media.id,
+          mediaIds: [stem.media.id],
+          sourceNodeId,
+          sourceMediaId: mediaId,
+          sourceChecksum: sourceMedia.sha256,
+          separationEngine: separation.engine,
+          separationModel: separation.model,
+          separationMode: separation.mode,
+          stemRole: stem.role,
+          reviewState: "candidate",
+          warning: stem.role === "original_mix"
+            ? "原始混音仅作审计母本"
+            : "算法分离结果只是候选 stem，必须逐层试听审核后才可替换"
+        }
+      });
+      const edge = await actions.connectEdge({
+        projectId,
+        canvasId: sourceNode.canvasId,
+        fromNodeId: sourceNode.id,
+        toNodeId: node.id,
+        role: `cinematic_audio:${stem.role}`
+      });
+      nodes.push(node);
+      edges.push(edge);
+    }
+    return { ...separation, edges, nodes, reused: false, stems: undefined };
+  }
+
   async function createVideoQaContactSheet(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const mediaId = requireText(input.mediaId, "mediaId");
@@ -217,5 +291,5 @@ export function createMediaUseCases(ports, actions = {}) {
     }
   }
 
-  return { createVideoQaContactSheet, extractMediaFrame, getMediaPreparation, importDataMedia, importMedia, prepareMedia, publishMedia };
+  return { createVideoQaContactSheet, extractMediaFrame, getMediaPreparation, importDataMedia, importMedia, prepareMedia, publishMedia, separateMediaAudio };
 }

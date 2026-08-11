@@ -225,8 +225,13 @@ export function CinematicWorkspacePanel({ embedded = false, floating = false, on
       await api.compileVisualContext(projectId, production.productionId, previsId, { shotId });
       await load(); notify("当前镜头视觉上下文已冻结", false);
     },
-    reviewSequencePrevis: async (previsId, revision, state) => {
-      await api.reviewSequencePrevis(projectId, production.productionId, previsId, { revision, state, note: state === "accepted" ? "Owner 已完整播放并接受当前连续视觉预演与切镜决策" : "Owner 拒绝当前连续视觉预演" });
+    recordSequencePrevisPlayback: async (previsId, playback) => {
+      const receipt = await api.recordSequencePrevisPlayback(projectId, production.productionId, previsId, { playback });
+      notify("已生成当前 revision 的完整播放回执", false);
+      return receipt;
+    },
+    reviewSequencePrevis: async (previsId, revision, state, playbackReceiptId) => {
+      await api.reviewSequencePrevis(projectId, production.productionId, previsId, { revision, state, ...(playbackReceiptId ? { playbackReceiptId } : {}), note: state === "accepted" ? "Owner 已完整播放并接受当前连续视觉预演与切镜决策" : "Owner 拒绝当前连续视觉预演" });
       await load(); notify(state === "accepted" ? "当前连续预演已获得 Owner ACCEPT" : "当前连续预演已拒绝", state === "rejected");
     }
   };

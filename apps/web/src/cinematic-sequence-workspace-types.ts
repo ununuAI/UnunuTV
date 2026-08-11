@@ -30,6 +30,35 @@ export interface CutDecision {
   motionVector: string;
   audioBridge: string;
   overlapSeconds?: number;
+  handoffEvidence?: {
+    mode: "DUPLICATE_HANDOFF";
+    h0MediaId: string;
+    h1MediaId: string;
+    h0Seconds: number;
+    h1Seconds: number;
+    trimStartSeconds: number;
+    trimEndSeconds: number;
+    verificationId: string;
+    fullPlaybackVerified: boolean;
+  };
+}
+
+export interface SequencePrevisPlaybackReceipt {
+  version: "sequence_previs_playback_receipt_v1";
+  playbackReceiptId: string;
+  playbackSessionId: string;
+  productionId: string;
+  sequencePrevisId: string;
+  sequencePrevisRevision: number;
+  durationSeconds: number;
+  frameRate: number;
+  startedAt: string;
+  completedAt: string;
+  createdAt: string;
+  sampleCount: number;
+  maxObservedStepMs: number;
+  manualSeekCount: number;
+  intervals: Array<{ startSeconds: number; endSeconds: number }>;
 }
 
 export interface SequencePrevisDocument extends Record<string, unknown> {

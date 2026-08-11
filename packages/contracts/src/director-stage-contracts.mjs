@@ -1,3 +1,9 @@
+import {
+  DIRECTOR_COMPOSITION_VERSION,
+  DIRECTOR_ROUTE_PATH_MODES,
+  validateDirectorCompositionV1,
+} from "./director-composition-contracts.mjs";
+
 export const DIRECTOR_STAGE_VERSION = "director_stage_v1";
 export const DIRECTOR_STAGE_ENVIRONMENT_VERSION = "director_stage_environment_v1";
 export const DIRECTOR_STAGE_COMMAND_VERSION = "director_stage_command_v1";
@@ -10,6 +16,7 @@ export const DIRECTOR_STAGE_ROUTE_TYPES = Object.freeze(["character", "camera", 
 export const DIRECTOR_STAGE_ACTOR_TYPES = Object.freeze(["owner", "agent", "automation"]);
 export const DIRECTOR_STAGE_COMMAND_TYPES = Object.freeze([
   "initialize",
+  "replace_document",
   "set_environment",
   "clear_environment",
   "upsert_object",
@@ -122,6 +129,10 @@ function validateRoute(value, path, issues) {
   requiredText(value.label, `${path}.label`, issues);
   enumValue(value.type, DIRECTOR_STAGE_ROUTE_TYPES, `${path}.type`, issues);
   requiredText(value.color, `${path}.color`, issues);
+  if (value.objectId !== undefined) requiredText(value.objectId, `${path}.objectId`, issues);
+  if (value.subjectFollowObjectId !== undefined) requiredText(value.subjectFollowObjectId, `${path}.subjectFollowObjectId`, issues);
+  if (value.pathMode !== undefined) enumValue(value.pathMode, DIRECTOR_ROUTE_PATH_MODES, `${path}.pathMode`, issues);
+  if (value.speedCurve !== undefined) enumValue(value.speedCurve, ["linear", "ease", "ease_in", "ease_out", "ease_in_out", "step", "hold"], `${path}.speedCurve`, issues);
   requiredArray(value.points, `${path}.points`, issues);
   if (Array.isArray(value.points)) value.points.forEach((point, index) => {
     validateVector(point, `${path}.points[${index}]`, issues);
@@ -239,7 +250,11 @@ export function validateDirectorStageDocumentV1(value) {
     issues.push(issue("selectedCameraId", "selectedCameraId must reference a camera", "missing_reference"));
   }
   if (value.environment !== undefined) validateEnvironment(value.environment, "environment", issues);
-  if (value.compositionData !== undefined && !isRecord(value.compositionData)) issues.push(issue("compositionData", "compositionData must be an object", "invalid_type"));
+  if (value.compositionData !== undefined && !isRecord(value.compositionData)) {
+    issues.push(issue("compositionData", "compositionData must be an object", "invalid_type"));
+  } else if (value.compositionData?.version === DIRECTOR_COMPOSITION_VERSION) {
+    issues.push(...validateDirectorCompositionV1(value.compositionData, value).issues);
+  }
   requiredText(value.createdAt, "createdAt", issues);
   requiredText(value.updatedAt, "updatedAt", issues);
   return result(issues);
@@ -262,6 +277,13 @@ export function validateDirectorStageCommandV1(value) {
   if (!isRecord(value.payload)) return result(issues);
   const payload = value.payload;
   if (value.type === "initialize" && payload.dimensions !== undefined) validateDimensions(payload.dimensions, "payload.dimensions", issues);
+  if (value.type === "replace_document") {
+    const validation = validateDirectorStageDocumentV1(payload.stage);
+    issues.push(...validation.issues.map((entry) => ({
+      ...entry,
+      path: `payload.stage.${entry.path}`,
+    })));
+  }
   if (value.type === "set_environment") validateEnvironment(payload.environment, "payload.environment", issues);
   if (value.type === "upsert_object") validateObject(payload.object, "payload.object", issues);
   if (value.type === "move_object") {

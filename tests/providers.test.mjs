@@ -52,6 +52,43 @@ test("Ununu Image adapter sends local references as multipart image edits", asyn
   assert.equal(Object.hasOwn(submitted.headers, "content-type"), false);
 });
 
+test("Ununu Image adapter rejects SVG control sheets before paid image submission", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-image-svg-reference-"));
+  let providerCalls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    env: { UNUNU_GATE_API_KEY: "image-test-key" },
+    fetchImpl: async () => {
+      providerCalls += 1;
+      throw new Error("Provider must not receive an SVG reference");
+    }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const reference = await runtime.app.importDataMedia({
+    projectId: project.id,
+    kind: "image",
+    title: "带标注低模控制板.svg",
+    dataUrl: `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="9"/>').toString("base64")}`
+  });
+  const image = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "image",
+    payload: { provider: "ununu", prompt: "正式叙事关键帧" }
+  });
+  const completed = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: image.id,
+    request: { model: "openai/gpt-image-2", referenceMediaIds: [reference.id] }
+  });
+  assert.equal(completed.status, "blocked");
+  assert.equal(completed.result.code, "image_reference_transport_format_required");
+  assert.equal(completed.result.details.mediaId, reference.id);
+  assert.equal(completed.result.details.mimeType, "image/svg+xml");
+  assert.equal(providerCalls, 0);
+});
+
 test("Ununu Image adapter records a stable trace id when a paid response is unknown", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-image-unknown-"));
   let firstRequestId;

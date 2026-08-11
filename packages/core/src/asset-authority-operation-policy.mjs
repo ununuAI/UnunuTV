@@ -10,6 +10,39 @@ function recordText(value) {
   return Object.values(value).flatMap((entry) => typeof entry === "string" ? [entry.trim()] : []).filter(Boolean).join("；");
 }
 
+function namedAssetEntries(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => {
+      if (typeof entry === "string" && entry.trim()) return [{ displayName: entry.trim() }];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+      const displayName = text(entry.displayName ?? entry.name ?? entry.label ?? entry.id);
+      return displayName ? [{ ...entry, displayName }] : [];
+    });
+  }
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, entry]) => {
+    if (entry === false || entry === null) return [];
+    if (typeof entry === "string") return [{ displayName: key, description: entry }];
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      return [{ ...entry, displayName: text(entry.displayName ?? entry.name ?? entry.label) || key }];
+    }
+    return [{ displayName: key }];
+  });
+}
+
+function conciseLocationName(value) {
+  const location = text(value);
+  if (!location) return "";
+  return location.split(/[：:；;\n]/u).map((entry) => entry.trim()).find(Boolean) || location;
+}
+
+function canonicalPropName(value) {
+  return text(value)
+    .replace(/^(?:单实例|唯一(?:一只|一个|一件)?|同一只|同一个)\s*/u, "")
+    .replace(/\s+/gu, "")
+    .toLocaleLowerCase();
+}
+
 function characterLookFor(visualBible, displayName) {
   const look = visualBible?.characterLook;
   if (!look || typeof look !== "object" || Array.isArray(look)) return {};
@@ -111,32 +144,56 @@ export function deriveAssetAuthorityCandidates({ storyPacket, visualBible, shots
       wardrobeMakeupHair: characterLookFor(visualBible, displayName)
     });
   }
+  const explicitScenes = [
+    ...namedAssetEntries(storyPacket.assetRequirements?.scenes),
+    ...namedAssetEntries(storyPacket.scenes),
+    ...namedAssetEntries(storyPacket.locations)
+  ];
+  const productionLocation = text(visualBible?.productionDesign?.location ?? visualBible?.productionDesign?.setting);
+  const sceneDisplayName = text(explicitScenes[0]?.displayName) || conciseLocationName(productionLocation) || text(storyPacket.scenePurpose);
   const sceneSignals = [
+    text(explicitScenes[0]?.description),
+    productionLocation,
     text(storyPacket.scenePurpose),
     recordText(visualBible?.productionDesign),
     ...shots.map((shot) => text(shot?.blocking?.positions))
   ].filter(Boolean);
-  if (sceneSignals.length && !existing.has(`scene:${sceneSignals[0].toLocaleLowerCase()}`)) {
-    const displayName = sceneSignals[0];
+  if (sceneDisplayName && sceneSignals.length && !existing.has(`scene:${sceneDisplayName.toLocaleLowerCase()}`)) {
+    const displayName = sceneDisplayName;
     candidates.push({
       ...common("scene", displayName, risk.get("scene") ?? "medium", sceneSignals.join("；")),
       architecture: sceneSignals.join("；"),
       materials: recordText(visualBible?.productionDesign) || "待美术基于剧作事实确认",
-      spatialLogic: { sourceSignals: sceneSignals, axisLocks: shots.map((shot) => text(shot?.editContinuity?.axis)).filter(Boolean) },
+      spatialLogic: {
+        topologyRevision: "topology-r1",
+        sourceSignals: sceneSignals,
+        axisLocks: shots.map((shot) => text(shot?.editContinuity?.axis)).filter(Boolean)
+      },
       lightingBaseline: visualBible?.lighting && typeof visualBible.lighting === "object" ? visualBible.lighting : {},
       palette: visualBible?.color && typeof visualBible.color === "object" ? visualBible.color : {}
     });
   }
-  const propNames = [...new Set(shots.flatMap((shot) => text(shot?.blocking?.props).split(/[、，,；;]+/u).map((item) => item.trim()).filter(Boolean)))];
-  for (const displayName of propNames) {
+  const explicitProps = [
+    ...namedAssetEntries(storyPacket.assetRequirements?.props),
+    ...namedAssetEntries(storyPacket.props),
+    ...namedAssetEntries(visualBible?.propSemantics)
+  ];
+  const shotProps = shots.flatMap((shot) => text(shot?.blocking?.props).split(/[、，,；;]+/u).map((item) => item.trim()).filter(Boolean)).map((displayName) => ({ displayName }));
+  const propsByName = new Map();
+  for (const entry of [...explicitProps, ...shotProps]) {
+    const key = canonicalPropName(entry.displayName);
+    if (key && !propsByName.has(key)) propsByName.set(key, entry);
+  }
+  for (const prop of propsByName.values()) {
+    const displayName = prop.displayName;
     if (existing.has(`prop:${displayName.toLocaleLowerCase()}`)) continue;
     candidates.push({
-      ...common("prop", displayName, risk.get("prop") ?? "medium", `镜头调度明确涉及：${displayName}`),
-      narrativeFunction: words(storyPacket.causalEventChain).find((item) => item.includes(displayName)) || `镜头调度涉及${displayName}，叙事功能待确认`,
-      geometry: "待资产设计确认",
-      material: "待资产设计确认",
-      scale: "以角色接触与场景空间为准，待确认",
-      wearState: "待连续性确认",
+      ...common("prop", displayName, prop.riskLevel ?? risk.get("prop") ?? "medium", text(prop.description) || `剧作与美术资产清单明确涉及：${displayName}`),
+      narrativeFunction: text(prop.narrativeFunction) || words(storyPacket.causalEventChain).find((item) => item.includes(displayName)) || `镜头调度涉及${displayName}，叙事功能待确认`,
+      geometry: text(prop.geometry) || "待资产设计确认",
+      material: text(prop.material) || "待资产设计确认",
+      scale: text(prop.scale) || "以角色接触与场景空间为准，待确认",
+      wearState: text(prop.wearState) || "待连续性确认",
       interactionRules: { shotIds: shots.filter((shot) => text(shot?.blocking?.props).includes(displayName)).map((shot) => shot.shotId) }
     });
   }

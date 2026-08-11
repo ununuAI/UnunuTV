@@ -9,8 +9,11 @@ function transaction(database, work) {
 function conflict(entity, expected, actual) {
   if (expected !== undefined && Number(expected) !== actual) throw new UnuTvError("revision_conflict", `Expected ${entity} revision ${expected}, found ${actual}`, 409);
 }
-function readPrevis(database, productionId, sequencePrevisId) {
-  const current = database.prepare("SELECT current_version FROM cinematic_sequence_previs WHERE id=? AND production_id=?").get(sequencePrevisId, productionId);
+function readPrevis(database, productionId, sequencePrevisId, includeInactive = false) {
+  const current = database.prepare(`
+    SELECT current_version FROM cinematic_sequence_previs
+    WHERE id=? AND production_id=? ${includeInactive ? "" : "AND is_active=1"}
+  `).get(sequencePrevisId, productionId);
   if (!current) return undefined;
   return parse(database.prepare("SELECT payload_json FROM cinematic_sequence_previs_versions WHERE sequence_previs_id=? AND version=?").get(sequencePrevisId, current.current_version)?.payload_json);
 }
@@ -27,9 +30,10 @@ export function attachCinematicSequenceWorkspaceMethods(prototype, emitEvent) {
         const updatedAt = previs.updatedAt ?? nowIso();
         const saved = { ...previs, productionId, revision: version, createdAt: previs.createdAt ?? current?.created_at ?? updatedAt, updatedAt };
         database.prepare(`
-          INSERT INTO cinematic_sequence_previs (id, production_id, status, current_version, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_version=excluded.current_version, updated_at=excluded.updated_at
+          INSERT INTO cinematic_sequence_previs (id, production_id, status, current_version, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 1, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_version=excluded.current_version,
+            is_active=1, updated_at=excluded.updated_at
         `).run(saved.sequencePrevisId, productionId, saved.status, version, saved.createdAt, updatedAt);
         database.prepare("INSERT INTO cinematic_sequence_previs_versions (sequence_previs_id, version, payload_json, created_at) VALUES (?, ?, ?, ?)")
           .run(saved.sequencePrevisId, version, JSON.stringify(saved), updatedAt);
@@ -37,21 +41,66 @@ export function attachCinematicSequenceWorkspaceMethods(prototype, emitEvent) {
         return saved;
       });
     },
-    getSequencePrevis(projectId, productionId, sequencePrevisId) {
+    getSequencePrevis(projectId, productionId, sequencePrevisId, includeInactive = false) {
       const database = this.database(projectId);
-      const id = sequencePrevisId ?? database.prepare("SELECT id FROM cinematic_sequence_previs WHERE production_id=? ORDER BY updated_at DESC LIMIT 1").get(productionId)?.id;
-      return id ? readPrevis(database, productionId, id) : undefined;
+      const id = sequencePrevisId ?? database.prepare(`
+        SELECT id FROM cinematic_sequence_previs
+        WHERE production_id=? ${includeInactive ? "" : "AND is_active=1"}
+        ORDER BY updated_at DESC LIMIT 1
+      `).get(productionId)?.id;
+      return id ? readPrevis(database, productionId, id, includeInactive) : undefined;
     },
-    listSequencePrevis(projectId, productionId) {
+    listSequencePrevis(projectId, productionId, includeInactive = false) {
       const database = this.database(projectId);
-      return database.prepare("SELECT id FROM cinematic_sequence_previs WHERE production_id=? ORDER BY updated_at DESC").all(productionId)
-        .map((row) => readPrevis(database, productionId, row.id));
+      return database.prepare(`
+        SELECT id FROM cinematic_sequence_previs
+        WHERE production_id=? ${includeInactive ? "" : "AND is_active=1"}
+        ORDER BY updated_at DESC
+      `).all(productionId)
+        .map((row) => readPrevis(database, productionId, row.id, includeInactive));
     },
     listSequencePrevisVersions(projectId, productionId, sequencePrevisId) {
       const database = this.database(projectId);
       if (!database.prepare("SELECT 1 FROM cinematic_sequence_previs WHERE id=? AND production_id=?").get(sequencePrevisId, productionId)) return [];
       return database.prepare("SELECT version, payload_json, created_at FROM cinematic_sequence_previs_versions WHERE sequence_previs_id=? ORDER BY version DESC").all(sequencePrevisId)
         .map((row) => ({ version: row.version, sequencePrevis: parse(row.payload_json), createdAt: row.created_at }));
+    },
+    saveSequencePrevisPlaybackReceipt(projectId, receipt) {
+      const database = this.database(projectId);
+      database.prepare(`
+        INSERT INTO cinematic_sequence_previs_playback_receipts
+          (id, production_id, sequence_previs_id, sequence_previs_revision, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        receipt.playbackReceiptId,
+        receipt.productionId,
+        receipt.sequencePrevisId,
+        receipt.sequencePrevisRevision,
+        JSON.stringify(receipt),
+        receipt.createdAt,
+      );
+      emitEvent(database, "cinematic.sequence_previs_playback_completed", receipt.playbackReceiptId, {
+        productionId: receipt.productionId,
+        sequencePrevisId: receipt.sequencePrevisId,
+        sequencePrevisRevision: receipt.sequencePrevisRevision,
+      });
+      return receipt;
+    },
+    getSequencePrevisPlaybackReceipt(projectId, productionId, playbackReceiptId) {
+      const row = this.database(projectId).prepare(`
+        SELECT payload_json
+        FROM cinematic_sequence_previs_playback_receipts
+        WHERE id=? AND production_id=?
+      `).get(playbackReceiptId, productionId);
+      return parse(row?.payload_json);
+    },
+    listSequencePrevisPlaybackReceipts(projectId, productionId, sequencePrevisId) {
+      return this.database(projectId).prepare(`
+        SELECT payload_json
+        FROM cinematic_sequence_previs_playback_receipts
+        WHERE production_id=? AND sequence_previs_id=?
+        ORDER BY created_at DESC
+      `).all(productionId, sequencePrevisId).map((row) => parse(row.payload_json));
     },
     saveVisualContextBundle(projectId, bundle) {
       const database = this.database(projectId);
@@ -60,14 +109,17 @@ export function attachCinematicSequenceWorkspaceMethods(prototype, emitEvent) {
       emitEvent(database, "cinematic.visual_context_compiled", bundle.visualContextBundleId, { productionId: bundle.productionId, shotId: bundle.shotId });
       return bundle;
     },
-    getVisualContextBundle(projectId, productionId, visualContextBundleId) {
-      const row = this.database(projectId).prepare("SELECT payload_json FROM cinematic_visual_context_bundles WHERE id=? AND production_id=?").get(visualContextBundleId, productionId);
+    getVisualContextBundle(projectId, productionId, visualContextBundleId, includeInactive = false) {
+      const row = this.database(projectId).prepare(`
+        SELECT payload_json FROM cinematic_visual_context_bundles
+        WHERE id=? AND production_id=? ${includeInactive ? "" : "AND is_active=1"}
+      `).get(visualContextBundleId, productionId);
       return parse(row?.payload_json);
     },
-    listVisualContextBundles(projectId, productionId, shotId) {
+    listVisualContextBundles(projectId, productionId, shotId, includeInactive = false) {
       const query = shotId
-        ? ["SELECT payload_json FROM cinematic_visual_context_bundles WHERE production_id=? AND shot_id=? ORDER BY created_at DESC", [productionId, shotId]]
-        : ["SELECT payload_json FROM cinematic_visual_context_bundles WHERE production_id=? ORDER BY created_at DESC", [productionId]];
+        ? [`SELECT payload_json FROM cinematic_visual_context_bundles WHERE production_id=? AND shot_id=? ${includeInactive ? "" : "AND is_active=1"} ORDER BY created_at DESC`, [productionId, shotId]]
+        : [`SELECT payload_json FROM cinematic_visual_context_bundles WHERE production_id=? ${includeInactive ? "" : "AND is_active=1"} ORDER BY created_at DESC`, [productionId]];
       return this.database(projectId).prepare(query[0]).all(...query[1]).map((row) => parse(row.payload_json));
     },
     saveVisualTakeMemory(projectId, memory) {
@@ -77,10 +129,10 @@ export function attachCinematicSequenceWorkspaceMethods(prototype, emitEvent) {
       emitEvent(database, "cinematic.visual_take_remembered", memory.visualTakeMemoryId, { generationUnitId: memory.generationUnitId, mediaId: memory.mediaId });
       return memory;
     },
-    listVisualTakeMemories(projectId, productionId, generationUnitId) {
+    listVisualTakeMemories(projectId, productionId, generationUnitId, includeInactive = false) {
       const query = generationUnitId
-        ? ["SELECT payload_json FROM cinematic_visual_take_memories WHERE production_id=? AND generation_unit_id=? ORDER BY created_at DESC", [productionId, generationUnitId]]
-        : ["SELECT payload_json FROM cinematic_visual_take_memories WHERE production_id=? ORDER BY created_at DESC", [productionId]];
+        ? [`SELECT payload_json FROM cinematic_visual_take_memories WHERE production_id=? AND generation_unit_id=? ${includeInactive ? "" : "AND is_active=1"} ORDER BY created_at DESC`, [productionId, generationUnitId]]
+        : [`SELECT payload_json FROM cinematic_visual_take_memories WHERE production_id=? ${includeInactive ? "" : "AND is_active=1"} ORDER BY created_at DESC`, [productionId]];
       return this.database(projectId).prepare(query[0]).all(...query[1]).map((row) => parse(row.payload_json));
     },
     saveCreativeDecisionTrace(projectId, trace) {

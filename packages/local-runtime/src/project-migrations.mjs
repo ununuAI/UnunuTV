@@ -4,21 +4,207 @@ import path from "node:path";
 import { imageGenerationStarterPrompt, nowIso } from "@ununu/unutv-contracts";
 import { mapLegacyShortDramaProductionVersion } from "@ununu/unutv-core";
 import { readNodePrompt, writeNodePrompt } from "./node-prompt-store.mjs";
-
+import { applyStoryboardBatchLineageMigration } from "./storyboard-batch-lineage-migration.mjs";
 export const NODE_SIZE_V2_MIGRATION = "20260718-node-size-v2";
 export const IMAGE_TEMPLATE_PROMPT_V1_MIGRATION = "20260719-image-template-prompt-v1";
 export const CINEMATIC_PRODUCTION_V2_MIGRATION = "20260719-cinematic-production-v2-hard-cut";
 export const AUTOMATION_LEASE_V1_MIGRATION = "20260720-automation-lease-v1";
 export const STORYBOARD_PROVIDER_V1_MIGRATION = "20260720-storyboard-provider-v1";
-
+export const SCREENPLAY_DOCUMENT_V1_MIGRATION = "20260728-screenplay-document-v1";
+export const SCREENPLAY_DERIVED_INVALIDATION_V1_MIGRATION = "20260728-screenplay-derived-invalidation-v1";
+export const OWNER_REVIEW_EVIDENCE_V1_MIGRATION = "20260728-owner-review-evidence-v2";
 export function applyProjectMigrations(database, options = {}) {
   const applied = database.prepare("SELECT id FROM runtime_migrations WHERE id=?").get(NODE_SIZE_V2_MIGRATION);
   const sizeResult = applied ? { applied: false, nodeCount: 0 } : applyNodeSizeMigration(database);
   applyAutomationLeaseMigration(database);
   applyStoryboardProviderMigration(database);
+  applyStoryboardBatchLineageMigration(database);
+  applyScreenplayDocumentMigration(database);
+  applyScreenplayDerivedInvalidationMigration(database);
+  applyOwnerReviewEvidenceMigration(database);
   applyImageTemplatePromptMigration(database);
   applyCinematicProductionMigration(database, options);
   return sizeResult;
+}
+
+export function applyOwnerReviewEvidenceMigration(database) {
+  const applied = database.prepare("SELECT id FROM runtime_migrations WHERE id=?")
+    .get(OWNER_REVIEW_EVIDENCE_V1_MIGRATION);
+  if (applied) return { applied: false };
+  const appliedAt = nowIso();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    if (!columnExists(database, "reviews", "evidence_json")) {
+      database.exec("ALTER TABLE reviews ADD COLUMN evidence_json TEXT");
+    }
+    if (!columnExists(database, "reviews", "target_revision")) {
+      database.exec("ALTER TABLE reviews ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0");
+      database.exec(`
+        WITH ranked AS (
+          SELECT id, ROW_NUMBER() OVER (PARTITION BY target_type, target_id ORDER BY rowid) AS revision
+          FROM reviews
+        )
+        UPDATE reviews
+        SET target_revision=(SELECT revision FROM ranked WHERE ranked.id=reviews.id)
+      `);
+    }
+    database.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_target_revision
+      ON reviews(target_type, target_id, target_revision)
+    `);
+    database.prepare("INSERT INTO runtime_migrations (id, applied_at, payload_json) VALUES (?, ?, ?)")
+      .run(OWNER_REVIEW_EVIDENCE_V1_MIGRATION, appliedAt, JSON.stringify({
+        columns: ["reviews.evidence_json", "reviews.target_revision"],
+        legacyRowsRemainUnverified: true
+      }));
+    database.prepare("INSERT INTO events (type, entity_id, payload_json, created_at) VALUES (?, NULL, ?, ?)")
+      .run("runtime.owner_review_evidence_migration_applied", JSON.stringify({
+        id: OWNER_REVIEW_EVIDENCE_V1_MIGRATION,
+        legacyRowsRemainUnverified: true
+      }), appliedAt);
+    database.exec("COMMIT");
+    return { applied: true };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function applyScreenplayDerivedInvalidationMigration(database) {
+  const applied = database.prepare("SELECT id FROM runtime_migrations WHERE id=?").get(SCREENPLAY_DERIVED_INVALIDATION_V1_MIGRATION);
+  const appliedAt = nowIso();
+  const columns = [];
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    for (const [table, column, definition] of [
+      ["cinematic_script_breakdowns", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["storyboard_documents_v2", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["cinematic_sequence_previs", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["cinematic_visual_context_bundles", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["cinematic_visual_take_memories", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["timelines", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["timeline_clips", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["cinematic_image_prompt_compilations", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["professional_contributions", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["prompt_compilations", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["cinematic_evaluations", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["render_jobs", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["export_masters", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["technical_qc_reports", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+      ["delivery_packages", "is_active", "INTEGER NOT NULL DEFAULT 1"]
+    ]) {
+      if (!tableExists(database, table) || columnExists(database, table, column)) continue;
+      database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      columns.push(`${table}.${column}`);
+    }
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS cinematic_screenplay_invalidations (
+        id TEXT PRIMARY KEY,
+        production_id TEXT NOT NULL REFERENCES cinematic_productions(id) ON DELETE CASCADE,
+        source_node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        screenplay_document_revision INTEGER NOT NULL,
+        screenplay_document_checksum TEXT NOT NULL,
+        invalidation_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        UNIQUE(production_id, source_node_id, screenplay_document_revision)
+      );
+      CREATE INDEX IF NOT EXISTS idx_cinematic_screenplay_invalidations_source
+        ON cinematic_screenplay_invalidations(
+          production_id, source_node_id, screenplay_document_revision DESC
+        );
+    `);
+    if (!applied) {
+      database.prepare("INSERT INTO runtime_migrations (id, applied_at, payload_json) VALUES (?, ?, ?)")
+        .run(SCREENPLAY_DERIVED_INVALIDATION_V1_MIGRATION, appliedAt, JSON.stringify({
+          columns,
+          historyTable: "cinematic_screenplay_invalidations"
+        }));
+      database.prepare("INSERT INTO events (type, entity_id, payload_json, created_at) VALUES (?, NULL, ?, ?)")
+        .run(
+          "runtime.screenplay_derived_invalidation_migration_applied",
+          JSON.stringify({ id: SCREENPLAY_DERIVED_INVALIDATION_V1_MIGRATION, columns }),
+          appliedAt
+        );
+    } else if (columns.length) {
+      database.prepare("INSERT INTO events (type, entity_id, payload_json, created_at) VALUES (?, NULL, ?, ?)")
+        .run(
+          "runtime.screenplay_derived_invalidation_migration_reconciled",
+          JSON.stringify({ id: SCREENPLAY_DERIVED_INVALIDATION_V1_MIGRATION, columns }),
+          appliedAt
+        );
+    }
+    database.exec("COMMIT");
+    return { applied: !applied, columns };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function applyScreenplayDocumentMigration(database) {
+  const applied = database.prepare("SELECT id FROM runtime_migrations WHERE id=?").get(SCREENPLAY_DOCUMENT_V1_MIGRATION);
+  if (applied) return { applied: false };
+  const appliedAt = nowIso();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    if (!columnExists(database, "script_documents", "current_screenplay_revision")) {
+      database.exec("ALTER TABLE script_documents ADD COLUMN current_screenplay_revision INTEGER NOT NULL DEFAULT 0");
+    }
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS screenplay_document_versions (
+        node_id TEXT NOT NULL REFERENCES script_documents(node_id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL,
+        content_text TEXT NOT NULL,
+        content_sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(node_id, revision)
+      )
+    `);
+    const legacyDocuments = database.prepare(`
+      SELECT d.node_id AS nodeId, n.payload_json AS payloadJson,
+        COALESCE(n.updated_at, d.updated_at, ?) AS createdAt
+      FROM script_documents d
+      JOIN nodes n ON n.id=d.node_id
+      WHERE d.current_screenplay_revision=0
+    `).all(appliedAt);
+    let migratedDocuments = 0;
+    for (const row of legacyDocuments) {
+      let payload = {};
+      try {
+        payload = JSON.parse(row.payloadJson || "{}");
+      } catch {
+        payload = {};
+      }
+      const content = typeof payload.screenplayDocument?.content === "string"
+        ? payload.screenplayDocument.content
+        : typeof payload.content === "string"
+          ? payload.content
+          : "";
+      if (!content.trim()) continue;
+      const checksum = sha256Text(content);
+      database.prepare(`
+        INSERT INTO screenplay_document_versions
+          (node_id, revision, content_text, content_sha256, created_at)
+        VALUES (?, 1, ?, ?, ?)
+      `).run(row.nodeId, content, checksum, row.createdAt || appliedAt);
+      database.prepare(`
+        UPDATE script_documents
+        SET current_screenplay_revision=1
+        WHERE node_id=?
+      `).run(row.nodeId);
+      migratedDocuments += 1;
+    }
+    database.prepare("INSERT INTO runtime_migrations (id, applied_at, payload_json) VALUES (?, ?, ?)")
+      .run(SCREENPLAY_DOCUMENT_V1_MIGRATION, appliedAt, JSON.stringify({
+        migratedDocuments,
+        table: "screenplay_document_versions"
+      }));
+    database.exec("COMMIT");
+    return { applied: true, migratedDocuments };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function applyStoryboardProviderMigration(database) {

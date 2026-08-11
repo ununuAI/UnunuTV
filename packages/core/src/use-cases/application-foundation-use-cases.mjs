@@ -1,8 +1,9 @@
 import {
-  NODE_KINDS, REVIEW_STATES, UnuTvError, WORKFLOW_LAYERS, createId, defaultNodeSize,
+  NODE_KINDS, REVIEW_STATES, UnuTvError, WORKFLOW_LAYERS, createId, defaultNodeSize, isPromptCapableNode,
   nowIso, optionalText, requireEnum, requireNumber, requireObject, requireText
 } from "@ununu/unutv-contracts";
 import { compileNodeGenerationRequest } from "../image-generation-request-policy.mjs";
+import { assessCinematicDialogueAudioRun } from "../cinematic-dialogue-voice-policy.mjs";
 import { assertProductionNodeRunAllowed } from "../cinematic-workflow-policy.mjs";
 
 /**
@@ -115,7 +116,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
   }
 
   async function persistNodePrompt(projectId, node) {
-    if (typeof node.payload.prompt !== "string" || ["upload", "director"].includes(node.kind)) return;
+    if (typeof node.payload.prompt !== "string" || !isPromptCapableNode(node)) return;
     await saveNodePrompt({
       projectId, nodeId: node.id, text: node.payload.prompt, provider: node.payload.provider,
       modelId: node.payload.modelId, mode: node.payload.mode, parameters: node.payload.parameters,
@@ -130,7 +131,10 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     if (input.title !== undefined) patch.title = optionalText(input.title, "未命名节点");
     for (const field of ["x", "y", "width", "height"]) if (input[field] !== undefined) patch[field] = requireNumber(input[field], field);
     if (input.payload !== undefined) patch.payload = requireObject(input.payload, "payload");
-    const node = await ports.projects.updateNode(projectId, nodeId, patch, input.expectedRevision);
+    const screenplayCas = input.screenplayCas === undefined
+      ? undefined
+      : requireObject(input.screenplayCas, "screenplayCas");
+    const node = await ports.projects.updateNode(projectId, nodeId, patch, input.expectedRevision, screenplayCas);
     if (!node) throw new UnuTvError("node_not_found", `Node not found: ${nodeId}`, 404);
     return node;
   }
@@ -196,9 +200,34 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     const prompt = await ports.projects.getNodePrompt(projectId, nodeId);
     const requested = { ...(prompt?.text && input.request?.prompt === undefined ? { prompt: prompt.text } : {}), ...requireObject(input.request, "request", {}) };
     const request = compileNodeGenerationRequest(node, requested);
+    const provider = optionalText(input.provider, optionalText(prompt?.provider, optionalText(node.payload?.provider, node.kind === "audio" ? "openspeech" : "openrouter")));
+    if (node.kind === "audio" && node.payload?.resourceType === "cinematic_dialogue_line") {
+      const productionId = requireText(node.payload?.productionId, "node.payload.productionId");
+      const [authorities, canvas, reviews] = await Promise.all([
+        ports.projects.listCinematicAssetAuthorities(projectId, productionId),
+        ports.projects.openCanvas(projectId, requireText(node.canvasId, "node.canvasId")),
+        ports.projects.listReviews(projectId)
+      ]);
+      const voiceGate = assessCinematicDialogueAudioRun({
+        authorities,
+        canvas,
+        node,
+        provider,
+        request,
+        reviews
+      });
+      if (!voiceGate.ok) {
+        throw new UnuTvError(
+          "cinematic_dialogue_voice_gate_failed",
+          "正式对白必须从当前已接受的角色或逐行声音权威精确派生，并保留可见画布证据。",
+          409,
+          voiceGate
+        );
+      }
+    }
     const run = await ports.projects.createRun(projectId, {
       id: createId("run"), nodeId, status: "queued",
-      provider: optionalText(input.provider, optionalText(prompt?.provider, optionalText(node.payload?.provider, node.kind === "audio" ? "openspeech" : "openrouter"))),
+      provider,
       request, createdAt: nowIso()
     });
     try {
@@ -293,7 +322,13 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     return ports.projects.saveDirectorStage(projectId, { nodeId, canvasId: node.canvasId, stage: requireObject(input.stage, "stage"), updatedAt: nowIso() });
   }
 
-  async function getDirectorStage(input = {}) { return ports.projects.getDirectorStage(requireText(input.projectId, "projectId"), requireText(input.nodeId, "nodeId")); }
+  async function getDirectorStage(input = {}) {
+    return ports.projects.getDirectorStage(
+      requireText(input.projectId, "projectId"),
+      requireText(input.nodeId, "nodeId"),
+      input.includeStale === true
+    );
+  }
 
   async function setPanorama(input = {}) {
     return ports.projects.setPanorama(requireText(input.projectId, "projectId"), {

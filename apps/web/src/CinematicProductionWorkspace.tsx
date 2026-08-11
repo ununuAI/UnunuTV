@@ -19,7 +19,7 @@ import { CinematicAssetAuthorityLibrary } from "./CinematicAssetAuthorityLibrary
 import { CinematicContractForm, CinematicContractSummary } from "./CinematicContractForm";
 import { cinematicFieldLabel } from "./cinematic-form-policy.js";
 import { CinematicSequencePrevisWorkspace } from "./CinematicSequencePrevisWorkspace";
-import type { SequencePrevisDocument, VisualContextBundle } from "./cinematic-sequence-workspace-types";
+import type { SequencePrevisDocument, SequencePrevisPlaybackReceipt, VisualContextBundle } from "./cinematic-sequence-workspace-types";
 
 interface WorkspaceActions {
   saveStoryPacket(value: StoryProductionPacket): Promise<void>;
@@ -52,7 +52,8 @@ interface WorkspaceActions {
   addEvaluation(value: Record<string, unknown>): Promise<void>;
   saveSequencePrevis(value: SequencePrevisDocument, previsId?: string): Promise<void>;
   compileVisualContext(previsId: string, shotId: string): Promise<void>;
-  reviewSequencePrevis(previsId: string, revision: number, state: "accepted" | "rejected"): Promise<void>;
+  recordSequencePrevisPlayback(previsId: string, playback: Record<string, unknown>): Promise<SequencePrevisPlaybackReceipt>;
+  reviewSequencePrevis(previsId: string, revision: number, state: "accepted" | "rejected", playbackReceiptId?: string): Promise<void>;
 }
 
 interface StoryboardTimelineImportReceipt {
@@ -129,7 +130,7 @@ function shotStarter(order: number) {
 function unitStarter(shots: CinematicShotSpec[]) {
   return {
     strategy: "single_shot", narrativeTask: "", shotLinks: shots[0] ? [{ shotId: shots[0].shotId, order: 1 }] : [], visualAnchorPolicy: "NONE",
-    requiredCapabilities: [], generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 8, aspectRatio: "16:9", resolution: "1080p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} },
+    requiredCapabilities: [], generationParameters: { provider: "ark", model: "doubao-seedance-2-0-mini-260615", mode: "text_to_video", duration: 8, aspectRatio: "16:9", resolution: "480p", count: 1, generateAudio: true, referenceMediaIds: [], providerOptions: {} },
     controlIntent: {
       primaryConsistency: "balanced", cameraFreedom: "limited", motionComplexity: "medium", modeRationale: "",
       invariants: [""], permittedChanges: [],
@@ -412,11 +413,11 @@ export function CinematicProductionWorkspace(props: WorkspaceProps) {
         : stageId === "shots" ? <ShotStage {...props} />
         : stageId === "units" ? <UnitStage {...props} />
           : stageId === "anchors" ? <AnchorStage {...props} />
-            : stageId === "previs" ? <CinematicSequencePrevisWorkspace actions={props.actions} assetAuthorities={props.assetAuthorities} projectId={props.projectId} sequencePrevis={props.sequencePrevis} shots={props.shots} storyboards={props.storyboards} storyPacket={props.storyPacket} visualContextBundles={props.visualContextBundles} />
+            : stageId === "previs" ? <CinematicSequencePrevisWorkspace actions={props.actions} assetAuthorities={props.assetAuthorities} projectId={props.projectId} readOnly={props.readOnly} sequencePrevis={props.sequencePrevis} shots={props.shots} storyboards={props.storyboards} storyPacket={props.storyPacket} visualContextBundles={props.visualContextBundles} />
             : stageId === "prompt" ? <PromptStage {...props} />
               : stageId === "generate" ? <GenerateStage {...props} />
                 : <ReviewStage {...props} />;
   return <section className={`cinematic-production-workspace${props.embedded ? " is-canvas-node" : ""}`} aria-label="影视工业制片工作区"><header className="cp-workspace-header"><div><span>UNUNUTV 影视总控</span><strong>{props.production.title}</strong><small>{projectTypeLabel(props.production.projectType)} · 制作态 · 第 {props.production.revision} 版</small></div><div className="cp-workspace-actions"><button className="nodrag nopan" onClick={props.onClose} title={props.floating ? "关闭影视总控" : props.embedded ? "收起为总览卡片" : "关闭工作区"} type="button">{props.embedded && !props.floating ? <Minimize2 size={18} /> : <X size={18} />}</button></div></header><div className={`cp-project-state-strip${props.embedded ? " nodrag nopan nowheel" : ""}`}>{projectStates.map(([label, value, ready]) => <div key={label}><span>{label}</span><strong className={ready ? "is-ready" : "is-attention"}>{ready ? <Check size={11} /> : <AlertTriangle size={11} />}{value}</strong></div>)}</div>
-    <div className={`cp-stage-shell${props.embedded ? " nodrag nopan nowheel" : ""}`}><nav>{stages.map((stage, index) => <button className={stageId === stage.id ? "is-active" : ""} key={stage.id} onClick={() => setStageId(stage.id)} type="button"><i>{index + 1}</i><span><b>{stage.label}</b><small>{stage.note}</small></span><em className={`is-${stage.state}`} />{index < stages.length - 1 && <ChevronRight size={13} />}</button>)}</nav><main><fieldset className="cp-stage-readonly-boundary" disabled={props.readOnly}>{props.readOnly ? <div className="cp-readonly-ribbon">全自动运行中 · 仅查看</div> : null}{stageContent}</fieldset></main></div>
+    <div className={`cp-stage-shell${props.embedded ? " nodrag nopan nowheel" : ""}`}><nav>{stages.map((stage, index) => <button className={stageId === stage.id ? "is-active" : ""} key={stage.id} onClick={() => setStageId(stage.id)} type="button"><i>{index + 1}</i><span><b>{stage.label}</b><small>{stage.note}</small></span><em className={`is-${stage.state}`} />{index < stages.length - 1 && <ChevronRight size={13} />}</button>)}</nav><main><fieldset className="cp-stage-readonly-boundary" disabled={props.readOnly && stageId !== "previs"}>{props.readOnly ? <div className="cp-readonly-ribbon">全自动运行中 · 仅查看</div> : null}{stageContent}</fieldset></main></div>
   </section>;
 }

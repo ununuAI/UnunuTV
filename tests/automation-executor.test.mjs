@@ -91,10 +91,12 @@ test("approved automatic sound generation persists one Provider run, polls safel
       async run({ request }) {
         submits += 1;
         assert.ok(request.idempotencyKey);
+        await new Promise((resolve) => setTimeout(resolve, 650));
         return { status: "running", task: { provider: "fake", taskId: "sound-1" }, artifacts: [] };
       },
       async poll() {
         polls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 650));
         return { status: "succeeded", artifacts: [{ kind: "audio", mimeType: "audio/wav", bytes: Buffer.from("fake-wave"), title: "room-tone.wav" }] };
       }
     }
@@ -105,12 +107,21 @@ test("approved automatic sound generation persists one Provider run, polls safel
   const audioNode = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "audio", title: "环境声生成" });
   const production = await runtime.app.createCinematicProduction({ projectId: project.id, sourceNodeId: script.id, title: "声音测试", projectType: "short_film" });
   await runtime.app.saveBudgetGrant({ projectId: project.id, totalLimit: 5, perTaskLimit: 2, currency: "CNY", allowedProviders: ["fake"], allowedModels: ["fake-audio-v1"], allowedTaskTypes: ["audio"] });
-  const started = await runtime.app.startAutomation({ projectId: project.id, configuration: { mode: "script_to_master", execute: true, productionId: production.productionId, sourceNodeId: script.id } });
+  const started = await runtime.app.startAutomation({
+    projectId: project.id,
+    leaseTtlMs: 250,
+    configuration: { mode: "script_to_master", execute: true, productionId: production.productionId, sourceNodeId: script.id }
+  });
   let control = started.session;
   const operation = (idempotencyKey) => ({ actorType: "automation", actorId: "director", automationRunId: started.run.id, leaseId: control.leaseId, idempotencyKey });
-  for (const taskKey of ["script_analysis", "block_planning", "visual_bible", "asset_design", "shot_design", "previs_design", "image_generation", "prompt_compile", "video_generation"]) {
+  for (const taskKey of ["script_analysis", "block_planning", "visual_bible", "asset_design", "shot_design", "previs_design", "image_generation", "prompt_compile", "video_generation", "continuity_qa", "timeline_edit"]) {
     const claimed = await runtime.app.claimAutomationTask({ projectId: project.id, automationRunId: started.run.id, taskKey, operationContext: operation(`${taskKey}:claim`) });
     await runtime.app.completeAutomationTask({ projectId: project.id, automationRunId: started.run.id, taskId: claimed.id, output: { artifactRefs: [] }, operationContext: { ...operation(`${taskKey}:complete`), taskLeaseId: claimed.workerLeaseId } });
+    control = (await runtime.app.heartbeatAutomation({
+      projectId: project.id,
+      automationRunId: started.run.id,
+      operationContext: operation(`${taskKey}:setup-heartbeat`)
+    })).session;
   }
   let result = await runtime.app.advanceAutomation({ projectId: project.id, automationRunId: started.run.id });
   assert.equal(result.status, "blocked");
@@ -130,6 +141,7 @@ test("approved automatic sound generation persists one Provider run, polls safel
   result = await runtime.app.advanceAutomation({ projectId: project.id, automationRunId: started.run.id });
   assert.equal(result.status, "waiting");
   assert.deepEqual([submits, polls], [1, 0]);
+  assert.ok(Date.parse(result.task.leaseExpiresAt) > Date.now(), "long Provider work must keep the task lease alive");
   result = await runtime.app.advanceAutomation({ projectId: project.id, automationRunId: started.run.id });
   assert.equal(result.status, "advanced");
   assert.deepEqual([submits, polls], [1, 1]);
@@ -145,11 +157,18 @@ test("the 14-stage executor completes an imported-media production without Provi
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-automation-complete-"));
   const runtime = createLocalRuntime({ dataRoot, recoverRenders: false, runAutomationExecutor: false });
   context.after(() => runtime.close());
+  const finalDeliveryProfile = Object.freeze({
+    aspectRatio: "9:16",
+    frameRate: 24,
+    height: 854,
+    renderPreset: "h264_vertical",
+    width: 480
+  });
   const videoPath = path.join(dataRoot, "accepted-shot.mp4");
   const audioPath = path.join(dataRoot, "accepted-room-tone.wav");
   await run("ffmpeg", [
     "-hide_banner", "-loglevel", "error", "-y",
-    "-f", "lavfi", "-i", "color=c=0x8f2f24:s=64x64:r=24:d=0.8",
+    "-f", "lavfi", "-i", `color=c=0x8f2f24:s=${finalDeliveryProfile.width}x${finalDeliveryProfile.height}:r=${finalDeliveryProfile.frameRate}:d=0.8`,
     "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=48000:duration=0.8",
     "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", videoPath
   ]);
@@ -234,6 +253,10 @@ test("the 14-stage executor completes an imported-media production without Provi
     productionId: production.productionId,
     generationUnit: {
       strategy: "single_shot",
+      segmentDecision: "new_shot",
+      segmentSeam: {
+        explicitCut: "deliberate_cut"
+      },
       shotLinks: [{ shotId: planned.shots[0].shotId, order: 1 }],
       visualAnchorPolicy: "NONE",
       requiredCapabilities: [],
@@ -251,8 +274,8 @@ test("the 14-stage executor completes an imported-media production without Provi
         model: "doubao-seedance-2-0-mini-260615",
         mode: "text_to_video",
         duration: 5,
-        aspectRatio: "16:9",
-        resolution: "1080p",
+        aspectRatio: finalDeliveryProfile.aspectRatio,
+        resolution: "480p",
         count: 1,
         generateAudio: true,
         referenceMediaIds: [],
@@ -305,7 +328,7 @@ test("the 14-stage executor completes an imported-media production without Provi
     mediaId: acceptedVideo.id,
     checksum: acceptedVideo.sha256,
     duration: 0.8,
-    frameRate: 24,
+    frameRate: finalDeliveryProfile.frameRate,
     hasAudio: true,
     planActualDiff: {},
     scores: { continuity: 1, identity: 1, physics: 1 },
@@ -352,7 +375,21 @@ test("the 14-stage executor completes an imported-media production without Provi
   assert.equal(projectedQaNode.payload.cinematicEvaluationId, acceptedEvaluation.evaluationId);
   assert.equal(projectedQaNode.payload.evaluationDecision, "ACCEPT");
   assert.equal(projectedQaNode.payload.evaluatedMediaId, acceptedVideo.id);
-  const timeline = await runtime.app.createTimeline({ projectId: project.id, title: "全自动主时间线", frameRate: 24, width: 64, height: 64 });
+  const timeline = await runtime.app.createTimeline({
+    projectId: project.id,
+    title: "全自动主时间线",
+    frameRate: finalDeliveryProfile.frameRate,
+    width: finalDeliveryProfile.width,
+    height: finalDeliveryProfile.height
+  });
+  assert.deepEqual(
+    { width: timeline.width, height: timeline.height, frameRate: timeline.frameRate },
+    {
+      width: finalDeliveryProfile.width,
+      height: finalDeliveryProfile.height,
+      frameRate: finalDeliveryProfile.frameRate
+    }
+  );
   const started = await runtime.app.startAutomation({
     projectId: project.id,
     configuration: {
@@ -361,13 +398,17 @@ test("the 14-stage executor completes an imported-media production without Provi
       productionId: production.productionId,
       sourceNodeId: script.id,
       timelineId: timeline.id,
+      aspectRatio: finalDeliveryProfile.aspectRatio,
+      renderPreset: finalDeliveryProfile.renderPreset,
       acceptQcWarnings: true
     }
   });
 
   let terminal = null;
+  let lastResult = null;
   for (let index = 0; index < 80; index += 1) {
     const result = await runtime.app.advanceAutomation({ projectId: project.id, automationRunId: started.run.id });
+    lastResult = result;
     if (result.status === "completed") {
       terminal = result;
       break;
@@ -387,12 +428,32 @@ test("the 14-stage executor completes an imported-media production without Provi
           }
         });
       }
+      const sequencePrevis = await runtime.app.getSequencePrevis({
+        projectId: project.id,
+        productionId: production.productionId,
+        sequencePrevisId: result.error.details.sequencePrevisId
+      });
+      const playbackReceipt = await runtime.app.recordSequencePrevisPlayback({
+        projectId: project.id,
+        productionId: production.productionId,
+        sequencePrevisId: result.error.details.sequencePrevisId,
+        playback: {
+          playbackSessionId: `automation-playback-${result.error.details.sequencePrevisId}-r${result.error.details.revision}`,
+          startedAt: "2026-07-28T00:00:00.000Z",
+          completedAt: "2026-07-28T00:10:00.000Z",
+          sampleCount: Math.ceil(sequencePrevis.durationSeconds * sequencePrevis.frameRate) + 1,
+          maxObservedStepMs: 42,
+          manualSeekCount: 0,
+          intervals: [{ startSeconds: 0, endSeconds: sequencePrevis.durationSeconds }]
+        }
+      });
       await runtime.app.reviewSequencePrevis({
         projectId: project.id,
         productionId: production.productionId,
         sequencePrevisId: result.error.details.sequencePrevisId,
         revision: result.error.details.revision,
         state: "accepted",
+        playbackReceiptId: playbackReceipt.playbackReceiptId,
         note: "测试接受完整连续预演"
       });
       const currentTask = (await runtime.app.listAutomationTasks({
@@ -482,16 +543,82 @@ test("the 14-stage executor completes an imported-media production without Provi
       });
       continue;
     }
+    if (result.status === "blocked" && result.error?.code === "automation_generation_strategy_required" && result.task?.stage === "image_generation") {
+      const [currentBoard] = await runtime.app.listStoryboards({
+        projectId: project.id,
+        productionId: production.productionId
+      });
+      const currentBoardShot = currentBoard?.shots?.find((entry) => entry.shotId === updatedShot.shotId);
+      assert.ok(currentBoardShot, "the imported storyboard image must be rebound to the current shot revision");
+      const ownerGateContext = {
+        actorType: "owner_gate",
+        actorId: "test-owner-gate",
+        automationRunId: started.run.id
+      };
+      const reboundImage = await runtime.app.setStoryboardShotMedia({
+        projectId: project.id,
+        productionId: production.productionId,
+        storyboardId: currentBoard.storyboardId,
+        storyboardShotId: currentBoardShot.storyboardShotId,
+        imageMediaId: storyboardImage.id,
+        imageVersionId: "approved-storyboard-v1",
+        imageChecksum: storyboardImage.sha256,
+        operationContext: ownerGateContext
+      });
+      await runtime.app.setStoryboardShotMedia({
+        projectId: project.id,
+        productionId: production.productionId,
+        storyboardId: currentBoard.storyboardId,
+        storyboardShotId: currentBoardShot.storyboardShotId,
+        currentImageMediaId: reboundImage.shots.find((entry) => entry.storyboardShotId === currentBoardShot.storyboardShotId)?.imageMediaId,
+        videoMediaId: acceptedVideo.id,
+        videoVersionId: "accepted-shot-v1",
+        videoChecksum: acceptedVideo.sha256,
+        operationContext: ownerGateContext
+      });
+      await runtime.app.retryAutomationTask({
+        projectId: project.id,
+        automationRunId: started.run.id,
+        taskId: result.task.id
+      });
+      continue;
+    }
     assert.notEqual(result.status, "blocked", JSON.stringify(result.error || result));
     if (result.status === "waiting") await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  assert.ok(terminal, "expected all 14 automation stages to complete");
+  const unfinishedTasks = terminal ? [] : await runtime.app.listAutomationTasks({
+    projectId: project.id,
+    automationRunId: started.run.id
+  });
+  assert.ok(terminal, `expected all 14 automation stages to complete: ${JSON.stringify(unfinishedTasks.map((task) => ({
+    stage: task.stage,
+    status: task.status,
+    error: task.error?.code || null
+  })))}; last=${JSON.stringify({ status: lastResult?.status, error: lastResult?.error, task: lastResult?.task?.stage })}`);
   const tasks = await runtime.app.listAutomationTasks({ projectId: project.id, automationRunId: started.run.id });
   assert.equal(tasks.length, 14);
   assert.equal(tasks.every((task) => ["succeeded", "reused"].includes(task.status)), true);
   assert.equal((await runtime.app.listRuns({ projectId: project.id })).filter((run) => run.provider !== "local_import").length, 0, "imported media must not trigger a Provider run");
-  assert.equal((await runtime.app.listRenderJobs({ projectId: project.id, timelineId: timeline.id })).length, 1);
-  assert.equal((await runtime.app.listDeliveryPackages({ projectId: project.id })).length, 1);
+  const renderJobs = await runtime.app.listRenderJobs({ projectId: project.id, timelineId: timeline.id });
+  assert.equal(renderJobs.length, 1, "the final-delivery fixture must still produce exactly one render");
+  assert.equal(renderJobs[0].preset, finalDeliveryProfile.renderPreset);
+  assert.deepEqual(
+    {
+      width: renderJobs[0].renderGraph.width,
+      height: renderJobs[0].renderGraph.height,
+      frameRate: renderJobs[0].renderGraph.frameRate
+    },
+    {
+      width: finalDeliveryProfile.width,
+      height: finalDeliveryProfile.height,
+      frameRate: finalDeliveryProfile.frameRate
+    }
+  );
+  const deliveryPackages = await runtime.app.listDeliveryPackages({ projectId: project.id });
+  assert.equal(deliveryPackages.length, 1);
+  assert.equal(deliveryPackages[0].preset, finalDeliveryProfile.renderPreset);
+  assert.equal(deliveryPackages[0].kind, "delivery");
+  assert.equal(deliveryPackages[0].status, "delivery_ready");
   assert.equal((await runtime.app.getProjectControl({ projectId: project.id })).state, "auto_completed_review");
   await runtime.app.exitAutomation({ projectId: project.id, automationRunId: started.run.id });
   assert.equal((await runtime.app.getProjectControl({ projectId: project.id })).state, "manual_editable");

@@ -1,5 +1,7 @@
 import { latestCinematicEvaluationForUnit, latestCinematicMediaReview } from "@ununu/unutv-contracts";
 import { cinematicOwnerReviewEvidenceKey, latestCinematicRevisionReview } from "../cinematic-story-shot-owner-review-policy.mjs";
+import { assessCinematicAssetReadiness } from "../cinematic-asset-readiness-policy.mjs";
+import { loadCurrentAssetMediaRecords } from "./cinematic-production-use-case-helpers.mjs";
 
 function versionSetDiffers(compiled, current, keyOf) {
   const compiledKeys = new Set(compiled.map(keyOf));
@@ -16,7 +18,9 @@ export function createCinematicCompilationStalenessInspector({
   listReviews,
   listStoryboards,
   listProfessionalContributions,
-  listAssetAuthorities
+  listAssetAuthorities,
+  listAssets,
+  getMedia
 }) {
   return async function findCompilationStaleness(projectId, productionId, unitRecord, compilation) {
     const versions = compilation?.envelope?.sourceVersions ?? {};
@@ -226,6 +230,79 @@ export function createCinematicCompilationStalenessInspector({
           compiledRevision: compiledAuthorities.map(authorityKey),
           currentRevision: currentAuthorities.map(authorityKey)
         });
+      }
+      const compiledIdentityMedia = Array.isArray(versions.characterIdentityMediaAuthority)
+        ? versions.characterIdentityMediaAuthority
+        : [];
+      if (compiledIdentityMedia.length && typeof listAssets === "function" && typeof listReviews === "function") {
+        const authorityIds = new Set(compiledIdentityMedia.map((entry) => entry.authorityId));
+        const currentAssets = await listAssets(projectId);
+        const currentIdentityMedia = assessCinematicAssetReadiness({
+          assets: currentAssets,
+          authorities: (await listAssetAuthorities(projectId, productionId))
+            .filter((authority) => authorityIds.has(authority.authorityId)),
+          mediaRecords: await loadCurrentAssetMediaRecords({
+            assets: currentAssets,
+            getMedia,
+            projectId
+          }),
+          reviews: await currentReviews()
+        }).formalBindings;
+        const identityMediaKey = (entry) => JSON.stringify({
+          authorityId: entry.authorityId,
+          authorityRevision: entry.authorityRevision,
+          assetId: entry.assetId,
+          assetVersionId: entry.assetVersionId,
+          mediaId: entry.mediaId,
+          mediaChecksum: entry.mediaChecksum,
+          reviewId: entry.reviewId,
+          reviewRevision: entry.reviewRevision,
+          evidence: entry.evidence
+        });
+        if (versionSetDiffers(compiledIdentityMedia, currentIdentityMedia, identityMediaKey)) {
+          staleSources.push({
+            id: unitRecord.generationUnit.generationUnitId,
+            sourceType: "character_identity_media_authority",
+            compiledRevision: compiledIdentityMedia.map(identityMediaKey),
+            currentRevision: currentIdentityMedia.map(identityMediaKey)
+          });
+        }
+      }
+      const compiledSceneAuthority = versions.sceneAuthorityMedia;
+      if (compiledSceneAuthority && typeof listAssets === "function" && typeof listReviews === "function") {
+        const currentAssets = await listAssets(projectId);
+        const currentSceneBinding = assessCinematicAssetReadiness({
+          assets: currentAssets,
+          authorities: (await listAssetAuthorities(projectId, productionId))
+            .filter((authority) => authority.authorityId === compiledSceneAuthority.authorityId),
+          mediaRecords: await loadCurrentAssetMediaRecords({
+            assets: currentAssets,
+            getMedia,
+            projectId
+          }),
+          reviews: await currentReviews()
+        }).formalBindings[0] ?? null;
+        const current = currentSceneBinding ? {
+          authorityId: currentSceneBinding.authorityId,
+          authorityRevision: currentSceneBinding.authorityRevision,
+          topologyRevision: unitRecord.generationUnit.sceneAuthorityBinding?.topologyRevision ?? null,
+          assetId: currentSceneBinding.assetId,
+          assetVersionId: currentSceneBinding.assetVersionId,
+          mediaId: currentSceneBinding.mediaId,
+          mediaChecksum: currentSceneBinding.mediaChecksum,
+          reviewId: currentSceneBinding.reviewId,
+          reviewRevision: currentSceneBinding.reviewRevision ?? null,
+          sourceNodeId: unitRecord.generationUnit.sceneAuthorityBinding?.sourceNodeId ?? null,
+          edgeRole: unitRecord.generationUnit.sceneAuthorityBinding?.edgeRole ?? null
+        } : null;
+        if (JSON.stringify(compiledSceneAuthority) !== JSON.stringify(current)) {
+          staleSources.push({
+            id: compiledSceneAuthority.authorityId,
+            sourceType: "scene_authority_media",
+            compiledRevision: compiledSceneAuthority,
+            currentRevision: current
+          });
+        }
       }
     }
     return staleSources;

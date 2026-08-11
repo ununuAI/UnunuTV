@@ -1,4 +1,4 @@
-import { normalizePromptDocumentV1, nowIso, promptDocumentPlainText, promptDocumentReferenceBindings, requireObject, requireText, UnuTvError } from "@ununu/unutv-contracts";
+import { isPromptCapableNode, normalizePromptDocumentV1, nowIso, promptDocumentPlainText, promptDocumentReferenceBindings, requireObject, requireText, UnuTvError } from "@ununu/unutv-contracts";
 
 export function createNodePromptUseCases(ports) {
   async function saveNodePrompt(input = {}) {
@@ -6,7 +6,7 @@ export function createNodePromptUseCases(ports) {
     const nodeId = requireText(input.nodeId, "nodeId");
     const node = await ports.projects.getNode(projectId, nodeId);
     if (!node) throw new UnuTvError("node_not_found", `Node not found: ${nodeId}`, 404);
-    if (["upload", "director"].includes(node.kind)) {
+    if (!isPromptCapableNode(node)) {
       throw new UnuTvError("prompt_not_supported", `${node.kind} nodes do not own a Prompt`, 400);
     }
     const document = normalizePromptDocumentV1(input.document, typeof input.text === "string" ? input.text : "");
@@ -30,10 +30,11 @@ export function createNodePromptUseCases(ports) {
   }
 
   async function getNodePrompt(input = {}) {
-    const prompt = await ports.projects.getNodePrompt(
-      requireText(input.projectId, "projectId"),
-      requireText(input.nodeId, "nodeId")
-    );
+    const projectId = requireText(input.projectId, "projectId");
+    const nodeId = requireText(input.nodeId, "nodeId");
+    const node = await ports.projects.getNode(projectId, nodeId);
+    if (node && !isPromptCapableNode(node)) return undefined;
+    const prompt = await ports.projects.getNodePrompt(projectId, nodeId);
     return prompt ? { ...prompt, document: normalizePromptDocumentV1(prompt.document, prompt.text) } : prompt;
   }
 

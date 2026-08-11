@@ -25,8 +25,12 @@ import { mediaCandidatesForNode, mediaReviewStateForNode, mediaUrlForNode } from
 import { mediaEmptyState } from "./media-empty-state-policy.js";
 import { INVISIBLE_NODE_RESIZE_HANDLES, shouldEnableInvisibleNodeResize, shouldShowNodePrompt } from "./canvas-node-selection-policy.js";
 import { canvasNodeIsExpanded, nodePresentationDensity } from "./canvas-node-view-policy.js";
-import { buildNodePresentationV2 } from "./node-presentation-view-model.js";
+import { buildNodePresentationV2, nodeVisibleText } from "./node-presentation-view-model.js";
 import { assetAuthorityBoardHistory } from "./asset-authority-board-view-policy.js";
+import { assetTypeForNode } from "./cinematic-asset-node-view-model.js";
+import { ProfessionalContributionNode } from "./ProfessionalContributionNode.jsx";
+import { StoryboardBatchNodeTrace } from "./StoryboardBatchNodeTrace.jsx";
+import { ResilientMediaImage } from "./ResilientMediaImage.jsx";
 
 const LABELS = { ...Object.fromEntries(NODE_ITEM_DEFINITIONS.map((item) => [item.kind, item.label])), story: "文本", subject: "主体", batch: "分镜表", videoShot: "视频镜头", review: "最终检查", storyboard: "故事板", "video-clip": "视频合成" };
 
@@ -64,16 +68,18 @@ function CanvasNodeCard({ data, selected }) {
   const isGrid = node.kind === "grid";
   const isImageEdit = node.kind === "imageEdit";
   const isPanorama = isPanoramaNode(node);
-  const isGenerating = node.payload?.generationStatus === "running";
+  const isProfessionalContribution = node.kind === "review" && node.payload?.resourceType === "professional_contribution";
+  const batchItemStatus = node.payload?.storyboardBatchTrace?.itemStatus;
+  const isGenerating = node.payload?.generationStatus === "running" && batchItemStatus !== "queued";
   const imageEmptyState = mediaEmptyState(node, "image");
   const hasMultiSelection = selectedIds.length > 1;
-  const title = isAsset && (!node.title || node.title === "资产") ? `${industrialAssetTypeLabel(node.payload?.assetType || "character")}资产` : node.title || LABELS[node.kind] || node.kind;
+  const title = isAsset && (!node.title || node.title === "资产") ? `${industrialAssetTypeLabel(assetTypeForNode(node))}资产` : node.title || LABELS[node.kind] || node.kind;
   const status = presentation.state;
-  const textContent = node.payload?.textDocument?.plainText || node.payload?.plainText || node.payload?.text || (isText ? node.payload?.prompt : "") || "";
-  const shortSummary = typeof node.payload?.summary === "string" && node.payload.summary.trim().length <= 180 ? node.payload.summary.trim() : "";
+  const textContent = nodeVisibleText(node);
+  const shortSummary = String(presentation.preview?.summary || "").trim();
   const connectedNodes = actions.connectedNodes(node.id);
   const enableInvisibleResize = shouldEnableInvisibleNodeResize({ readOnly, selected, selectionCount: selectedIds.length });
-  const showPrompt = shouldShowNodePrompt({ expanded: isInlineExpanded, kind: node.kind, selected, selectionCount: selectedIds.length, worldProviderReady: node.payload?.worldProviderReady === true });
+  const showPrompt = shouldShowNodePrompt({ expanded: isInlineExpanded, node, selected, selectionCount: selectedIds.length });
   const assetBoardHistory = isAsset ? assetAuthorityBoardHistory(node, mediaCandidates).map((entry) => ({ ...entry, url: mediaUrlForNode(node, entry.mediaId) })) : [];
 
   useEffect(() => {
@@ -113,7 +119,7 @@ function CanvasNodeCard({ data, selected }) {
       {enableInvisibleResize ? INVISIBLE_NODE_RESIZE_HANDLES.map(({ cursor, position }) => (
         <NodeResizeControl aria-hidden="true" className={`node-invisible-resize node-invisible-resize-${position} nodrag nopan`} data-invisible-resize-hit-area="true" keepAspectRatio={isGrid || ((isImage || isImageEdit || isVideo) && Boolean(mediaUrl) && !isPanorama)} key={position} minHeight={isInlineExpanded ? 640 : isText ? 160 : isImageEdit ? 250 : 180} minWidth={isInlineExpanded ? 860 : isText ? 240 : isGrid ? 180 : isImageEdit ? 250 : 260} onResizeEnd={(_event, params) => actions.resizeNode(node, params)} position={position} style={{ background: "transparent", border: 0, boxShadow: "none", color: "transparent", cursor, opacity: 0, outline: 0 }} />
       )) : null}
-      <article className={`node-shell node-${node.kind}${isImage && mediaUrl ? " image-result-node" : ""}${isPanorama ? " panorama-result-node" : ""}${isImage && !mediaUrl ? " empty-image-node" : ""}${isVideo ? " video-result-node" : ""}${isAudio ? " momo-audio-shell" : ""}${isWorld ? " momo-world-shell" : ""}${isAsset ? " momo-asset-shell" : ""}${isImageEdit ? " momo-image-edit-shell" : ""}`} data-nodeid={node.id}>
+      <article className={`node-shell node-${node.kind}${isImage && mediaUrl ? " image-result-node" : ""}${isPanorama ? " panorama-result-node" : ""}${isImage && !mediaUrl ? " empty-image-node" : ""}${isVideo ? " video-result-node" : ""}${isAudio ? " momo-audio-shell" : ""}${isWorld ? " momo-world-shell" : ""}${isAsset ? " momo-asset-shell" : ""}${isImageEdit ? " momo-image-edit-shell" : ""}${isProfessionalContribution ? " professional-review-shell" : ""}`} data-nodeid={node.id}>
         {!isGrid ? <CanvasConnectionHandle id="target" label={`输入：${presentation.inputLabel}`} readOnly={readOnly} side="input" zoomPercent={zoomPercent} /> : null}
         {isInlineExpanded && isImageEdit ? (
           <ImageEditCanvasWorkspace actions={actions} connectedNodes={connectedNodes} node={node} readOnly={readOnly} />
@@ -130,9 +136,9 @@ function CanvasNodeCard({ data, selected }) {
         ) : isImageEdit ? (
           <MomoImageEditNode actions={actions} mediaUrl={mediaUrl} node={node} readOnly={readOnly} selected={selected && !hasMultiSelection} />
         ) : isImage && mediaUrl ? (
-          isPanorama ? <PanoramaViewer imageUrl={mediaUrl} onExport={(captures) => actions.exportPanorama(node, captures)} selected={selected && !hasMultiSelection} title={title} /> : <div className="image-result-surface"><img alt={title} onLoad={(event) => actions.fitMediaNode(node, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)} src={mediaUrl} /></div>
+          isPanorama ? <PanoramaViewer imageUrl={mediaUrl} onExport={(captures) => actions.exportPanorama(node, captures)} selected={selected && !hasMultiSelection} title={title} /> : <div className="image-result-surface"><ResilientMediaImage alt={title} onLoad={(event) => actions.fitMediaNode(node, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)} src={mediaUrl} /></div>
         ) : isImage ? (
-          <div aria-label={node.payload?.generationStatus === "running" ? "处理中" : imageEmptyState.label} className="node-image-placeholder"><ImageIcon size={34} strokeWidth={1.5} /><strong>{imageEmptyState.label}</strong><small>{imageEmptyState.detail}</small></div>
+          <div aria-label={isGenerating ? "处理中" : imageEmptyState.label} className="node-image-placeholder"><ImageIcon size={34} strokeWidth={1.5} /><strong>{imageEmptyState.label}</strong><small>{imageEmptyState.detail}</small></div>
         ) : isVideo ? (
           <MomoVideoNode actions={actions} connectedNodes={connectedNodes} displayedMediaId={displayedMediaId} mediaUrl={mediaUrl} node={node} readOnly={readOnly} selected={selected && !hasMultiSelection} />
         ) : isAsset ? (
@@ -145,6 +151,8 @@ function CanvasNodeCard({ data, selected }) {
           <MomoAudioNode actions={actions} node={node} readOnly={readOnly} selected={selected && !hasMultiSelection} />
         ) : isWorld ? (
           <MomoWorldNode actions={actions} connectedNodes={connectedNodes} node={node} readOnly={readOnly} selected={selected && !hasMultiSelection} />
+        ) : isProfessionalContribution ? (
+          <ProfessionalContributionNode node={node} />
         ) : isText ? (
           <div aria-label={`${title} 正文`} aria-multiline="true" className={`text-node-editor${!readOnly && editingTextId === node.id ? " nowheel nopan nodrag editing" : ""}`} contentEditable={!readOnly && editingTextId === node.id} onBlur={(event) => { if (!readOnly) actions.saveText(node, event.currentTarget.innerText); }} role="textbox" suppressContentEditableWarning>{textContent || (readOnly ? "暂无文本" : "双击开始输入文本")}</div>
         ) : (
@@ -156,7 +164,8 @@ function CanvasNodeCard({ data, selected }) {
             <div className="node-footer"><span>{node.payload?.currentMediaId ? "本地媒体" : "本地节点"}</span><small>r{node.revision}</small></div>
           </>
         )}
-        {node.payload?.generationStatus === "running" && !isAsset ? <div className="node-generation-progress" data-phase={node.payload?.generationPhase || "running"}><strong>处理中</strong><span className="node-generation-track indeterminate"><i /></span></div> : null}
+        {isGenerating && !isAsset ? <div className="node-generation-progress" data-phase={node.payload?.generationPhase || "running"}><strong>Provider 正在生成</strong><span className="node-generation-track indeterminate"><i /></span><StoryboardBatchNodeTrace node={node} /></div> : null}
+        {!isGenerating ? <StoryboardBatchNodeTrace node={node} /> : null}
         <CanvasConnectionHandle id="source" label={`输出：${presentation.outputLabel}`} readOnly={readOnly} side="output" zoomPercent={zoomPercent} />
       </article>
       {(isImage || isImageEdit || isVideo) && mediaCandidates.length > 1 ? (

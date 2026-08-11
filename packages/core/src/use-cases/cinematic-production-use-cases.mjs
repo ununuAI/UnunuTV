@@ -1,9 +1,9 @@
 import {
+  CINEMATIC_PROMPT_COMPILER_VERSION,
   CINEMATIC_PRODUCTION_MODES, CINEMATIC_PROJECT_TYPES,
-  VIDEO_MODEL_CAPABILITIES, VIDEO_MODEL_REGISTRY_VERSION,
   UnuTvError,
   assertCinematicContract,
-  compileCinematicPrompt, storyboardVideoReferenceSemanticControl,
+  compileCinematicPrompt,
   createId,
   nowIso,
   optionalText,
@@ -12,44 +12,57 @@ import {
   requireText
 } from "@ununu/unutv-contracts";
 import { createCinematicCompilationStalenessInspector } from "./cinematic-compilation-staleness.mjs";
-import { appendCompilationSourceVersions, auditSelectedStoryboardReferences, buildExecutionGateEvidence, enforceProductionSignoffGates, selectProviderReferenceBindings } from "./cinematic-compilation-context.mjs";
+import { appendCompilationSourceVersions, auditSelectedStoryboardReferences, buildExecutionGateEvidence, enforceProductionSignoffGates } from "./cinematic-compilation-context.mjs";
 import { createCinematicGenerationRunUseCase } from "./cinematic-generation-run-use-case.mjs";
 import { createCinematicReviewUseCases } from "./cinematic-review-use-cases.mjs";
+import {
+  applyCinematicCompilationAudits,
+  assertCinematicSegmentDecision,
+  assessCharacterIdentityMediaAuthority,
+  createRequireCinematicProduction,
+  getCinematicModelCapabilities,
+  loadCurrentAssetMediaRecords,
+  requireCinematicProductionPort,
+  requireCinematicRevision
+} from "./cinematic-production-use-case-helpers.mjs";
+import {
+  assertGenerationUnitIdentity,
+  assertShotIdentityInput,
+  buildGenerationUnitReferences,
+  deriveGenerationUnitIdentity,
+  deriveIdentityForShots,
+  deriveShotIdentityForSave
+} from "./cinematic-generation-reference-helpers.mjs";
+import { auditGenerationUnitSceneAuthority } from "../cinematic-scene-authority-policy.mjs";
 import { syncGenerationUnitLifecycleNode, syncGenerationUnitPreflightNode } from "../cinematic-generation-unit-node-policy.mjs";
 import { persistCompiledPromptOnCanvas, resolveCanvasReferenceGraph } from "../cinematic-canvas-prompt-graph-policy.mjs";
-
-function requireProductionPort(ports, method) {
-  if (typeof ports.projects?.[method] !== "function") throw new TypeError(`Missing cinematic production port: projects.${method}`);
-  return ports.projects[method].bind(ports.projects); }
-function requireRevision(value, fallback = 1) {
-  const revision = value === undefined ? fallback : Number(value);
-  if (!Number.isInteger(revision) || revision < 1) throw new UnuTvError("invalid_payload", "revision must be a positive integer");
-  return revision; }
+import { projectSoundContributionOnCanvas } from "../cinematic-sound-canvas-projection.mjs";
 export function createCinematicProductionUseCases(ports, dependencies = {}) {
-  const createProductionRecord = requireProductionPort(ports, "createCinematicProduction");
-  const listProductionRecords = requireProductionPort(ports, "listCinematicProductions");
-  const getProductionRecord = requireProductionPort(ports, "getCinematicProduction");
-  const updateProductionRecord = requireProductionPort(ports, "updateCinematicProduction");
-  const saveStoryPacketRecord = requireProductionPort(ports, "saveStoryPacket");
-  const getStoryPacketRecord = requireProductionPort(ports, "getStoryPacket");
-  const saveVisualBibleRecord = requireProductionPort(ports, "saveVisualBible");
-  const getVisualBibleRecord = requireProductionPort(ports, "getVisualBible");
-  const saveShotRecord = requireProductionPort(ports, "saveCinematicShot");
-  const listShotRecords = requireProductionPort(ports, "listCinematicShots");
-  const getShotRecord = requireProductionPort(ports, "getCinematicShot");
-  const saveUnitRecord = requireProductionPort(ports, "saveGenerationUnit");
-  const listUnitRecords = requireProductionPort(ports, "listGenerationUnits");
-  const getUnitRecord = requireProductionPort(ports, "getGenerationUnit");
-  const saveCompilationRecord = requireProductionPort(ports, "savePromptCompilation");
-  const getCompilationRecord = requireProductionPort(ports, "getPromptCompilation");
-  const saveEvaluationRecord = requireProductionPort(ports, "saveCinematicEvaluation");
-  const listEvaluationRecords = requireProductionPort(ports, "listCinematicEvaluations");
-  const saveContributionRecord = requireProductionPort(ports, "saveProfessionalContribution");
-  const listContributionRecords = requireProductionPort(ports, "listProfessionalContributions");
-  const listAssetAuthorityRecords = requireProductionPort(ports, "listCinematicAssetAuthorities");
-  const linkGenerationUnitRun = requireProductionPort(ports, "linkGenerationUnitRun");
-  const listProviderRuns = requireProductionPort(ports, "listRuns");
-  const listStoryboardRecords = requireProductionPort(ports, "listStoryboardDocuments");
+  const createProductionRecord = requireCinematicProductionPort(ports, "createCinematicProduction");
+  const listProductionRecords = requireCinematicProductionPort(ports, "listCinematicProductions");
+  const getProductionRecord = requireCinematicProductionPort(ports, "getCinematicProduction");
+  const updateProductionRecord = requireCinematicProductionPort(ports, "updateCinematicProduction");
+  const saveStoryPacketRecord = requireCinematicProductionPort(ports, "saveStoryPacket");
+  const getStoryPacketRecord = requireCinematicProductionPort(ports, "getStoryPacket");
+  const saveVisualBibleRecord = requireCinematicProductionPort(ports, "saveVisualBible");
+  const getVisualBibleRecord = requireCinematicProductionPort(ports, "getVisualBible");
+  const saveShotRecord = requireCinematicProductionPort(ports, "saveCinematicShot");
+  const listShotRecords = requireCinematicProductionPort(ports, "listCinematicShots");
+  const getShotRecord = requireCinematicProductionPort(ports, "getCinematicShot");
+  const saveUnitRecord = requireCinematicProductionPort(ports, "saveGenerationUnit");
+  const listUnitRecords = requireCinematicProductionPort(ports, "listGenerationUnits");
+  const getUnitRecord = requireCinematicProductionPort(ports, "getGenerationUnit");
+  const saveCompilationRecord = requireCinematicProductionPort(ports, "savePromptCompilation");
+  const getCompilationRecord = requireCinematicProductionPort(ports, "getPromptCompilation");
+  const saveEvaluationRecord = requireCinematicProductionPort(ports, "saveCinematicEvaluation");
+  const listEvaluationRecords = requireCinematicProductionPort(ports, "listCinematicEvaluations");
+  const saveContributionRecord = requireCinematicProductionPort(ports, "saveProfessionalContribution");
+  const listContributionRecords = requireCinematicProductionPort(ports, "listProfessionalContributions");
+  const listAssetAuthorityRecords = requireCinematicProductionPort(ports, "listCinematicAssetAuthorities");
+  const linkGenerationUnitRun = requireCinematicProductionPort(ports, "linkGenerationUnitRun");
+  const listProviderRuns = requireCinematicProductionPort(ports, "listRuns");
+  const listStoryboardRecords = requireCinematicProductionPort(ports, "listStoryboardDocuments");
+  const requireProduction = createRequireCinematicProduction(getProductionRecord);
   const reviewUseCases = createCinematicReviewUseCases({ ports, requireProduction, getUnitRecord, saveEvaluationRecord, listEvaluationRecords });
   const findCompilationStaleness = createCinematicCompilationStalenessInspector({
     getProduction: getProductionRecord, getShot: getShotRecord,
@@ -57,7 +70,9 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
     getVisualBible: getVisualBibleRecord,
     listStoryboards: listStoryboardRecords, listReviews: ports.projects.listReviews?.bind(ports.projects), listEvaluations: listEvaluationRecords,
     listProfessionalContributions: listContributionRecords,
-    listAssetAuthorities: listAssetAuthorityRecords
+    listAssetAuthorities: listAssetAuthorityRecords,
+    listAssets: ports.projects.listAssets?.bind(ports.projects),
+    getMedia: ports.media?.open?.bind(ports.media)
   });
   const runGenerationUnit = createCinematicGenerationRunUseCase({
     budget: dependencies.budget,
@@ -66,18 +81,13 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
     getGenerationUnit,
     linkGenerationUnitRun,
     listProviderRuns,
+    listAssetAuthorities: listAssetAuthorityRecords,
     pollRun: dependencies.pollRun,
     projects: ports.projects,
     runNode: dependencies.runNode,
     saveNodePrompt: dependencies.saveNodePrompt,
     updateNode: dependencies.updateNode
   });
-  async function requireProduction(projectId, productionId) {
-    const production = await getProductionRecord(projectId, productionId);
-    if (!production) throw new UnuTvError("cinematic_production_not_found", `Cinematic production not found: ${productionId}`, 404);
-    return production;
-  }
-
   async function createCinematicProduction(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const timestamp = nowIso();
@@ -137,7 +147,7 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
     const packet = {
       ...requireObject(input.storyPacket, "storyPacket"),
       storyPacketId: input.storyPacket?.storyPacketId || createId("story-packet"),
-      revision: requireRevision(input.storyPacket?.revision),
+      revision: requireCinematicRevision(input.storyPacket?.revision),
       updatedAt: nowIso()
     };
     assertCinematicContract("StoryProductionPacket", packet);
@@ -166,7 +176,7 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
       styleProhibitions: [],
       ...requireObject(input.visualBible, "visualBible"),
       visualBibleId: input.visualBible?.visualBibleId || createId("visual-bible"),
-      revision: requireRevision(input.visualBible?.revision),
+      revision: requireCinematicRevision(input.visualBible?.revision),
       updatedAt: nowIso()
     };
     assertCinematicContract("VisualBible", bible);
@@ -184,10 +194,16 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
+    const shotInput = requireObject(input.shot, "shot");
+    const authorities = await listAssetAuthorityRecords(projectId, productionId);
+    const identity = deriveShotIdentityForSave(authorities, [shotInput]);
+    assertShotIdentityInput(shotInput, identity);
     const shot = {
-      ...requireObject(input.shot, "shot"),
+      ...shotInput,
+      characterAuthorityIds: identity.characterAuthorityIds,
+      characterIdentitySourceVersions: identity.sourceVersions,
       shotId: input.shot?.shotId || createId("shot"),
-      revision: requireRevision(input.shot?.revision),
+      revision: requireCinematicRevision(input.shot?.revision),
       updatedAt: nowIso()
     };
     assertCinematicContract("CinematicShotSpec", shot);
@@ -196,10 +212,13 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
 
   async function updateShot(input = {}) {
     const current = await getShot(input);
+    const merged = { ...current, ...requireObject(input.patch ?? input.shot, "patch"), shotId: current.shotId, revision: current.revision + 1 };
+    delete merged.characterIdentitySourceVersions;
+    delete merged.virtualPersonAssetIds;
     return saveShot({
       ...input,
       expectedRevision: input.expectedRevision ?? current.revision,
-      shot: { ...current, ...requireObject(input.patch ?? input.shot, "patch"), shotId: current.shotId, revision: current.revision + 1 }
+      shot: merged
     });
   }
 
@@ -207,14 +226,14 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
-    return listShotRecords(projectId, productionId);
+    return listShotRecords(projectId, productionId, input.includeStale === true);
   }
 
   async function getShot(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
-    const shot = await getShotRecord(projectId, productionId, requireText(input.shotId, "shotId"));
+    const shot = await getShotRecord(projectId, productionId, requireText(input.shotId, "shotId"), input.includeStale === true);
     if (!shot) throw new UnuTvError("cinematic_shot_not_found", `Cinematic shot not found: ${input.shotId}`, 404);
     return shot;
   }
@@ -223,16 +242,28 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
+    const unitInput = requireObject(input.generationUnit, "generationUnit");
+    assertCinematicSegmentDecision(unitInput.segmentDecision);
+    const productionShots = await listShotRecords(projectId, productionId);
+    const authorities = await listAssetAuthorityRecords(projectId, productionId);
+    const identity = deriveGenerationUnitIdentity({ authorities, productionShots, unitInput });
     const unit = {
-      ...requireObject(input.generationUnit, "generationUnit"),
+      ...unitInput,
+      characterAuthorityIds: identity.characterAuthorityIds,
+      characterIdentitySourceVersions: identity.sourceVersions,
+      requiredCapabilities: [...new Set([
+        ...(Array.isArray(unitInput.requiredCapabilities) ? unitInput.requiredCapabilities : []),
+        ...(identity.virtualPersonAssetIds.length ? ["virtual_person_asset"] : [])
+      ])],
+      generationParameters: {
+        ...requireObject(unitInput.generationParameters, "generationUnit.generationParameters"),
+        virtualPersonAssetIds: identity.virtualPersonAssetIds
+      },
       generationUnitId: input.generationUnit?.generationUnitId || createId("generation-unit"),
-      revision: requireRevision(input.generationUnit?.revision),
+      revision: requireCinematicRevision(input.generationUnit?.revision),
       updatedAt: nowIso()
     };
     assertCinematicContract("GenerationUnit", unit);
-    const productionShots = new Set((await listShotRecords(projectId, productionId)).map((shot) => shot.shotId));
-    const missingShot = unit.shotLinks.find((link) => !productionShots.has(link.shotId));
-    if (missingShot) throw new UnuTvError("cinematic_shot_not_found", `Generation unit references a shot outside this production: ${missingShot.shotId}`, 400);
     const referenceBindings = Array.isArray(input.referenceBindings) ? input.referenceBindings : [];
     assertCinematicContract("ReferenceBinding", referenceBindings, { generationParameters: unit.generationParameters });
     const saved = await saveUnitRecord(projectId, productionId, unit, referenceBindings, input.expectedRevision);
@@ -261,13 +292,18 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
-    return listUnitRecords(projectId, productionId);
+    return listUnitRecords(projectId, productionId, input.includeStale === true);
   }
   async function getGenerationUnit(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
-    const unit = await getUnitRecord(projectId, productionId, requireText(input.generationUnitId, "generationUnitId"));
+    const unit = await getUnitRecord(
+      projectId,
+      productionId,
+      requireText(input.generationUnitId, "generationUnitId"),
+      input.includeStale === true
+    );
     if (!unit) throw new UnuTvError("generation_unit_not_found", `Generation unit not found: ${input.generationUnitId}`, 404);
     return unit;
   }
@@ -285,73 +321,47 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
       if (!shot) throw new UnuTvError("cinematic_shot_not_found", `Cinematic shot not found: ${link.shotId}`, 409);
       shots.push(shot);
     }
-    const [professionalContributions, assetAuthorities, evaluations, reviews] = await Promise.all([
+    const [professionalContributions, assetAuthorities, evaluations, reviews, assets] = await Promise.all([
       listContributionRecords(projectId, productionId),
       listAssetAuthorityRecords(projectId, productionId),
-      listEvaluationRecords(projectId, productionId), ports.projects.listReviews(projectId)
+      listEvaluationRecords(projectId, productionId),
+      ports.projects.listReviews(projectId),
+      ports.projects.listAssets(projectId)
     ]);
+    const identity = deriveIdentityForShots(assetAuthorities, shots);
+    assertGenerationUnitIdentity({ authorities: assetAuthorities, generationUnit: unitRecord.generationUnit, identity });
+    const mediaRecords = await loadCurrentAssetMediaRecords({ assets, getMedia: ports.media?.open?.bind(ports.media), projectId });
+    const characterIdentityMediaAuthorityAudit = assessCharacterIdentityMediaAuthority({
+      assets, assetAuthorities, characterAuthorityIds: identity.characterAuthorityIds, mediaRecords, reviews
+    });
+    const executionNode = unitRecord.generationUnit.executionNodeId
+      ? await ports.projects.getNode(projectId, unitRecord.generationUnit.executionNodeId)
+      : null;
+    const liveCanvasForAuthority = executionNode
+      ? await ports.projects.openCanvas(projectId, executionNode.canvasId)
+      : null;
+    const sceneAuthorityAudit = auditGenerationUnitSceneAuthority({
+      assets,
+      authorities: assetAuthorities,
+      canvasNodes: liveCanvasForAuthority?.nodes ?? [],
+      generationUnit: unitRecord.generationUnit,
+      mediaRecords,
+      reviews,
+      shots
+    });
     const sequenceWorkspaceAudit = unitRecord.generationUnit.sequenceWorkspaceBinding ? await dependencies.getSequenceWorkspaceEvidence({ generationUnit: unitRecord.generationUnit, productionId, projectId }) : null;
     const inheritedExpertPackIds = [...new Set(professionalContributions.map((entry) => entry.expertPackId).filter(Boolean))];
     const inheritedKnowledgeRefs = [...new Set(professionalContributions.flatMap((entry) => Array.isArray(entry.knowledgeRefs) ? entry.knowledgeRefs : []))];
-    const unitShotIds = new Set(unitRecord.generationUnit.shotLinks.map((link) => link.shotId));
-    const storyboardReferences = (await listStoryboardRecords(projectId, productionId))
-      .flatMap((storyboard) => storyboard.shots
-        .filter((shot) => unitShotIds.has(shot.shotId) && shot.videoReference?.selected && shot.imageMediaId)
-        .map((shot) => ({
-          assetId: `storyboard:${storyboard.storyboardId}:${shot.shotId}`,
-          versionId: shot.imageVersionId || `storyboard-image:${shot.imageChecksum || shot.imageMediaId}`,
-          mediaId: shot.imageMediaId,
-          displayName: shot.title,
-          role: shot.videoReference.role,
-          controls: shot.videoReference.controls,
-          doesNotControl: shot.videoReference.doesNotControl,
-          semanticControl: storyboardVideoReferenceSemanticControl(shot.videoReference),
-          required: true,
-          authorityRevision: `storyboard-r${storyboard.revision}:shot-r${shot.revision}`,
-          storyboardId: storyboard.storyboardId,
-          storyboardRevision: storyboard.revision,
-          storyboardShotId: shot.storyboardShotId,
-          storyboardShotRevision: shot.revision,
-          shotId: shot.shotId, checksum: shot.imageChecksum,
-          acceptanceProof: shot.videoReference.acceptanceProof ?? null
-        })));
-    const directorReferences = shots
-      .filter((shot) => shot.directorStageBinding?.mediaId)
-      .map((shot) => {
-        const binding = shot.directorStageBinding;
-        return {
-          assetId: `director-stage:${binding.directorNodeId}:${binding.captureId}`,
-          versionId: `director-stage-v${binding.stageRevision}:${binding.mediaId}`,
-          mediaId: binding.mediaId,
-          displayName: `3D导演台机位 · ${binding.cameraSnapshot?.label || binding.cameraId}`,
-          promptAlias: `${binding.cameraSnapshot?.label || binding.cameraId}机位`,
-          role: "director_stage_blocking",
-          controls: ["空间站位", "人物前后层级", "摄影机机位", "画面轴线", "视场与构图"],
-          doesNotControl: ["人物身份", "最终美术风格", "最终灯光", "最终表演节奏"],
-          // Director Stage captures are control evidence, not final-pixel
-          // references. Their geometry/camera facts are compiled into text and
-          // remain connected on canvas, while proxy pixels never consume a
-          // Seedance reference slot or leak into the final look.
-          providerEligible: false,
-          required: true, semanticControl: { temporalRole: "static_state", preserve: ["空间站位", "人物前后层级", "摄影机机位", "画面轴线", "视场与构图"], replace: [], complete: [], ignore: ["代理人物造型", "最终美术风格", "最终灯光", "最终表演节奏"], styleOnly: [] },
-          authorityRevision: `director-stage-v${binding.stageRevision}`,
-          directorNodeId: binding.directorNodeId,
-          captureId: binding.captureId,
-          stageRevision: binding.stageRevision,
-          shotId: shot.shotId
-        };
-      });
-    const providerReferenceCandidates = selectProviderReferenceBindings(
-      unitRecord.generationUnit.generationParameters,
-      [...unitRecord.referenceBindings, ...directorReferences, ...storyboardReferences]
-    );
-    let combinedReferences = [];
-    const seenMedia = new Set();
-    for (const binding of providerReferenceCandidates) {
-      if (seenMedia.has(binding.mediaId)) continue;
-      seenMedia.add(binding.mediaId);
-      combinedReferences.push({ ...binding, providerIndex: combinedReferences.length + 1 });
-    }
+    const references = await buildGenerationUnitReferences({
+      generationUnit: unitRecord.generationUnit,
+      listStoryboardRecords,
+      productionId,
+      projectId,
+      referenceBindings: unitRecord.referenceBindings,
+      shots
+    });
+    const { directorReferences, storyboardReferences } = references;
+    let { combinedReferences } = references;
     const canvasGraph = await resolveCanvasReferenceGraph({ ports, projectId, generationUnit: unitRecord.generationUnit, referenceBindings: combinedReferences });
     combinedReferences = canvasGraph.referenceBindings;
     const referenceSetAudit = auditSelectedStoryboardReferences({
@@ -371,10 +381,18 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
       productionId,
       ...enforceProductionSignoffGates({
       ...unitRecord.generationUnit,
+      characterAuthorityIds: identity.characterAuthorityIds,
+      characterIdentitySourceVersions: identity.sourceVersions,
+      requiredCapabilities: [...new Set([
+        ...(unitRecord.generationUnit.requiredCapabilities || []),
+        ...(identity.virtualPersonAssetIds.length ? ["virtual_person_asset"] : [])
+      ])],
       executionGateEvidence,
       generationParameters: {
         ...unitRecord.generationUnit.generationParameters,
+        virtualPersonAssetIds: identity.virtualPersonAssetIds,
         referenceMediaIds: combinedReferences
+          .filter((binding) => binding.providerEligible !== false)
           .filter((binding) => ![unitRecord.generationUnit.generationParameters.firstFrameMediaId, unitRecord.generationUnit.generationParameters.lastFrameMediaId].includes(binding.mediaId))
           .map((binding) => binding.mediaId)
       }
@@ -392,37 +410,30 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
       manualOverride: input.manualOverride === true,
       manualPrompt: input.manualPrompt
     });
-    if (!referenceSetAudit.ok) {
-      envelope.preflight = {
-        ...envelope.preflight,
-        ok: false,
-        errors: [...(Array.isArray(envelope.preflight?.errors) ? envelope.preflight.errors : []), ...referenceSetAudit.errors]
-      };
-    }
-    if (unitRecord.generationUnit.canvasGraphPolicy === "required" && !canvasGraph.audit.ok) {
-      envelope.preflight = {
-        ...envelope.preflight,
-        ok: false,
-        errors: [...(Array.isArray(envelope.preflight?.errors) ? envelope.preflight.errors : []), ...canvasGraph.audit.errors]
-      };
-    }
-    if (envelope.promptDraft) {
-      envelope.promptDraft.status = (envelope.lint?.ok !== false && envelope.preflight?.ok)
-        ? "preflight_ready"
-        : "preflight_blocked";
-    }
+    applyCinematicCompilationAudits(envelope, {
+      canvasGraphAudit: canvasGraph.audit,
+      characterIdentityMediaAuthorityAudit,
+      sceneAuthorityAudit,
+      referenceSetAudit,
+      requireCanvasGraph: compilationUnit.canvasGraphPolicy === "required"
+    });
     appendCompilationSourceVersions(envelope, {
       assetAuthorities,
       authoritativeTailHandoff: executionGateEvidence.authoritativeTailHandoff,
       continuityAudit: executionGateEvidence.continuityAudit, sequenceStateAudit: executionGateEvidence.sequenceStateAudit, sequenceWorkspaceAudit: executionGateEvidence.sequenceWorkspaceAudit,
       directorReferences, ownerStoryShotReview: executionGateEvidence.ownerStoryShotReview,
       production, professionalContributions, referenceBindings: combinedReferences, reviews,
+      segmentSeamAudit: executionGateEvidence.segmentSeamAudit,
       storyboardReferences, referenceSetAudit
     });
     envelope.sourceVersions.canvasProductionGraph = canvasGraph.audit;
+    envelope.sourceVersions.characterIdentityMediaAuthority = characterIdentityMediaAuthorityAudit.formalBindings;
+    if (sceneAuthorityAudit.sourceVersion) {
+      envelope.sourceVersions.sceneAuthorityMedia = sceneAuthorityAudit.sourceVersion;
+    }
     const compilation = { compilationId: createId("prompt-compilation"), productionId, generationUnitId: unitRecord.generationUnit.generationUnitId, envelope, createdAt: nowIso() };
     await saveCompilationRecord(projectId, compilation);
-    await persistCompiledPromptOnCanvas({ dependencies, ports, projectId, compilation, generationUnit: unitRecord.generationUnit, canvasGraph });
+    await persistCompiledPromptOnCanvas({ dependencies, ports, projectId, compilation, generationUnit: compilationUnit, canvasGraph });
     return compilation;
   }
 
@@ -431,7 +442,11 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
     const productionId = requireText(input.productionId, "productionId");
     const generationUnitId = requireText(input.generationUnitId, "generationUnitId");
     let compilation = await getCompilationRecord(projectId, productionId, generationUnitId);
-    if (!compilation || input.recompile === true) compilation = await compileGenerationUnit({ ...input, projectId, productionId, generationUnitId });
+    if (!compilation
+      || input.recompile === true
+      || compilation.envelope?.compilerVersion !== CINEMATIC_PROMPT_COMPILER_VERSION) {
+      compilation = await compileGenerationUnit({ ...input, projectId, productionId, generationUnitId });
+    }
     const unitRecord = await getGenerationUnit({ projectId, productionId, generationUnitId });
     const staleSources = await findCompilationStaleness(projectId, productionId, unitRecord, compilation); const result = {
       compilationId: compilation.compilationId,
@@ -450,25 +465,36 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
   async function addProfessionalContribution(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
-    await requireProduction(projectId, productionId);
+    const production = await requireProduction(projectId, productionId);
     const contribution = {
       ...requireObject(input.contribution, "contribution"),
       contributionId: input.contribution?.contributionId || createId("professional-contribution"),
-      revision: requireRevision(input.contribution?.revision),
+      revision: requireCinematicRevision(input.contribution?.revision),
       createdAt: nowIso()
     };
     assertCinematicContract("ProfessionalContribution", contribution);
-    return saveContributionRecord(projectId, productionId, contribution);
+    const saved = await saveContributionRecord(projectId, productionId, contribution);
+    await projectSoundContributionOnCanvas({ contribution: saved, dependencies, ports, production, productionId, projectId });
+    return saved;
   }
 
   async function listProfessionalContributions(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
     await requireProduction(projectId, productionId);
-    return listContributionRecords(projectId, productionId, input.targetType, input.targetId);
+    return listContributionRecords(
+      projectId,
+      productionId,
+      input.targetType,
+      input.targetId,
+      input.includeStale === true
+    );
   }
-  async function getModelCapabilities() {
-    return { registryVersion: VIDEO_MODEL_REGISTRY_VERSION, models: VIDEO_MODEL_CAPABILITIES };
+  async function listAssetAuthorities(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const productionId = requireText(input.productionId, "productionId");
+    await requireProduction(projectId, productionId);
+    return listAssetAuthorityRecords(projectId, productionId);
   }
   return {
     ...reviewUseCases,
@@ -477,11 +503,12 @@ export function createCinematicProductionUseCases(ports, dependencies = {}) {
     createCinematicProduction,
     getCinematicProduction,
     getGenerationUnit,
-    getModelCapabilities,
+    getModelCapabilities: getCinematicModelCapabilities,
     getShot,
     getStoryPacket,
     getVisualBible,
     listCinematicProductions,
+    listAssetAuthorities,
     listProfessionalContributions,
     listGenerationUnits,
     listShots,

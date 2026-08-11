@@ -1,5 +1,6 @@
 import {
   auditCinematicContinuity,
+  auditCinematicSegmentSeam,
   auditCinematicSequenceState,
   auditVisualStateCarriers,
   getVideoModelCapability,
@@ -84,14 +85,16 @@ export function enforceProductionSignoffGates(generationUnit, production) {
       && !["PREVIOUS_ACCEPTED_TAIL", "DUPLICATE_HANDOFF"].includes(generationUnit?.visualAnchorPolicy));
   return {
     ...generationUnit,
+    canvasGraphPolicy: "required",
     executionGates: {
       ...generationUnit.executionGates,
       requireGenerationControlIntent: true,
       requireOwnerShotReviews: true,
       requireOwnerStoryReview: true,
       requirePromptCoverage: true,
+      requireSequencePrevis: true,
+      requireSegmentSeamDecision: true,
       requireSequenceState: true,
-      ...(generationUnit.sequenceWorkspaceBinding ? { requireSequencePrevis: true } : {}),
       ...(generationUnit.generationParameters?.mode && generationUnit.generationParameters.mode !== "text_to_video" ? { requireReferenceSemanticControl: true } : {}),
       ...(requiresProfessionalSignoff ? {
         requireTeamManifest: true,
@@ -195,6 +198,13 @@ export function buildExecutionGateEvidence(professionalContributions, assetAutho
   const generationUnit = options.generationUnit && typeof options.generationUnit === "object" ? options.generationUnit : null;
   const shots = Array.isArray(options.shots) ? options.shots : [];
   const evaluations = Array.isArray(options.evaluations) ? options.evaluations : [];
+  if (generationUnit) {
+    evidence.segmentSeamAudit = auditCinematicSegmentSeam({
+      evaluations,
+      generationUnit,
+      referenceBindings: Array.isArray(options.referenceBindings) ? options.referenceBindings : []
+    });
+  }
   if (generationUnit?.sequenceState) {
     const sourceEvaluationId = generationUnit.sequenceState?.sourceEvaluationId;
     const boundSourceEvaluation = evaluations.find((entry) => entry.evaluationId === sourceEvaluationId) ?? null;
@@ -204,7 +214,7 @@ export function buildExecutionGateEvidence(professionalContributions, assetAutho
     evidence.sequenceStateAudit = auditCinematicSequenceState({ generationUnit, sourceEvaluation });
   }
   if (options.sequenceWorkspaceAudit) evidence.sequenceWorkspaceAudit = options.sequenceWorkspaceAudit;
-  if (generationUnit && (generationUnit.continuitySource || shots.some((shot) => shot?.continuityPlan))) {
+  if (generationUnit) {
     const sourceEvaluationId = generationUnit.continuitySource?.sourceEvaluationId;
     const boundSourceEvaluation = evaluations.find((entry) => entry.evaluationId === sourceEvaluationId) ?? null;
     const sourceEvaluation = boundSourceEvaluation?.generationUnitId
@@ -226,6 +236,7 @@ export function appendCompilationSourceVersions(envelope, {
   referenceBindings,
   referenceSetAudit,
   reviews,
+  segmentSeamAudit,
   storyboardReferences,
   sequenceStateAudit,
   sequenceWorkspaceAudit
@@ -269,6 +280,7 @@ export function appendCompilationSourceVersions(envelope, {
     return { mediaId, reviewId: review?.id ?? null, state: review?.state ?? null, createdAt: review?.createdAt ?? null };
   });
   if (authoritativeTailHandoff) envelope.sourceVersions.authoritativeTailHandoff = authoritativeTailHandoff;
+  if (segmentSeamAudit) envelope.sourceVersions.segmentSeamAudit = structuredClone(segmentSeamAudit);
   if (continuityAudit) envelope.sourceVersions.continuityAudit = {
     boundaryType: continuityAudit.boundaryType,
     checks: continuityAudit.checks,

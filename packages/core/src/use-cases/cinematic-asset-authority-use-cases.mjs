@@ -15,30 +15,19 @@ import {
   routeAssetAuthorityRisk
 } from "@ununu/unutv-contracts";
 import { deriveAssetAuthorityCandidates, searchAssetAuthorityPage } from "../asset-authority-operation-policy.mjs";
+import { cinematicAssetNodeMetadata } from "../cinematic-asset-node-metadata-policy.mjs";
+import {
+  cinematicAssetAuthorityBoardId as assetAuthorityBoardId,
+  cinematicAssetAuthorityCompilationTargetId as authorityCompilationTargetId,
+  cinematicCharacterAppearanceProvenance,
+  prepareCinematicAuthorityImageArtifact,
+  requireCinematicAssetAuthorityExecutionDependencies,
+  requireCinematicAssetAuthorityPort as port,
+  requireCinematicAssetAuthorityRevision as revision,
+  requireCurrentCinematicAuthorityImageCompilation,
+  resolveCinematicAssetAuthorityExecutionTarget
+} from "./cinematic-asset-authority-use-case-helpers.mjs";
 import { requireCinematicVisualProductionOwnerAcceptance } from "./cinematic-visual-production-review-use-case.mjs";
-
-function port(ports, name) {
-  if (typeof ports.projects?.[name] !== "function") throw new TypeError(`Missing cinematic asset authority port: projects.${name}`);
-  return ports.projects[name].bind(ports.projects);
-}
-
-function revision(value, fallback = 1) {
-  const parsed = value === undefined ? fallback : Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) throw new UnuTvError("invalid_payload", "revision must be a positive integer");
-  return parsed;
-}
-
-function authorityCompilationTargetId(authority, boardId) {
-  if (!boardId || (authority.authorityType === "character" && boardId === "identity-master")) return authority.authorityId;
-  return `${authority.authorityId}::${boardId}`;
-}
-
-function assetAuthorityBoardId(authority, requestedBoardId) {
-  if (authority.authorityType === "character") return requestedBoardId || "identity-master";
-  if (authority.authorityType === "scene") return requestedBoardId || (authority.boardSpecs?.some((entry) => entry.boardId === "space-master") ? "space-master" : null);
-  return null;
-}
-
 export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) {
   const getProduction = port(ports, "getCinematicProduction");
   const saveRecord = port(ports, "saveCinematicAssetAuthority");
@@ -257,6 +246,7 @@ export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) 
           provider: envelope.generationParameters.provider,
           modelId: envelope.generationParameters.model,
           cinematicImageCompilationId: compilation.compilationId,
+          cinematicAbstractIntentResolution: envelope.abstractIntentResolution,
           ...(boardId ? { activeAuthorityBoardId: boardId } : {})
         }
       });
@@ -289,7 +279,6 @@ export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) 
     await requireProduction(projectId, productionId);
     return getCompilation(projectId, productionId, requireText(input.targetType, "targetType"), requireText(input.targetId, "targetId"));
   }
-
   async function runAssetAuthority(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const productionId = requireText(input.productionId, "productionId");
@@ -297,11 +286,10 @@ export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) 
     const budgetless = billingMode !== "legacy_budget";
     await requireCinematicVisualProductionOwnerAcceptance({
       getProduction, getStoryPacket, listReviews, listShots, productionId, projectId,
+      requireShotAcceptance: false,
       storyPacketId: input.storyPacketId
     });
-    if (typeof dependencies.runNode !== "function" || typeof dependencies.addAssetVersion !== "function" || typeof dependencies.listAssets !== "function" || typeof dependencies.updateNode !== "function") {
-      throw new TypeError("Missing asset authority execution dependencies");
-    }
+    requireCinematicAssetAuthorityExecutionDependencies(dependencies);
     if (!budgetless && typeof dependencies.budget?.reserveBudget !== "function") {
       throw new TypeError("Missing asset authority legacy budget dependency");
     }
@@ -312,33 +300,12 @@ export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) 
     const boardId = assetAuthorityBoardId(authority, input.boardId);
     const compilationTargetId = authorityCompilationTargetId(authority, boardId);
     const compilation = await getCompilation(projectId, productionId, authority.authorityType, compilationTargetId);
-    if (!compilation) throw new UnuTvError("image_prompt_compilation_required", "Compile the current asset authority before Provider execution", 409);
-    const envelope = compilation.envelope;
-    if (Number(envelope?.sourceVersions?.targetRevision) !== authority.revision) {
-      throw new UnuTvError("stale_image_prompt_compilation", "Asset authority changed after image Prompt compilation", 409, {
-        authorityRevision: authority.revision,
-        compiledRevision: envelope?.sourceVersions?.targetRevision
-      });
-    }
-    if (envelope?.sourceVersions?.visualBibleRevision !== undefined && Number(envelope.sourceVersions.visualBibleRevision) !== Number(visualBible?.revision)) {
-      throw new UnuTvError("stale_image_prompt_compilation", "VisualBible changed after image Prompt compilation", 409, {
-        visualBibleRevision: visualBible?.revision ?? null,
-        compiledVisualBibleRevision: envelope.sourceVersions.visualBibleRevision
-      });
-    }
-    if (envelope?.lint?.ok !== true || envelope?.requiresPreflight === true) {
-      throw new UnuTvError("image_prompt_preflight_failed", "Asset authority image Prompt must pass lint and preflight before Provider execution", 409, { lint: envelope?.lint ?? null });
-    }
-    const assetId = requireText(input.assetId ?? authority.referenceAssetIds?.[0], "assetId");
-    if (!(authority.referenceAssetIds ?? []).includes(assetId)) throw new UnuTvError("authority_asset_mismatch", "Target asset must be registered on the asset authority", 409);
+    const envelope = requireCurrentCinematicAuthorityImageCompilation({ authority, compilation, visualBible });
     const assetNodeId = requireText(input.assetNodeId ?? input.executionNodeId, "assetNodeId");
-    const assetNode = await getNode(projectId, assetNodeId);
-    if (!assetNode || assetNode.kind !== "asset" || assetNode.payload?.assetId !== assetId || assetNode.payload?.authorityId !== authority.authorityId) {
-      throw new UnuTvError("authority_asset_node_invalid", "Asset authority generation must run on the matching visible asset node", 409);
-    }
-    const assets = await dependencies.listAssets({ projectId, scope: "all" });
-    const asset = assets.find((entry) => entry.id === assetId);
-    if (!asset) throw new UnuTvError("asset_not_found", `Asset not found: ${assetId}`, 404);
+    const { asset, assetId } = await resolveCinematicAssetAuthorityExecutionTarget({
+      authority, assetNodeId, getNode, inputAssetId: input.assetId,
+      listAssets: dependencies.listAssets, projectId
+    });
     const parameters = envelope.generationParameters;
     const provider = requireText(parameters.provider, "generationParameters.provider");
     const model = requireText(parameters.model, "generationParameters.model");
@@ -358,16 +325,26 @@ export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) 
       });
     }
     const generatingNode = await getNode(projectId, assetNodeId);
+    const assetNodeMetadata = cinematicAssetNodeMetadata(authority);
     await dependencies.updateNode({
       projectId,
       nodeId: assetNodeId,
       expectedRevision: generatingNode.revision,
       payload: {
         ...generatingNode.payload,
+        ...assetNodeMetadata,
         prompt: envelope.compiledContentPrompt,
         generationStatus: "running",
         generationPhase: "requesting",
         generationMessage: `正在生成${envelope.authorityBoard?.label || authority.displayName}…`,
+        generationRequestId: idempotencyKey,
+        generationRunId: null,
+        providerRunId: null,
+        generationProvider: provider,
+        generationModel: model,
+        generationResolution: parameters.resolution,
+        generationCount: parameters.count,
+        generationBackground: parameters.background || null,
         cinematicImageCompilationId: compilation.compilationId,
         ...(boardId ? { activeAuthorityBoardId: boardId } : {})
       }
@@ -416,12 +393,20 @@ export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) 
       });
       return { authority, compilation, reservation: settledReservation, run, assetVersion: null, reused: runs.some((entry) => entry.id === run.id), outcomeUnknown };
     }
-    const artifact = run.result?.artifacts?.find((entry) => entry.kind === "image" && entry.id);
-    if (!artifact) {
-      if (reservation?.status === "reserved") await dependencies.budget.consumeBudgetReservation({ projectId, reservationId: reservation.id, ...(input.actualAmount !== undefined ? { actualAmount: input.actualAmount } : {}) });
-      throw new UnuTvError("cinematic_image_artifact_missing", "Image run succeeded without a materialized image artifact", 502, { runId: run.id });
-    }
     let assetVersion = asset.versions?.find((entry) => entry.payload?.authorityExecutionKey === idempotencyKey) ?? null;
+    const artifact = assetVersion
+      ? await ports.projects.getMedia(projectId, assetVersion.mediaId)
+      : await prepareCinematicAuthorityImageArtifact({
+          actualAmount: input.actualAmount, assetNodeId,
+          dependencies, expectedResolution: parameters.resolution,
+          fallbackMediaId: generatingNode.payload?.currentMediaId ?? null, getNode, projectId, reservation, run
+        });
+    const appearanceProvenance = cinematicCharacterAppearanceProvenance({
+      authority,
+      media: await ports.projects.getMedia(projectId, artifact.id),
+      verificationReviewId: input.verificationReviewId
+    });
+    const artifactMedia = await ports.projects.getMedia(projectId, artifact.id);
     if (!assetVersion) assetVersion = await dependencies.addAssetVersion({
       projectId,
       assetId,
@@ -434,7 +419,14 @@ export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) 
         compilationId: compilation.compilationId,
         payloadHash: envelope.payloadHash,
         providerRunId: run.id,
-        reviewState: "candidate"
+        outputSpec: {
+          aspectRatio: parameters.aspectRatio,
+          backgroundMode: parameters.background,
+          requestedBackgroundColor: authority.authorityType === "character" || authority.authorityType === "prop" ? "#D2D2CE" : null,
+          resolution: parameters.resolution
+        },
+        reviewState: "candidate",
+        ...(appearanceProvenance ? { appearanceProvenance } : {})
       }
     });
     const currentAssetNode = await getNode(projectId, assetNodeId);
@@ -456,7 +448,9 @@ export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) 
       expectedRevision: currentAssetNode.revision,
       payload: {
         ...currentAssetNode.payload,
+        ...assetNodeMetadata,
         currentMediaId: artifact.id,
+        currentMediaChecksum: artifactMedia?.sha256 ?? null,
         generationStatus: "succeeded",
         generationPhase: "complete",
         generationMessage: `${envelope.authorityBoard?.label || authority.displayName}候选图已生成`,
@@ -468,11 +462,22 @@ export function createCinematicAssetAuthorityUseCases(ports, dependencies = {}) 
         authorityId: authority.authorityId,
         ...(boardId ? { authorityBoardId: boardId } : {}),
         authorityRevision: authority.revision,
+        ...(authority.authorityType === "scene" ? {
+          sceneTopologyRevision: authority.spatialLogic?.topologyRevision
+            ?? authority.spatialLogic?.topologyId
+            ?? authority.topologyRevision
+            ?? null
+        } : {}),
         assetId,
         assetVersionId: assetVersion.id,
         authorityMediaVersions,
         cinematicImageCompilationId: compilation.compilationId,
-        providerRunId: run.id
+        providerRunId: run.id,
+        ...(appearanceProvenance ? {
+          appearanceProvenance,
+          currentAppearanceProvenance: appearanceProvenance,
+          faceIdentityDuty: "external_virtual_person_asset"
+        } : {})
       }
     });
     let settledReservation = reservation;

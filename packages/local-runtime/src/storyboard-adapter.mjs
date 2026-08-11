@@ -1,19 +1,12 @@
 import { UnuTvError, nowIso } from "@ununu/unutv-contracts";
+import { runDatabaseTransaction } from "./project-transaction.mjs";
 
 function parse(value, fallback = {}) {
   return value ? JSON.parse(value) : fallback;
 }
 
 function transaction(database, work) {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const result = work();
-    database.exec("COMMIT");
-    return result;
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+  return runDatabaseTransaction(database, work);
 }
 
 function hydrateStoryboard(database, row) {
@@ -58,6 +51,7 @@ function hydrateBatchJob(database, row) {
     outputMediaId: item.output_media_id,
     outputVersionId: item.output_version_id,
     outputChecksum: item.output_checksum,
+    sourceLineage: parse(item.source_lineage_json, null),
     error: parse(item.error_json, null),
     createdAt: item.created_at,
     updatedAt: item.updated_at,
@@ -75,6 +69,8 @@ function hydrateBatchJob(database, row) {
     provider: row.provider,
     model: row.model,
     configuration: parse(row.configuration_json, {}),
+    sourceLineage: parse(row.source_lineage_json, null),
+    currentSourceLineage: parse(row.current_source_lineage_json, null),
     revision: row.revision,
     items,
     createdAt: row.created_at,
@@ -100,10 +96,10 @@ export function attachStoryboardMethods(prototype, emitEvent) {
         const createdAt = storyboard.createdAt ?? updatedAt;
         database.prepare(`
           INSERT INTO storyboard_documents_v2
-            (id, production_id, node_id, title, status, current_version, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, production_id, node_id, title, status, current_version, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
           ON CONFLICT(id) DO UPDATE SET node_id=excluded.node_id, title=excluded.title, status=excluded.status,
-            current_version=excluded.current_version, updated_at=excluded.updated_at
+            current_version=excluded.current_version, is_active=1, updated_at=excluded.updated_at
         `).run(storyboard.storyboardId, storyboard.productionId, storyboard.nodeId ?? null, storyboard.title, storyboard.status, version, createdAt, updatedAt);
         const { shots: _shots, revision: _revision, ...settings } = storyboard;
         database.prepare("INSERT INTO storyboard_document_versions_v2 (storyboard_id, version, settings_json, created_at) VALUES (?, ?, ?, ?)")
@@ -135,16 +131,24 @@ export function attachStoryboardMethods(prototype, emitEvent) {
       });
     },
 
-    getStoryboardDocument(projectId, productionId, storyboardId) {
+    getStoryboardDocument(projectId, productionId, storyboardId, includeInactive = false) {
       const database = this.database(projectId);
-      const row = database.prepare("SELECT ? AS project_id, d.* FROM storyboard_documents_v2 d WHERE d.id=? AND d.production_id=?")
+      const row = database.prepare(`
+        SELECT ? AS project_id, d.* FROM storyboard_documents_v2 d
+        WHERE d.id=? AND d.production_id=?
+          ${includeInactive ? "" : "AND d.is_active=1"}
+      `)
         .get(projectId, storyboardId, productionId);
       return hydrateStoryboard(database, row);
     },
 
-    listStoryboardDocuments(projectId, productionId) {
+    listStoryboardDocuments(projectId, productionId, includeInactive = false) {
       const database = this.database(projectId);
-      return database.prepare("SELECT ? AS project_id, d.* FROM storyboard_documents_v2 d WHERE d.production_id=? ORDER BY d.updated_at DESC")
+      return database.prepare(`
+        SELECT ? AS project_id, d.* FROM storyboard_documents_v2 d
+        WHERE d.production_id=? ${includeInactive ? "" : "AND d.is_active=1"}
+        ORDER BY d.updated_at DESC
+      `)
         .all(projectId, productionId)
         .map((row) => hydrateStoryboard(database, row));
     },
@@ -179,24 +183,29 @@ export function attachStoryboardMethods(prototype, emitEvent) {
         }
         database.prepare(`
           INSERT INTO storyboard_batch_jobs
-            (id, project_id, production_id, storyboard_id, kind, status, approved_paid, provider, model, configuration_json, revision, created_at, updated_at, completed_at, cancelled_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, project_id, production_id, storyboard_id, kind, status, approved_paid, provider, model, configuration_json, source_lineage_json, current_source_lineage_json, revision, created_at, updated_at, completed_at, cancelled_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET status=excluded.status, approved_paid=excluded.approved_paid, provider=excluded.provider,
-            model=excluded.model, configuration_json=excluded.configuration_json, revision=excluded.revision,
+            model=excluded.model, configuration_json=excluded.configuration_json, source_lineage_json=excluded.source_lineage_json,
+            current_source_lineage_json=excluded.current_source_lineage_json, revision=excluded.revision,
             updated_at=excluded.updated_at, completed_at=excluded.completed_at, cancelled_at=excluded.cancelled_at
         `).run(job.id, projectId, job.productionId, job.storyboardId, job.kind, job.status, Number(job.approvedPaid), job.provider, job.model,
-          JSON.stringify(job.configuration ?? {}), job.revision, job.createdAt, job.updatedAt, job.completedAt, job.cancelledAt);
+          JSON.stringify(job.configuration ?? {}), job.sourceLineage ? JSON.stringify(job.sourceLineage) : null,
+          job.currentSourceLineage ? JSON.stringify(job.currentSourceLineage) : null,
+          job.revision, job.createdAt, job.updatedAt, job.completedAt, job.cancelledAt);
         const statement = database.prepare(`
           INSERT INTO storyboard_batch_items
-            (id, job_id, storyboard_shot_id, order_index, status, attempt, idempotency_key, provider_run_id, budget_reservation_id, imported_media_id, output_media_id, output_version_id, output_checksum, error_json, created_at, updated_at, started_at, completed_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, job_id, storyboard_shot_id, order_index, status, attempt, idempotency_key, provider_run_id, budget_reservation_id, imported_media_id, output_media_id, output_version_id, output_checksum, source_lineage_json, error_json, created_at, updated_at, started_at, completed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET status=excluded.status, attempt=excluded.attempt, provider_run_id=excluded.provider_run_id,
             budget_reservation_id=excluded.budget_reservation_id, imported_media_id=excluded.imported_media_id,
             output_media_id=excluded.output_media_id, output_version_id=excluded.output_version_id, output_checksum=excluded.output_checksum,
-            error_json=excluded.error_json, updated_at=excluded.updated_at, started_at=excluded.started_at, completed_at=excluded.completed_at
+            source_lineage_json=excluded.source_lineage_json, error_json=excluded.error_json,
+            updated_at=excluded.updated_at, started_at=excluded.started_at, completed_at=excluded.completed_at
         `);
         for (const item of job.items) statement.run(item.id, job.id, item.storyboardShotId, item.order, item.status, item.attempt, item.idempotencyKey,
-          item.providerRunId, item.budgetReservationId, item.importedMediaId, item.outputMediaId, item.outputVersionId, item.outputChecksum, item.error ? JSON.stringify(item.error) : null,
+          item.providerRunId, item.budgetReservationId, item.importedMediaId, item.outputMediaId, item.outputVersionId, item.outputChecksum,
+          item.sourceLineage ? JSON.stringify(item.sourceLineage) : null, item.error ? JSON.stringify(item.error) : null,
           item.createdAt, item.updatedAt, item.startedAt, item.completedAt);
         emitEvent(database, current ? "storyboard.batch_updated" : "storyboard.batch_created", job.id, { storyboardId: job.storyboardId, kind: job.kind, status: job.status, itemCount: job.items.length });
         return hydrateBatchJob(database, database.prepare("SELECT * FROM storyboard_batch_jobs WHERE id=?").get(job.id));

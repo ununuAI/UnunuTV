@@ -59,10 +59,16 @@ export function createTimelineUseCases(ports) {
     return timeline;
   }
 
-  async function listTimelines(input = {}) { return listRecords(requireText(input.projectId, "projectId")); }
+  async function listTimelines(input = {}) {
+    return listRecords(requireText(input.projectId, "projectId"), input.includeStale === true);
+  }
 
   async function getTimeline(input = {}) {
-    const timeline = await getRecord(requireText(input.projectId, "projectId"), requireText(input.timelineId, "timelineId"));
+    const timeline = await getRecord(
+      requireText(input.projectId, "projectId"),
+      requireText(input.timelineId, "timelineId"),
+      input.includeStale === true
+    );
     assertTimelineDocumentV2(timeline);
     return timeline;
   }

@@ -92,7 +92,7 @@ function parameters(overrides = {}) {
     mode: "image_reference",
     duration: 15,
     aspectRatio: "16:9",
-    resolution: "720p",
+    resolution: "480p",
     count: 1,
     generateAudio: true,
     referenceMediaIds: ["media-character"],
@@ -206,6 +206,41 @@ function cameraTrajectoryPlan(overrides = {}) {
   };
 }
 
+test("manual Prompt input remains a non-runnable preview draft", () => {
+  const envelope = compileCinematicPrompt({
+    generationUnit: unit(),
+    referenceBindings: [binding()],
+    shots: [shot()],
+    storyPacket: story(),
+    visualBible: bible(),
+    manualOverride: true,
+    manualPrompt: "这是一段绕过结构化字段的人工自由文本。"
+  });
+  assert.equal(envelope.compiledContentPrompt, "这是一段绕过结构化字段的人工自由文本。");
+  assert.equal(envelope.promptSource, "manual_preview");
+  assert.equal(envelope.manualPromptProvided, true);
+  assert.equal(envelope.preflight.ok, false);
+  assert.equal(envelope.preflight.errors.some((entry) => entry.code === "manual_prompt_not_formal_runnable"), true);
+  assert.equal(envelope.promptDraft.status, "preflight_blocked");
+  assert.equal(envelope.requiresPreflight, true);
+});
+
+test("production preflight reports sequence_previs_required when the binding is absent", () => {
+  const envelope = compileCinematicPrompt({
+    generationUnit: unit({
+      executionGates: { requireSequencePrevis: true }
+    }),
+    referenceBindings: [binding()],
+    shots: [shot()],
+    storyPacket: story(),
+    visualBible: bible()
+  });
+  assert.equal(envelope.lint.errors.some((entry) => entry.code === "sequence_previs_required"), true);
+  assert.equal(envelope.preflight.errors.some((entry) => entry.code === "sequence_previs_required"), true);
+  assert.equal(envelope.preflight.ok, false);
+  assert.equal(envelope.promptDraft.status, "preflight_blocked");
+});
+
 function annotatedCameraReference(overrides = {}) {
   return {
     mediaId: "media-camera-guide",
@@ -283,6 +318,30 @@ test("single-person image reference uses the character name and keeps provider p
   assert.match(envelope.payloadHash, /^fnv1a32:[0-9a-f]{8}$/u);
   assert.equal(envelope.lint.ok, true, JSON.stringify(envelope.lint.errors));
   assert.equal(envelope.preflight.ok, true, JSON.stringify(envelope.preflight));
+  assert.equal(envelope.visualInputDecision.mode, "image_reference");
+  assert.equal(envelope.preflight.visualInputDecision.ok, true);
+});
+
+test("compile-time canonical input decision blocks virtual-person character references in first-frame mode", () => {
+  const frameBinding = binding({ role: "first_frame" });
+  const envelope = compileCinematicPrompt({
+    generationUnit: unit({
+      visualAnchorPolicy: "FIRST_FRAME",
+      requiredCapabilities: ["first_frame", "virtual_person_asset"],
+      generationParameters: parameters({
+        mode: "first_frame",
+        firstFrameMediaId: frameBinding.mediaId,
+        referenceMediaIds: [],
+        virtualPersonAssetIds: ["asset-20260310030618-88hlb"]
+      })
+    }),
+    referenceBindings: [frameBinding],
+    shots: [shot()],
+    storyPacket: story(),
+    visualBible: bible()
+  });
+  assert.equal(envelope.preflight.ok, false);
+  assert.equal(envelope.visualInputDecision.errors.some((entry) => entry.code === "character_temporal_frame_forbidden"), true);
 });
 
 test("reference mappings keep rich asset titles separate from concise Prompt aliases", () => {
@@ -298,6 +357,34 @@ test("reference mappings keep rich asset titles separate from concise Prompt ali
   assert.match(envelope.compiledContentPrompt, /【参考】\n（参考图1）=三符火符。/u);
   assert.doesNotMatch(envelope.compiledContentPrompt, /（参考图1）=白璃 · 三符贴地火浪动作板/u);
   assert.equal(envelope.lint.ok, true, JSON.stringify(envelope.lint.errors));
+});
+
+test("editor-only bindings remain in lineage but are excluded from Provider Prompt numbering and capacity", () => {
+  const providerBinding = binding();
+  const editorOnly = {
+    ...binding(),
+    assetId: "asset-editor-only",
+    versionId: "asset-editor-only-v1",
+    mediaId: "media-editor-only",
+    displayName: "导演台标注控制图",
+    promptAlias: "导演台标注图",
+    providerIndex: 2,
+    providerEligible: false
+  };
+  const envelope = compileCinematicPrompt({
+    generationUnit: unit({
+      generationParameters: parameters({ referenceMediaIds: [providerBinding.mediaId] })
+    }),
+    referenceBindings: [providerBinding, editorOnly],
+    shots: [shot()],
+    storyPacket: story(),
+    visualBible: bible()
+  });
+  assert.equal(envelope.referenceBindings.length, 2);
+  assert.match(envelope.compiledContentPrompt, /（参考图1）=/u);
+  assert.doesNotMatch(envelope.compiledContentPrompt, /参考图2/u);
+  assert.doesNotMatch(envelope.compiledContentPrompt, /导演台标注图/u);
+  assert.equal(envelope.directorPromptPolicy.providerAdapter.referenceCount, 1);
 });
 
 test("structured continuity state renders concise subject, topology, and exit anchors", () => {
@@ -413,7 +500,35 @@ test("one generation request can contain three ordered artistic shots with expli
   assert.match(envelope.compiledContentPrompt, /镜头3：/u);
   assert.match(envelope.compiledContentPrompt, /切镜依据：从人物视线切到其发现的证据/u);
   assert.match(envelope.compiledContentPrompt, /切镜依据：证据意义成立后切回表情承接/u);
+  assert.deepEqual(envelope.directorPromptPolicy.promptMode, { code: "B", reason: "derived_high_complexity" });
+  assert.deepEqual(envelope.directorPromptPolicy.providerAdapter.sourceTemplateCharacterRange, { min: 1900, max: 2000 });
+  assert.equal(envelope.directorPromptPolicy.providerAdapter.textLengthPolicy, "provider_capability_bound_no_padding");
+  assert.equal(envelope.directorPromptPolicy.providerAdapter.referenceLimit, 9);
   assert.equal(envelope.preflight.ok, true, JSON.stringify(envelope.preflight));
+});
+
+test("an explicit review compilation uses Director mode A without changing structured field coverage", () => {
+  const envelope = compileCinematicPrompt({
+    generationUnit: unit({ promptCompilationIntent: "review" }),
+    referenceBindings: [binding()],
+    shots: [shot()],
+    storyPacket: story(),
+    visualBible: bible()
+  });
+  assert.deepEqual(envelope.directorPromptPolicy.promptMode, { code: "A", reason: "explicit_review" });
+  assert.deepEqual(Object.keys(envelope.directorPromptPolicy.fields), [
+    "special_attention",
+    "material_anchors",
+    "continuity_declaration",
+    "scene_anchor",
+    "camera_track",
+    "performance_track",
+    "lighting_color_track",
+    "sound_track",
+    "hard_locks",
+    "dialogue_timing",
+    "end_state_handoff"
+  ]);
 });
 
 test("hard cuts cannot use previous accepted tail, but continuous segments can", () => {
@@ -454,6 +569,23 @@ test("lint blocks synthetic subject labels and technical parameters in a manual 
   assert.equal(result.errors.some((entry) => entry.code === "global_duration_leak"), true);
   assert.equal(result.errors.some((entry) => entry.code === "aspect_ratio_leak"), true);
   assert.equal(result.errors.some((entry) => entry.code === "resolution_leak"), true);
+});
+
+test("structured Owner locks keep story facts while technical controls stay in parameters", () => {
+  const envelope = compileCinematicPrompt({
+    generationUnit: unit(),
+    referenceBindings: [binding()],
+    shots: [shot()],
+    storyPacket: story({
+      userLockedText: ["目标时长 120 秒，画幅 9:16；八个男女第一天入住无名公寓；角色身份使用锁定虚拟人物 ID。"]
+    }),
+    visualBible: bible()
+  });
+  assert.match(envelope.compiledContentPrompt, /八个男女第一天入住无名公寓/u);
+  assert.match(envelope.compiledContentPrompt, /角色身份使用锁定虚拟人物 ID/u);
+  assert.doesNotMatch(envelope.compiledContentPrompt, /9\s*:\s*16/u);
+  assert.equal(envelope.lint.errors.some((entry) => entry.code === "aspect_ratio_leak"), false);
+  assert.equal(envelope.lint.errors.some((entry) => entry.code === "locked_story_loss"), false);
 });
 
 test("camera distance to a named subject is not mistaken for a synthetic subject label", () => {
@@ -522,6 +654,59 @@ test("hype stacks, absolute identity promises, and named style imitation are rev
     referenceBindings: [], shots: [shot()], storyPacket: story({ lockedStoryFacts: [], dialogue: [], userLockedText: [] })
   });
   for (const code of ["absolute_identity_promise", "hype_adjective_stack", "director_ip_style_risk"]) assert.equal(result.warnings.some((entry) => entry.code === code), true, code);
+});
+
+test("abstract cinematic labels compile into deterministic concrete video clauses and source pointers", () => {
+  const concreteShot = shot("shot-1", 1, {
+    abstractIntentLabels: ["电影感", "高级"],
+    cinematography: {
+      ...shot().cinematography,
+      focalLength: "35mm 等效焦段",
+      aperture: "T2.8",
+      composition: "人物位于右侧三分线，门框形成前中后景层次",
+      speedCurve: "固定机位，速度为零",
+      startPoint: "床尾正前方",
+      stopPoint: "床尾正前方"
+    }
+  });
+  const result = compileCinematicPrompt({
+    generationUnit: unit(),
+    referenceBindings: [binding()],
+    shots: [concreteShot],
+    storyPacket: story(),
+    visualBible: bible()
+  });
+  assert.equal(result.directorPromptPolicy.abstractIntent.ok, true, JSON.stringify(result.directorPromptPolicy.abstractIntent));
+  assert.deepEqual(result.directorPromptPolicy.abstractIntent.labels, ["电影感", "高级"]);
+  assert.equal(result.directorPromptPolicy.promptMode.code, "C");
+  assert.match(result.compiledContentPrompt, /【抽象意图具体化】/u);
+  assert.match(result.compiledContentPrompt, /焦段、光圈与焦点：[^。]*T2\.8/u);
+  assert.match(result.compiledContentPrompt, /光向、明暗比、色温与曝光/u);
+  assert.doesNotMatch(result.compiledContentPrompt, /电影感|高级感/u);
+  assert.equal(
+    result.directorPromptPolicy.abstractIntent.clauses.some((entry) =>
+      entry.facet === "aperture" && entry.sourcePath === "shots[0].cinematography.aperture"),
+    true
+  );
+  assert.equal(Object.keys(result.directorPromptPolicy.fields).length, 11);
+});
+
+test("abstract cinematic labels without complete structured support block lint and preflight", () => {
+  const result = compileCinematicPrompt({
+    generationUnit: unit(),
+    referenceBindings: [binding()],
+    shots: [shot("shot-1", 1, {
+      abstractIntentLabels: ["悬疑"],
+      cinematography: { shotSize: "中景", movementPath: "缓慢推近" },
+      lighting: {},
+      sound: {}
+    })],
+    storyPacket: story(),
+    visualBible: { ...bible(), productionDesign: {}, lighting: {}, sound: {}, styleProhibitions: [] }
+  });
+  assert.equal(result.lint.errors.some((entry) => entry.code === "abstract_cinematic_intent_unresolved"), true);
+  assert.equal(result.preflight.errors.some((entry) => entry.code === "abstract_cinematic_intent_unresolved"), true);
+  assert.equal(result.promptDraft.status, "preflight_blocked");
 });
 
 test("unverified model capabilities produce an explicit blocking degradation", () => {
@@ -667,6 +852,31 @@ test("a directly continuous segment cannot be paid before an accepted tail frame
   });
   assert.equal(result.lint.errors.some((entry) => entry.code === "authoritative_tail_continuity_unverified"), true);
   assert.equal(result.lint.ok, false);
+});
+
+test("production seam gate blocks a naked continuation in both lint and Provider preflight", () => {
+  const result = compileCinematicPrompt({
+    generationUnit: unit({
+      segmentDecision: "continuation_segment",
+      executionGates: { requireSegmentSeamDecision: true },
+      executionGateEvidence: {
+        segmentSeamAudit: {
+          ok: false,
+          errors: [{
+            code: "segment_stable_tail_audit_required",
+            message: "continuation segment lacks a latest stable ACCEPT H1"
+          }]
+        }
+      }
+    }),
+    referenceBindings: [binding()],
+    shots: [shot()],
+    storyPacket: story(),
+    visualBible: bible()
+  });
+  assert.equal(result.lint.errors.some((entry) => entry.code === "segment_stable_tail_audit_required"), true);
+  assert.equal(result.preflight.errors.some((entry) => entry.code === "segment_stable_tail_audit_required"), true);
+  assert.equal(result.promptDraft.status, "preflight_blocked");
 });
 
 test("an accepted tail frame with verified subject position, axis, and screen direction passes the continuity handoff gate", () => {

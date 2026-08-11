@@ -4,7 +4,14 @@ function parse(value, fallback = {}) {
   return value ? JSON.parse(value) : fallback;
 }
 
-function directorStage(database, nodeId) {
+function directorStage(database, nodeId, includeInactive = false) {
+  if (!includeInactive) {
+    const node = database.prepare("SELECT payload_json FROM nodes WHERE id=?").get(nodeId);
+    const payload = parse(node?.payload_json);
+    if (!node || payload.stale === true || payload.invalidated === true || payload.stageStatus === "stale") {
+      return undefined;
+    }
+  }
   const record = database.prepare(`
     SELECT node_id AS nodeId, canvas_id AS canvasId, current_version AS version, updated_at AS updatedAt
     FROM director_stages WHERE node_id=?
@@ -62,8 +69,8 @@ export function attachDirectorStageMethods(prototype, event) {
     return { nodeId: input.nodeId, canvasId: input.canvasId, version, stage: input.stage, updatedAt: input.updatedAt };
   };
 
-  prototype.getDirectorStage = function getDirectorStage(projectId, nodeId) {
-    return directorStage(this.database(projectId), nodeId);
+  prototype.getDirectorStage = function getDirectorStage(projectId, nodeId, includeInactive = false) {
+    return directorStage(this.database(projectId), nodeId, includeInactive);
   };
 
   prototype.getDirectorStageVersion = function getDirectorStageVersion(projectId, nodeId, version) {

@@ -1,5 +1,6 @@
 import { validateCharacterAuthorityFields, validateSceneAuthorityFields } from "./character-authority-board-contract.mjs";
 import { CINEMATIC_GENERATION_UNIT_LIFECYCLES } from "./cinematic-generation-unit-lifecycle-policy.mjs";
+import { CINEMATIC_SEGMENT_DECISIONS } from "./cinematic-segment-seam-policy.mjs";
 import { CINEMATIC_CONTINUITY_BOUNDARY_TYPES } from "./cinematic-continuity-policy.mjs";
 import { validateCinematicContinuityPlan, validateCinematicContinuityState } from "./cinematic-continuity-contracts.mjs";
 import { validateContinuationHandoffPlan, validateVisualStateAcceptanceProof } from "./cinematic-cross-modal-control-policy.mjs";
@@ -12,50 +13,22 @@ import { validateGenerationControlIntent, validateReferenceSemanticControl } fro
 import { validateCameraTrajectoryPlan, validateOrbitCameraTrajectory } from "./cinematic-camera-trajectory-policy.mjs";
 import { validatePromptConstraintCoverage } from "./cinematic-prompt-coverage-policy.mjs";
 import { validateCinematicSequenceState } from "./cinematic-sequence-state-policy.mjs"; import { validateSequenceWorkspaceBinding } from "./cinematic-sequence-workspace-contracts.mjs"; export { validateAssetAuthorityBoardSpec, validateCharacterAuthorityBoardSpec } from "./character-authority-board-contract.mjs";
+import { validateScreenplayAuthorityDocument } from "./screenplay-authority-contract.mjs";
 import { CINEMATIC_RESERVED_PROVIDER_OPTION_KEYS, validateVirtualPersonAssetIds } from "./generation-parameter-contracts.mjs";
+import {
+  CINEMATIC_ASSET_AUTHORITY_STATES,
+  CINEMATIC_ASSET_RISK_LEVELS,
+  CINEMATIC_GENERATION_STRATEGIES,
+  CINEMATIC_PROJECT_TYPES,
+  CINEMATIC_PRODUCTION_MODES,
+  CINEMATIC_PROMPT_PROTOCOLS,
+  CINEMATIC_STORYBOARD_LAYOUTS,
+  CINEMATIC_VISUAL_ANCHOR_POLICIES
+} from "./cinematic-contract-constants.mjs";
 export { CINEMATIC_RESERVED_PROVIDER_OPTION_KEYS } from "./generation-parameter-contracts.mjs";
 export { validateCinematicContinuityPlan, validateCinematicContinuityState } from "./cinematic-continuity-contracts.mjs";
 export { CINEMATIC_REVIEW_DECISIONS } from "./cinematic-review-gate-policy.mjs";
-export const CINEMATIC_CONTRACT_VERSION = "2.0.0";
-export const CINEMATIC_PROJECT_TYPES = Object.freeze(["feature_film", "short_film", "episodic_series", "short_drama", "commercial", "music_video", "documentary", "animation", "trailer", "social_video"]);
-export const CINEMATIC_PRODUCTION_MODES = Object.freeze(["direct", "production"]);
-export const CINEMATIC_GENERATION_STRATEGIES = Object.freeze(["single_shot", "designed_multi_shot", "continuous_segment", "storyboard_action_sequence"]);
-export const CINEMATIC_VISUAL_ANCHOR_POLICIES = Object.freeze([
-  "NONE",
-  "FIRST_FRAME",
-  "FIRST_LAST_FRAME",
-  "STORYBOARD_SHEET",
-  "SHOT_FRAME_SET",
-  "ACTION_PHASE_BOARD",
-  "PREVIOUS_ACCEPTED_TAIL",
-  "DUPLICATE_HANDOFF"
-]);
-export const CINEMATIC_PROMPT_PROTOCOLS = Object.freeze([
-  "ununu.character.v2",
-  "ununu.image.v2",
-  "ununu.storyboard.v2",
-  "ununu.storyboard.keyframe.v1",
-  "ununu.video.single-shot.v2",
-  "ununu.video.multi-shot.v2",
-  "ununu.video.continuous-segment.v2",
-  "ununu.video.action-sequence.v2"
-]);
-export const CINEMATIC_ASSET_AUTHORITY_TYPES = Object.freeze(["character", "scene", "prop"]);
-export const CINEMATIC_ASSET_AUTHORITY_STATES = Object.freeze(["draft", "candidate", "accepted", "rejected"]);
-export const CINEMATIC_ASSET_RISK_LEVELS = Object.freeze(["low", "medium", "high", "critical"]);
-export const CINEMATIC_CHARACTER_BOARD_REFERENCE_POLICIES = Object.freeze([
-  "none",
-  "accepted_identity",
-  "accepted_identity_and_props",
-  "accepted_authority_versions"
-]);
-export const CINEMATIC_STORYBOARD_LAYOUTS = Object.freeze(["storyboard_sheet", "shot_frame_set", "action_phase_board"]);
-export const CINEMATIC_STRATEGY_PROTOCOL = Object.freeze({
-  single_shot: "ununu.video.single-shot.v2",
-  designed_multi_shot: "ununu.video.multi-shot.v2",
-  continuous_segment: "ununu.video.continuous-segment.v2",
-  storyboard_action_sequence: "ununu.video.action-sequence.v2"
-});
+export * from "./cinematic-contract-constants.mjs";
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -215,7 +188,7 @@ export function validateCinematicImageGenerationParameters(value) {
   positiveInteger(value.count, "count", issues);
   requiredArray(value.referenceMediaIds, "referenceMediaIds", issues);
   if (value.quality !== undefined) enumValue(value.quality, ["auto", "low", "medium", "high"], "quality", issues);
-  if (value.background !== undefined) enumValue(value.background, ["auto", "opaque"], "background", issues);
+  if (value.background !== undefined) enumValue(value.background, ["auto", "opaque", "transparent"], "background", issues);
   return result(issues);
 }
 
@@ -249,6 +222,7 @@ export function validateCinematicImagePromptEnvelopeV2(value) {
   requiredText(value.compilerVersion, "compilerVersion", issues);
   requiredText(value.payloadHash, "payloadHash", issues);
   requiredRecord(value.lint, "lint", issues);
+  requiredRecord(value.abstractIntentResolution, "abstractIntentResolution", issues);
   if (typeof value.manualOverride !== "boolean") issues.push(issue("manualOverride", "manualOverride must be boolean", "invalid_type"));
   if (typeof value.requiresPreflight !== "boolean") issues.push(issue("requiresPreflight", "requiresPreflight must be boolean", "invalid_type"));
   return result(issues);
@@ -271,6 +245,8 @@ export function validateCinematicShotSpec(value) {
   }
   requiredArray(value.dialogue, "dialogue", issues);
   requiredArray(value.requiredAssetIds, "requiredAssetIds", issues);
+  if (value.characterAuthorityIds !== undefined) requiredArray(value.characterAuthorityIds, "characterAuthorityIds", issues);
+  if (value.characterIdentitySourceVersions !== undefined) requiredArray(value.characterIdentitySourceVersions, "characterIdentitySourceVersions", issues);
   requiredArray(value.mustNotAppearYet, "mustNotAppearYet", issues);
   requiredArray(value.acceptanceCriteria, "acceptanceCriteria", issues, 1);
   if (value.continuityPlan !== undefined) {
@@ -348,7 +324,10 @@ export function validateReferenceBindings(value, generationParameters) {
       generationParameters.lastFrameMediaId,
       ...(Array.isArray(generationParameters.referenceMediaIds) ? generationParameters.referenceMediaIds : [])
     ].filter(Boolean);
-    const bindingOrder = [...value].sort((a, b) => a.providerIndex - b.providerIndex).map((binding) => binding.mediaId);
+    const bindingOrder = [...value]
+      .sort((a, b) => a.providerIndex - b.providerIndex)
+      .filter((binding) => binding.providerEligible !== false)
+      .map((binding) => binding.mediaId);
     if (payloadOrder.join("\u0000") !== bindingOrder.join("\u0000")) {
       issues.push(issue("referenceBindings", "reference binding order must equal the final provider payload image order", "invalid_reference_order"));
     }
@@ -364,7 +343,34 @@ export function validateGenerationUnit(value) {
   if (value.lifecycle !== undefined) enumValue(value.lifecycle, CINEMATIC_GENERATION_UNIT_LIFECYCLES, "lifecycle", issues);
   if (value.lifecycle === "superseded") { requiredText(value.supersededReason, "supersededReason", issues); requiredText(value.supersededByPlan, "supersededByPlan", issues); }
   enumValue(value.strategy, CINEMATIC_GENERATION_STRATEGIES, "strategy", issues);
+  if (value.segmentDecision !== undefined) enumValue(value.segmentDecision, CINEMATIC_SEGMENT_DECISIONS, "segmentDecision", issues);
   requiredArray(value.shotLinks, "shotLinks", issues, 1);
+  if (value.characterAuthorityIds !== undefined) requiredArray(value.characterAuthorityIds, "characterAuthorityIds", issues);
+  if (value.characterIdentitySourceVersions !== undefined) requiredArray(value.characterIdentitySourceVersions, "characterIdentitySourceVersions", issues);
+  if (value.sceneAuthorityBinding !== undefined) {
+    requiredRecord(value.sceneAuthorityBinding, "sceneAuthorityBinding", issues);
+    if (isRecord(value.sceneAuthorityBinding)) {
+      for (const field of [
+        "authorityId", "topologyRevision", "assetId", "assetVersionId",
+        "mediaId", "mediaChecksum", "reviewId", "sourceNodeId", "edgeRole"
+      ]) requiredText(value.sceneAuthorityBinding[field], `sceneAuthorityBinding.${field}`, issues);
+      positiveInteger(value.sceneAuthorityBinding.authorityRevision, "sceneAuthorityBinding.authorityRevision", issues);
+      if (value.sceneAuthorityBinding.edgeRole !== "cinematic_reference:scene_authority") {
+        issues.push(issue(
+          "sceneAuthorityBinding.edgeRole",
+          "sceneAuthorityBinding.edgeRole must be cinematic_reference:scene_authority",
+          "invalid_enum"
+        ));
+      }
+    }
+  }
+  if (value.executionGates?.requireSceneAuthorityTopology === true && !isRecord(value.sceneAuthorityBinding)) {
+    issues.push(issue(
+      "sceneAuthorityBinding",
+      "same-scene continuation requires a formal scene Authority binding",
+      "required"
+    ));
+  }
   enumValue(value.visualAnchorPolicy, CINEMATIC_VISUAL_ANCHOR_POLICIES, "visualAnchorPolicy", issues);
   requiredArray(value.requiredCapabilities, "requiredCapabilities", issues);
   const parameterResult = validateGenerationParameters(value.generationParameters);
@@ -417,6 +423,22 @@ export function validateProfessionalContribution(value) {
   requiredArray(value.knowledgeRefs, "knowledgeRefs", issues);
   requiredArray(value.acceptanceCriteria, "acceptanceCriteria", issues);
   revision(value.revision, issues);
+  if (["script_doctor", "dialogue_editor", "platform_editor"].includes(value.roleId)) {
+    if (String(value.targetType ?? "").replace(/[^a-z]/giu, "").toLowerCase() !== "storyproductionpacket") {
+      issues.push(issue("targetType", "development review contributions must target StoryProductionPacket", "authority_violation"));
+    }
+    const fields = isRecord(value.structuredFields) ? value.structuredFields : {};
+    positiveInteger(fields.sourceStoryPacketRevision, "structuredFields.sourceStoryPacketRevision", issues);
+    requiredText(fields.sourceScreenplayDocumentId, "structuredFields.sourceScreenplayDocumentId", issues);
+    positiveInteger(fields.sourceScreenplayDocumentRevision, "structuredFields.sourceScreenplayDocumentRevision", issues);
+    if (!/^[a-f0-9]{64}$/u.test(fields.sourceScreenplayDocumentChecksum ?? "")) {
+      issues.push(issue(
+        "structuredFields.sourceScreenplayDocumentChecksum",
+        "structuredFields.sourceScreenplayDocumentChecksum must be a lowercase SHA-256 hash",
+        "invalid_checksum"
+      ));
+    }
+  }
   if (hasText(value.finalPrompt) || hasText(value.compiledContentPrompt)) {
     issues.push(issue("finalPrompt", "professional contributions may not contain or replace the final compiled Prompt", "authority_violation"));
   }
@@ -444,6 +466,7 @@ export function validateCinematicPromptEnvelopeV2(value) {
   requiredRecord(value.capabilitySnapshot, "capabilitySnapshot", issues);
   requiredArray(value.capabilityDegradation, "capabilityDegradation", issues);
   requiredRecord(value.generationControl, "generationControl", issues);
+  requiredRecord(value.directorPromptPolicy, "directorPromptPolicy", issues);
   requiredArray(value.teamManifestIds, "teamManifestIds", issues);
   requiredArray(value.expertPackIds, "expertPackIds", issues);
   requiredArray(value.knowledgeRefs, "knowledgeRefs", issues);
@@ -472,6 +495,7 @@ export function assertCinematicContract(kind, value, context) {
     ProfessionalContribution: validateProfessionalContribution,
     PropAuthoritySpec: validatePropAuthoritySpec,
     ReferenceBinding: (input) => validateReferenceBindings(input, context?.generationParameters),
+    ScreenplayAuthorityDocument: validateScreenplayAuthorityDocument,
     StoryProductionPacket: validateStoryProductionPacket,
     StoryboardPromptSpec: validateStoryboardPromptSpec,
     SceneAuthoritySet: validateSceneAuthoritySet,
