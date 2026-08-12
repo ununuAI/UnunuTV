@@ -4608,3 +4608,15 @@ textarea { padding: 10px; resize: vertical; font-family: "SFMono-Regular", Conso
 }
 .dock-form button.primary { border-color: #6fb3b8; color: #6fb3b8; text-align: center; }
 .director-captures { display: none; }
+/* 全屏导演台里的错误条:必须压在浮层之上,否则失败无声无息 */
+.director-error {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20;
+  display: flex; align-items: center; gap: 10px; max-width: min(720px, calc(100% - 32px));
+  padding: 8px 12px; border-radius: 7px; font-size: 12px;
+  background: rgba(46,30,27,.96); border: 1px solid #d97a6a; color: #f0b6a8;
+}
+.director-error b { flex: 0 0 auto; color: #d97a6a; }
+.director-error span { overflow: hidden; text-overflow: ellipsis; }
+.director-error button { flex: 0 0 auto; background: none; border: 0; color: #d97a6a; padding: 0 2px; }
+/* 页面级 toast 也抬到浮层之上 */
+.toast { z-index: 4100 !important; }

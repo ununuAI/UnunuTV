@@ -16,6 +16,9 @@ import * as THREE from "three";
 import { BODY_TYPES, JOINT, readBodyType, readPose } from "./director-pose-presets.js";
 
 const MODEL_URL = "/models/mannequin.glb";
+// 模型原始网格 182.12 单位高,骨骼根 Bones_01 带 0.0254 缩放(英寸→米),
+// 因此实际渲染高度约 4.63 单位。按目标身高归一化,否则每个人都有四米六。
+const MODEL_NATIVE_HEIGHT = 182.12 * 0.0254;
 useGLTF.preload(MODEL_URL);
 
 const v3 = (value, fallback = 0) => new THREE.Vector3(
@@ -80,7 +83,8 @@ function Mannequin({ object, selected, onSelect }) {
 
   const position = v3(object.position);
   const rotation = v3(object.rotation);
-  const scale = body.scale * (Number.isFinite(object.size?.y) ? object.size.y / 1.8 : 1);
+  const targetHeight = Number.isFinite(object.size?.y) ? object.size.y : 1.8;
+  const scale = body.scale * (targetHeight / MODEL_NATIVE_HEIGHT);
 
   return (
     <group

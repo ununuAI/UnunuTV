@@ -108,6 +108,13 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
   const draftRef = useRef(null);
   draftRef.current = draft;
 
+  // 全屏浮层盖住了页面级 toast,失败必须在台面上自己说出来,否则就是"点了没反应"
+  const [lastError, setLastError] = useState(null);
+  const fail = useCallback((error) => {
+    setLastError(String(error?.message ?? error));
+    notify?.(error);
+  }, [notify]);
+
   const panoramas = useMemo(() => panoramaSources(canvas, node), [canvas, node]);
   const panorama = useMemo(() => {
     const hit = panoramas.find((item) => item.id === panoramaId);
@@ -149,7 +156,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
         setStage(result.director.stage);
         return result.director.stage;
       } catch (error) {
-        notify?.(error);
+        fail(error);
         return null;
       } finally {
         setBusy(false);
@@ -157,7 +164,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
     });
     chainRef.current = task.catch(() => {});
     return task;
-  }, [node.id, notify, projectId]);
+  }, [fail, node.id, projectId]);
 
   /** 连发多条命令时必须串行并逐条接住新 revision,否则第二条就撞乐观并发。 */
   const runMany = useCallback(async (commands) => {
@@ -175,7 +182,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
       setStage(current);
       return current;
     } catch (error) {
-      notify?.(error);
+      fail(error);
       if (current) setStage(current);
       return null;
     } finally {
@@ -459,6 +466,14 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
           </div>
         ) : null}
 
+
+        {lastError ? (
+          <div className="director-error nodrag nopan">
+            <b>操作失败</b>
+            <span>{lastError}</span>
+            <button onClick={() => setLastError(null)} type="button">✕</button>
+          </div>
+        ) : null}
 
         {/* 底部工具坞:高频动作放这里,右侧面板只留属性 */}
         <div className="director-dock nodrag nopan nowheel">
