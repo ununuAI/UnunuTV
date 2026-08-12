@@ -71,7 +71,12 @@ function menuPosition(menu, height = 650) {
 export function AddMenu({ menu, onAdd, onClose }) {
   return <><button aria-label="关闭添加节点菜单" className="node-type-menu-backdrop" onClick={onClose} type="button" /><aside aria-label="添加节点" className="node-type-menu canvas-node-type-menu" style={menuPosition(menu)}>
     {menu.sourceNodeIds?.length ? <div className="node-type-source"><span>从这里创建</span><strong>{menu.sourceTitle || `${menu.sourceNodeIds.length} 个节点`}</strong></div> : null}
-    <div className="node-type-list">{ADD_GROUPS.map(([group, label]) => <section className="node-type-group" key={group}><header>{label}</header>{ADD_ITEMS.filter((item) => item.group === group).map((item) => { const Icon = item.icon; return <button aria-label={`${item.label}：${item.meta}`} className="node-type-row" key={item.kind} onClick={() => onAdd(item.kind)} title={`${item.label}：${item.meta}`} type="button"><Icon size={15} /><span><strong>{item.label}</strong><small>{item.meta}</small></span></button>; })}</section>)}</div>
+    <div className="node-type-list">{ADD_GROUPS.map(([group, label]) => {
+      // 整组被创建策略过滤空了就不要留一个光秃秃的标题
+      const items = ADD_ITEMS.filter((item) => item.group === group);
+      if (!items.length) return null;
+      return <section className="node-type-group" key={group}><header>{label}</header>{items.map((item) => { const Icon = item.icon; return <button aria-label={`${item.label}：${item.meta}`} className="node-type-row" key={item.kind} onClick={() => onAdd(item.kind)} title={`${item.label}：${item.meta}`} type="button"><Icon size={15} /><span><strong>{item.label}</strong><small>{item.meta}</small></span></button>; })}</section>;
+    })}</div>
   </aside></>;
 }
 
