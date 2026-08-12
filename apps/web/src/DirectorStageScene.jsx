@@ -9,9 +9,9 @@
 // 模型:public/models/mannequin.glb,3ds Max Biped 命名的 67 关节骨架,
 // Sketchfab Standard 授权(允许商用)。
 
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Grid, Line, OrbitControls, PerspectiveCamera, useGLTF } from "@react-three/drei";
+import { Grid, Line, OrbitControls, PerspectiveCamera, TransformControls, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { BODY_TYPES, JOINT, readBodyType, readPose } from "./director-pose-presets.js";
 
@@ -24,12 +24,16 @@ const v3 = (value, fallback = 0) => new THREE.Vector3(
   Number.isFinite(value?.z) ? value.z : fallback
 );
 
-/** 一个演员。GLB 只加载一次,每个实例克隆骨架后各自摆姿势。 */
-function Mannequin({ object, selected, onSelect }) {
-  const { scene } = useGLTF(MODEL_URL);
-  const root = useRef(null);
+export function aspectOf(ratio) {
+  const [w, h] = String(ratio || "16:9").split(":").map(Number);
+  return Number.isFinite(w) && Number.isFinite(h) && h > 0 ? w / h : 16 / 9;
+}
 
-  // SkeletonUtils.clone 的等价做法:深克隆并重建骨骼绑定
+/** 一个演员。GLB 只加载一次,每个实例克隆骨架后各自摆姿势。 */
+function Mannequin({ object, selected, onSelect, onAttach }) {
+  const { scene } = useGLTF(MODEL_URL);
+  const group = useRef(null);
+
   const instance = useMemo(() => {
     const clone = scene.clone(true);
     const bones = new Map();
@@ -46,19 +50,19 @@ function Mannequin({ object, selected, onSelect }) {
     return { clone, bones };
   }, [scene]);
 
-  // 应用姿势:每帧重置回绑定姿势再叠加,避免旋转累积
   const pose = readPose(object);
   const body = BODY_TYPES[readBodyType(object)] ?? BODY_TYPES.男性素体;
+
   useLayoutEffect(() => {
+    const find = (prefix) => [...instance.bones.entries()].find(([name]) => name.startsWith(prefix))?.[1];
     for (const [short, prefix] of Object.entries(JOINT)) {
-      const bone = [...instance.bones.entries()].find(([name]) => name.startsWith(prefix))?.[1];
+      const bone = find(prefix);
       if (!bone) continue;
       const angles = pose[short];
       bone.rotation.set(0, 0, 0);
       if (Array.isArray(angles) && angles.length === 3) bone.rotation.set(...angles);
     }
-    // 躯干粗细:缩放脊柱链的横截面
-    const spine = [...instance.bones.entries()].find(([name]) => name.startsWith(JOINT.spine))?.[1];
+    const spine = find(JOINT.spine);
     if (spine) spine.scale.set(body.girth, 1, body.girth);
   }, [body.girth, instance, pose]);
 
@@ -73,23 +77,27 @@ function Mannequin({ object, selected, onSelect }) {
     });
   }, [instance, object.color, selected]);
 
+  useEffect(() => { if (selected) onAttach?.(group.current); }, [onAttach, selected]);
+
   const position = v3(object.position);
   const rotation = v3(object.rotation);
+  const scale = body.scale * (Number.isFinite(object.size?.y) ? object.size.y / 1.8 : 1);
 
   return (
     <group
+      name={object.id}
       onClick={(event) => { event.stopPropagation(); onSelect(object.id); }}
       position={[position.x, position.y, position.z]}
-      ref={root}
+      ref={group}
       rotation={[rotation.x, rotation.y, rotation.z]}
-      scale={body.scale * (Number.isFinite(object.size?.y) ? object.size.y / 1.8 : 1)}
+      scale={scale}
       visible={object.visible !== false}
     >
       <primitive object={instance.clone} />
       {selected ? (
         <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[0.42, 0.5, 40]} />
-          <meshBasicMaterial color="#6fb3b8" transparent opacity={0.9} />
+          <meshBasicMaterial color="#6fb3b8" opacity={0.9} transparent />
         </mesh>
       ) : null}
       <Billboard label={object.label} />
@@ -97,7 +105,6 @@ function Mannequin({ object, selected, onSelect }) {
   );
 }
 
-/** 角色标签,始终朝向观察者。 */
 function Billboard({ label }) {
   const ref = useRef(null);
   useFrame(({ camera }) => { ref.current?.quaternion.copy(camera.quaternion); });
@@ -106,7 +113,8 @@ function Billboard({ label }) {
     canvas.width = 256; canvas.height = 64;
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = "rgba(15,16,19,.82)";
-    ctx.roundRect?.(0, 0, 256, 64, 12); ctx.fill();
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(0, 0, 256, 64, 12); ctx.fill(); }
+    else ctx.fillRect(0, 0, 256, 64);
     ctx.fillStyle = "#e5e4e0";
     ctx.font = "600 30px system-ui, -apple-system, PingFang SC, sans-serif";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
@@ -122,32 +130,71 @@ function Billboard({ label }) {
   );
 }
 
-/** 非角色对象一律用带边框的盒子表示,足够锁体积与遮挡关系。 */
-function StageBox({ object, selected, onSelect }) {
+/** 几何体道具。object.geometry 决定形状,缺省是盒子。 */
+function StageGeometry({ object, selected, onSelect, onAttach }) {
+  const group = useRef(null);
+  useEffect(() => { if (selected) onAttach?.(group.current); }, [onAttach, selected]);
   const position = v3(object.position);
   const rotation = v3(object.rotation);
   const size = v3(object.size, 1);
+  const half = (size.y || 1) / 2;
+  const geometry = useMemo(() => {
+    const [x, y, z] = [size.x || 1, size.y || 1, size.z || 1];
+    switch (object.geometry) {
+      case "sphere": return new THREE.SphereGeometry(Math.max(x, z) / 2, 32, 24);
+      case "cylinder": return new THREE.CylinderGeometry(x / 2, x / 2, y, 32);
+      case "cone": return new THREE.ConeGeometry(x / 2, y, 32);
+      case "torus": return new THREE.TorusGeometry(x / 2, Math.min(x, z) / 6, 16, 40);
+      case "pyramid": return new THREE.ConeGeometry(x / 2, y, 4);
+      default: return new THREE.BoxGeometry(x, y, z);
+    }
+  }, [object.geometry, size.x, size.y, size.z]);
+
   return (
     <group
+      name={object.id}
       onClick={(event) => { event.stopPropagation(); onSelect(object.id); }}
-      position={[position.x, position.y + size.y / 2, position.z]}
+      position={[position.x, position.y + half, position.z]}
+      ref={group}
       rotation={[rotation.x, rotation.y, rotation.z]}
       visible={object.visible !== false}
     >
-      <mesh castShadow receiveShadow>
-        <boxGeometry args={[size.x || 1, size.y || 1, size.z || 1]} />
+      <mesh castShadow geometry={geometry} receiveShadow>
         <meshStandardMaterial color={object.color || "#5d6672"} roughness={0.8} />
       </mesh>
       <lineSegments>
-        <edgesGeometry args={[new THREE.BoxGeometry(size.x || 1, size.y || 1, size.z || 1)]} />
+        <edgesGeometry args={[geometry]} />
         <lineBasicMaterial color={selected ? "#6fb3b8" : "#1b1d21"} />
       </lineSegments>
     </group>
   );
 }
 
-/** 走位路线。这是新导演台相对外来那个的关键增量:
- *  routes 会被 automation executor 投影成 shot.cameraTrajectoryPlan 进提示词。 */
+/** 会话内导入的本地 GLB。不落盘,刷新即失效。 */
+function LocalModel({ object, url, selected, onSelect, onAttach }) {
+  const { scene } = useGLTF(url);
+  const group = useRef(null);
+  useEffect(() => { if (selected) onAttach?.(group.current); }, [onAttach, selected]);
+  const clone = useMemo(() => scene.clone(true), [scene]);
+  const position = v3(object.position);
+  const rotation = v3(object.rotation);
+  return (
+    <group
+      name={object.id}
+      onClick={(event) => { event.stopPropagation(); onSelect(object.id); }}
+      position={[position.x, position.y, position.z]}
+      ref={group}
+      rotation={[rotation.x, rotation.y, rotation.z]}
+      scale={Number.isFinite(object.size?.y) ? object.size.y : 1}
+      visible={object.visible !== false}
+    >
+      <primitive object={clone} />
+      <Billboard label={object.label} />
+    </group>
+  );
+}
+
+/** 走位路线。routes 会被 automation executor 投影成 shot.cameraTrajectoryPlan 进提示词。 */
 function StageRoute({ route, selected, onSelect }) {
   const points = useMemo(
     () => (route.points ?? []).map((point) => [point.x ?? 0, (point.y ?? 0) + 0.04, point.z ?? 0]),
@@ -157,7 +204,7 @@ function StageRoute({ route, selected, onSelect }) {
   const color = route.color || (route.type === "camera" ? "#d9a441" : "#6fb3b8");
   return (
     <group onClick={(event) => { event.stopPropagation(); onSelect(route.id); }}>
-      <Line color={color} dashed={route.type === "camera"} dashSize={0.18} gapSize={0.12}
+      <Line color={color} dashSize={0.18} dashed={route.type === "camera"} gapSize={0.12}
         lineWidth={selected ? 3 : 1.8} points={points} />
       {points.map((point, index) => (
         <mesh key={index} position={point}>
@@ -169,7 +216,6 @@ function StageRoute({ route, selected, onSelect }) {
   );
 }
 
-/** 机位标记 + 视锥,让你在导演视角里看得见镜头朝哪。 */
 function CameraMarker({ camera, active, onSelect }) {
   const position = v3(camera.position);
   const target = v3(camera.target);
@@ -198,36 +244,64 @@ function CameraMarker({ camera, active, onSelect }) {
   );
 }
 
-export function aspectOf(ratio) {
-  const [w, h] = String(ratio || "16:9").split(":").map(Number);
-  return Number.isFinite(w) && Number.isFinite(h) && h > 0 ? w / h : 16 / 9;
-}
-
-/** 机位视角:把渲染相机切到选中机位。 */
-function ActiveCameraRig({ camera, enabled }) {
-  const ref = useRef(null);
-  const { set, size } = useThree();
+/** 全景环境球:连进导演节点的全景图当内壁贴图。 */
+function PanoramaSphere({ url, radius, yaw }) {
+  const [texture, setTexture] = useState(null);
   useEffect(() => {
-    if (!enabled || !ref.current) return;
-    const target = v3(camera.target);
-    ref.current.lookAt(target);
-    ref.current.updateProjectionMatrix();
-  }, [camera, enabled, size]);
-  if (!enabled) return null;
-  const position = v3(camera.position);
+    if (!url) { setTexture(null); return undefined; }
+    let alive = true;
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin("anonymous");
+    loader.load(url, (loaded) => {
+      if (!alive) { loaded.dispose(); return; }
+      loaded.colorSpace = THREE.SRGBColorSpace;
+      loaded.mapping = THREE.EquirectangularReflectionMapping;
+      setTexture(loaded);
+    }, undefined, () => setTexture(null));
+    return () => { alive = false; };
+  }, [url]);
+  if (!texture) return null;
   return (
-    <PerspectiveCamera
-      far={400}
-      fov={camera.fov || 40}
-      makeDefault
-      near={0.05}
-      position={[position.x, position.y, position.z]}
-      ref={ref}
-    />
+    <mesh rotation={[0, yaw ?? 0, 0]} scale={[-1, 1, 1]}>
+      <sphereGeometry args={[radius ?? 40, 60, 40]} />
+      <meshBasicMaterial fog={false} map={texture} side={THREE.BackSide} toneMapped={false} />
+    </mesh>
   );
 }
 
-/** 九宫格与画幅遮罩,叠在视口上,不进 3D 场景。 */
+function ActiveCameraRig({ camera }) {
+  const ref = useRef(null);
+  const { size } = useThree();
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.lookAt(v3(camera.target));
+    ref.current.updateProjectionMatrix();
+  }, [camera, size]);
+  const position = v3(camera.position);
+  return (
+    <PerspectiveCamera far={400} fov={camera.fov || 40} makeDefault near={0.05}
+      position={[position.x, position.y, position.z]} ref={ref} />
+  );
+}
+
+/** 六向正交视图:把导演视角相机搬到轴向位置。 */
+function AxisViewRig({ request }) {
+  const { camera, controls } = useThree();
+  useEffect(() => {
+    if (!request?.axis) return;
+    const distance = 11;
+    const map = {
+      x: [distance, 1.4, 0], y: [0, distance, 0.001], z: [0, 1.4, distance]
+    };
+    const base = map[request.axis] ?? map.z;
+    const sign = request.sign ?? 1;
+    camera.position.set(base[0] * sign, request.axis === "y" ? base[1] * sign : base[1], base[2] * sign);
+    camera.lookAt(0, 1, 0);
+    if (controls?.target) { controls.target.set(0, 1, 0); controls.update?.(); }
+  }, [camera, controls, request]);
+  return null;
+}
+
 export function ViewportOverlay({ aspect, showThirds, showMask }) {
   if (!showThirds && !showMask) return null;
   return (
@@ -251,10 +325,15 @@ export function DirectorStageScene({
   stage,
   selectedId,
   activeCameraId,
-  viewMode,          // "director" | "camera"
+  viewMode,
   gridSnap,
   groundOpacity,
+  panorama,
+  localModels,
+  gizmo,            // "translate" | "rotate" | "scale" | null
+  axisView,
   onSelect,
+  onTransform,
   onReady
 }) {
   const objects = stage?.objects ?? [];
@@ -262,52 +341,42 @@ export function DirectorStageScene({
   const cameras = stage?.cameras ?? [];
   const activeCamera = cameras.find((item) => item.id === activeCameraId) ?? cameras[0] ?? null;
   const cameraView = viewMode === "camera" && activeCamera;
+  const [attached, setAttached] = useState(null);
+
+  useEffect(() => { setAttached(null); }, [selectedId]);
 
   return (
-    <Canvas
-      gl={{ preserveDrawingBuffer: true, antialias: true }}
-      onCreated={(state) => onReady?.(state)}
-      shadows
-    >
+    <Canvas gl={{ preserveDrawingBuffer: true, antialias: true }} onCreated={(state) => onReady?.(state)} shadows>
       <color args={["#101216"]} attach="background" />
-      <fog args={["#101216", 26, 78]} attach="fog" />
+      {panorama?.url ? null : <fog args={["#101216", 26, 78]} attach="fog" />}
 
       {cameraView
-        ? <ActiveCameraRig camera={activeCamera} enabled />
+        ? <ActiveCameraRig camera={activeCamera} />
         : <PerspectiveCamera far={400} fov={46} makeDefault near={0.05} position={[7, 5.2, 9]} />}
 
       <hemisphereLight args={["#cfd8e3", "#20242b", 0.72]} />
-      <directionalLight
-        castShadow
-        intensity={2.1}
-        position={[6, 11, 5]}
-        shadow-camera-bottom={-16}
-        shadow-camera-left={-16}
-        shadow-camera-right={16}
-        shadow-camera-top={16}
-        shadow-mapSize={[2048, 2048]}
-      />
+      <directionalLight castShadow intensity={2.1} position={[6, 11, 5]}
+        shadow-camera-bottom={-16} shadow-camera-left={-16} shadow-camera-right={16}
+        shadow-camera-top={16} shadow-mapSize={[2048, 2048]} />
       <directionalLight intensity={0.5} position={[-8, 5, -6]} />
+
+      <PanoramaSphere radius={panorama?.radius} url={panorama?.url} yaw={panorama?.yaw} />
 
       <mesh position={[0, -0.001, 0]} receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[200, 200]} />
         <meshStandardMaterial color="#171a1f" opacity={groundOpacity} roughness={1} transparent />
       </mesh>
-      <Grid
-        cellColor="#2b3038"
-        cellSize={gridSnap || 0.5}
-        fadeDistance={62}
-        infiniteGrid
-        sectionColor="#3d444f"
-        sectionSize={(gridSnap || 0.5) * 10}
-      />
+      <Grid cellColor="#2b3038" cellSize={gridSnap || 0.5} fadeDistance={62} infiniteGrid
+        sectionColor="#3d444f" sectionSize={(gridSnap || 0.5) * 10} />
 
       <Suspense fallback={null}>
-        {objects.map((object) => (
-          object.type === "character"
-            ? <Mannequin key={object.id} object={object} onSelect={onSelect} selected={object.id === selectedId} />
-            : <StageBox key={object.id} object={object} onSelect={onSelect} selected={object.id === selectedId} />
-        ))}
+        {objects.map((object) => {
+          const shared = { key: object.id, object, onSelect, selected: object.id === selectedId, onAttach: setAttached };
+          if (object.type === "character") return <Mannequin {...shared} />;
+          const localUrl = localModels?.[object.id];
+          if (localUrl) return <LocalModel {...shared} url={localUrl} />;
+          return <StageGeometry {...shared} />;
+        })}
       </Suspense>
 
       {routes.map((route) => (
@@ -318,7 +387,23 @@ export function DirectorStageScene({
         <CameraMarker active={camera.id === activeCameraId} camera={camera} key={camera.id} onSelect={onSelect} />
       ))}
 
+      {/* 场景内直接拖拽摆位:松手才落盘,拖动期间锁住轨道控制 */}
+      {!cameraView && gizmo && attached ? (
+        <TransformControls
+          mode={gizmo}
+          object={attached}
+          onMouseUp={() => onTransform?.(selectedId, {
+            position: { x: round(attached.position.x), y: round(attached.position.y), z: round(attached.position.z) },
+            rotation: { x: round(attached.rotation.x), y: round(attached.rotation.y), z: round(attached.rotation.z) }
+          })}
+          translationSnap={gridSnap || null}
+        />
+      ) : null}
+
+      {!cameraView ? <AxisViewRig request={axisView} /> : null}
       {!cameraView ? <OrbitControls makeDefault maxPolarAngle={Math.PI / 2.02} target={[0, 1, 0]} /> : null}
     </Canvas>
   );
 }
+
+const round = (value) => Number(Number(value).toFixed(3));

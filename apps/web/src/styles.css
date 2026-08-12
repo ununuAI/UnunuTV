@@ -4528,3 +4528,15 @@ textarea { padding: 10px; resize: vertical; font-family: "SFMono-Regular", Conso
 .director-thirds { position: absolute; background: rgba(255,255,255,.22); }
 .director-thirds.v { top: 0; bottom: 0; width: 1px; }
 .director-thirds.h { left: 0; right: 0; height: 1px; }
+.director-axisbar { position: absolute; top: 10px; right: 10px; display: flex; gap: 3px; z-index: 6; }
+.director-gizmobar { position: absolute; bottom: 10px; right: 10px; display: flex; gap: 3px; z-index: 6; }
+.director-axisbar button, .director-gizmobar button {
+  background: rgba(22,24,29,.9); border: 1px solid #2c313a; color: #d3d4d8;
+  border-radius: 5px; padding: 4px 9px; font-size: 11px; backdrop-filter: blur(8px);
+}
+.director-axisbar button:hover, .director-gizmobar button:hover { border-color: #6fb3b8; color: #6fb3b8; }
+.director-gizmobar button.on { border-color: #6fb3b8; color: #6fb3b8; background: rgba(27,46,48,.92); }
+.crowd-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 11px; color: #8b8e95; }
+.crowd-row input { width: 46px; background: #101216; border: 1px solid #2c313a; color: #d3d4d8; border-radius: 4px; padding: 3px 5px; font-size: 11px; }
+.crowd-row em { font-style: normal; color: #6e7076; }
+.crowd-row button { margin-left: auto; }

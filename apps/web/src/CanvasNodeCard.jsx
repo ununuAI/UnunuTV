@@ -127,6 +127,7 @@ function CanvasNodeCard({ data, selected }) {
           <CinematicWorkspacePanel embedded notify={actions.notify} onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }} onFit={() => actions.fitNode(node.id)} projectId={node.projectId} readOnly={readOnly} selected={node} />
         ) : isInlineExpanded && isDirector ? (
           <DirectorStageWorkspace
+            canvas={canvas}
             canvasId={canvas.id}
             node={node}
             notify={actions.notify}

@@ -14,10 +14,33 @@ import { DirectorStageScene, ViewportOverlay, aspectOf } from "./DirectorStageSc
 import { BODY_TYPE_NAMES, JOINT_GROUPS, POSE_NAMES, POSE_PRESETS } from "./director-pose-presets.js";
 
 const ASPECTS = ["16:9", "9:16", "2.39:1", "4:3", "1:1"];
+const GEOMETRIES = [["box", "立方体"], ["sphere", "球体"], ["cylinder", "圆柱体"], ["torus", "环状体"], ["cone", "圆锥"], ["pyramid", "棱锥"]];
+const AXIS_VIEWS = [["x", 1, "X+"], ["x", -1, "X−"], ["y", 1, "Y+"], ["y", -1, "Y−"], ["z", 1, "Z+"], ["z", -1, "Z−"]];
+const PANORAMA_TYPES = ["scene_panorama_equirectangular", "panorama_equirectangular"];
 const uid = () => crypto.randomUUID().slice(0, 8);
 const DEG = 180 / Math.PI;
 
-export function DirectorStageWorkspace({ node, projectId, canvasId, notify, refresh, onClose, onFit }) {
+/** 连进导演节点的全景图 / world 节点,可当环境球。 */
+function panoramaSources(canvas, directorNode) {
+  if (!canvas?.edges || !directorNode) return [];
+  return canvas.edges
+    .filter((edge) => edge.toNodeId === directorNode.id)
+    .map((edge) => canvas.nodes.find((item) => item.id === edge.fromNodeId))
+    .filter((source) => {
+      if (!source) return false;
+      if (source.kind === "world") return Boolean(source.payload?.currentMediaId || source.payload?.worldMediaId);
+      const type = source.payload?.imageType ?? source.payload?.type;
+      return source.kind === "image" && (PANORAMA_TYPES.includes(type) || /^720°/.test(source.title || ""));
+    })
+    .map((source) => ({
+      id: source.id,
+      label: source.title || "环境",
+      mediaId: source.payload?.currentMediaId || source.payload?.mediaId || source.payload?.worldMediaId
+    }))
+    .filter((item) => item.mediaId);
+}
+
+export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, notify, refresh, onClose, onFit }) {
   const [stage, setStage] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [activeCameraId, setActiveCameraId] = useState(null);
@@ -27,9 +50,25 @@ export function DirectorStageWorkspace({ node, projectId, canvasId, notify, refr
   const [gridSnap, setGridSnap] = useState(0.5);
   const [groundOpacity, setGroundOpacity] = useState(0.85);
   const [busy, setBusy] = useState(false);
+  const [gizmo, setGizmo] = useState("translate");
+  const [axisView, setAxisView] = useState(null);
+  const [panoramaId, setPanoramaId] = useState("");
+  const [panoramaRadius, setPanoramaRadius] = useState(40);
+  const [panoramaYaw, setPanoramaYaw] = useState(0);
+  const [localModels, setLocalModels] = useState({});
+  const [crowd, setCrowd] = useState({ rows: 3, cols: 3, gap: 1.1 });
   const three = useRef(null);
+  const fileRef = useRef(null);
   const stageRef = useRef(null);
   stageRef.current = stage;
+
+  const panoramas = useMemo(() => panoramaSources(canvas, node), [canvas, node]);
+  const panorama = useMemo(() => {
+    const hit = panoramas.find((item) => item.id === panoramaId);
+    return hit
+      ? { url: `/api/projects/${projectId}/media/${hit.mediaId}`, radius: panoramaRadius, yaw: panoramaYaw }
+      : null;
+  }, [panoramaId, panoramaRadius, panoramaYaw, panoramas, projectId]);
 
   /* ── 载入 / 初始化 ─────────────────────────────────────── */
   useEffect(() => {
@@ -65,6 +104,29 @@ export function DirectorStageWorkspace({ node, projectId, canvasId, notify, refr
     }
   }, [node.id, notify, projectId]);
 
+  /** 连发多条命令时必须串行并逐条接住新 revision,否则第二条就撞乐观并发。 */
+  const runMany = useCallback(async (commands) => {
+    let current = stageRef.current;
+    if (!current) return null;
+    setBusy(true);
+    try {
+      for (const { type, payload } of commands) {
+        const result = await api.applyDirectorCommand(projectId, node.id, command({
+          type, expectedRevision: current.revision, payload
+        }));
+        current = result.director.stage;
+      }
+      setStage(current);
+      return current;
+    } catch (error) {
+      notify?.(error);
+      if (current) setStage(current);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, [node.id, notify, projectId]);
+
   const objects = stage?.objects ?? [];
   const cameras = stage?.cameras ?? [];
   const routes = stage?.routes ?? [];
@@ -92,13 +154,71 @@ export function DirectorStageWorkspace({ node, projectId, canvasId, notify, refr
     }
   });
 
-  const addProp = () => run("upsert_object", {
+  const addProp = (geometry = "box") => run("upsert_object", {
     object: {
-      id: `prop-${uid()}`, label: `道具 ${objects.filter((item) => item.type === "prop").length + 1}`,
+      id: `prop-${uid()}`, label: `${GEOMETRIES.find(([key]) => key === geometry)?.[1] ?? "道具"} ${objects.filter((item) => item.type === "prop").length + 1}`,
       type: "prop", position: { x: 1.6, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 },
-      size: { x: 0.8, y: 0.8, z: 0.8 }, color: "#5d6672", visible: true
+      size: { x: 0.8, y: 0.8, z: 0.8 }, color: "#5d6672", visible: true, geometry
     }
   });
+
+  /** 群众阵列:行×列×间距,一次生成一片。 */
+  const addCrowd = () => {
+    const rows = Math.max(1, Math.min(8, Number(crowd.rows) || 1));
+    const cols = Math.max(1, Math.min(8, Number(crowd.cols) || 1));
+    const gap = Number(crowd.gap) || 1.1;
+    const base = objects.filter((item) => item.type === "character").length;
+    const commands = [];
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        commands.push({
+          type: "upsert_object",
+          payload: {
+            object: {
+              id: `crowd-${uid()}`,
+              label: `群众 ${base + commands.length + 1}`,
+              type: "character",
+              position: { x: (col - (cols - 1) / 2) * gap, y: 0, z: -2 - row * gap },
+              rotation: { x: 0, y: 0, z: 0 },
+              size: { x: 0.5, y: 1.75 + (Math.random() - 0.5) * 0.12, z: 0.4 },
+              color: "#8f959f", visible: true, bodyType: "男性素体",
+              pose: POSE_PRESETS.站立
+            }
+          }
+        });
+      }
+    }
+    void runMany(commands);
+  };
+
+  /** 本地模型:会话内有效,不落盘(没有通用二进制上传端点)。 */
+  const importLocalModel = async (file) => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const id = `model-${uid()}`;
+    const saved = await run("upsert_object", {
+      object: {
+        id, label: file.name.replace(/\.[^.]+$/, ""), type: "other",
+        position: { x: -1.8, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 },
+        size: { x: 1, y: 1, z: 1 }, color: "#8f959f", visible: true, localModel: file.name
+      }
+    });
+    if (saved) {
+      setLocalModels((current) => ({ ...current, [id]: url }));
+      setSelectedId(id);
+      notify?.("本地模型已载入当前会话。刷新后需重新导入 —— 目前没有服务端模型上传通道。", false);
+    }
+  };
+
+  /** 场景内拖拽摆位,松手落盘。 */
+  const commitTransform = (id, patch) => {
+    const object = objects.find((item) => item.id === id);
+    if (!object) return;
+    const half = object.type === "character" ? 0 : (object.size?.y ?? 1) / 2;
+    void run("upsert_object", {
+      object: { ...object, position: { ...patch.position, y: Number((patch.position.y - half).toFixed(3)) }, rotation: patch.rotation }
+    });
+  };
 
   const addCamera = () => {
     const id = `cam-${uid()}`;
@@ -232,10 +352,15 @@ export function DirectorStageWorkspace({ node, projectId, canvasId, notify, refr
       <div className="director-stage-viewport">
         <DirectorStageScene
           activeCameraId={activeCamera?.id}
+          axisView={axisView}
+          gizmo={selectedObject ? gizmo : null}
           gridSnap={gridSnap}
           groundOpacity={groundOpacity}
+          localModels={localModels}
           onReady={(state) => { three.current = state; }}
           onSelect={setSelectedId}
+          onTransform={commitTransform}
+          panorama={panorama}
           selectedId={selectedId}
           stage={stage}
           viewMode={viewMode}
@@ -249,6 +374,23 @@ export function DirectorStageWorkspace({ node, projectId, canvasId, notify, refr
           {onClose ? <button onClick={onClose} type="button">收起</button> : null}
         </div>
 
+        {viewMode === "director" ? (
+          <div className="director-axisbar nodrag nopan">
+            {AXIS_VIEWS.map(([axis, sign, label]) => (
+              <button key={label} onClick={() => setAxisView({ axis, sign, nonce: Date.now() })} type="button">{label}</button>
+            ))}
+          </div>
+        ) : null}
+
+        {viewMode === "director" && selectedObject ? (
+          <div className="director-gizmobar nodrag nopan">
+            {[["translate", "移动"], ["rotate", "旋转"], ["scale", "缩放"]].map(([mode, label]) => (
+              <button className={gizmo === mode ? "on" : ""} key={mode} onClick={() => setGizmo(mode)} type="button">{label}</button>
+            ))}
+            <button className={gizmo === null ? "on" : ""} onClick={() => setGizmo(null)} type="button">关闭</button>
+          </div>
+        ) : null}
+
         <div className="director-captures nodrag nopan">
           <button disabled={busy || !activeCamera} onClick={captureCurrent} type="button">当前机位截图</button>
           <button disabled={busy || !activeCamera} onClick={() => captureOrbit(4)} type="button">四方位</button>
@@ -261,9 +403,30 @@ export function DirectorStageWorkspace({ node, projectId, canvasId, notify, refr
           <header>场景对象<small>{objects.length}</small></header>
           <div className="director-add-row">
             <button disabled={busy} onClick={addCharacter} type="button">+ 角色</button>
-            <button disabled={busy} onClick={addProp} type="button">+ 道具</button>
             <button disabled={busy} onClick={addCamera} type="button">+ 机位</button>
             <button disabled={busy} onClick={addRoute} type="button">+ 走位</button>
+            <button disabled={busy} onClick={() => fileRef.current?.click()} type="button">+ 本地模型</button>
+          </div>
+          <div className="director-add-row">
+            {GEOMETRIES.map(([key, label]) => (
+              <button disabled={busy} key={key} onClick={() => addProp(key)} type="button">{label}</button>
+            ))}
+          </div>
+          <input
+            accept=".glb,.gltf"
+            onChange={(event) => { void importLocalModel(event.target.files?.[0]); event.target.value = ""; }}
+            ref={fileRef}
+            style={{ display: "none" }}
+            type="file"
+          />
+          <div className="crowd-row">
+            <span>群众阵列</span>
+            <input min={1} max={8} onChange={(event) => setCrowd({ ...crowd, rows: event.target.value })} type="number" value={crowd.rows} />
+            <em>×</em>
+            <input min={1} max={8} onChange={(event) => setCrowd({ ...crowd, cols: event.target.value })} type="number" value={crowd.cols} />
+            <em>间距</em>
+            <input min={0.4} step={0.1} onChange={(event) => setCrowd({ ...crowd, gap: event.target.value })} type="number" value={crowd.gap} />
+            <button disabled={busy} onClick={addCrowd} type="button">生成</button>
           </div>
           <ul className="director-list">
             {objects.map((object) => (
@@ -393,6 +556,32 @@ export function DirectorStageWorkspace({ node, projectId, canvasId, notify, refr
             </label>
           </section>
         ) : null}
+
+        <section>
+          <header>全景背景<small>{panoramas.length ? `${panoramas.length} 个可用` : "未连接"}</small></header>
+          {panoramas.length ? (
+            <>
+              <label className="field"><span>环境球</span>
+                <select onChange={(event) => setPanoramaId(event.target.value)} value={panoramaId}>
+                  <option value="">不使用</option>
+                  {panoramas.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+              </label>
+              {panoramaId ? (
+                <>
+                  <label className="field"><span>半径 {panoramaRadius}m</span>
+                    <input max={120} min={8} onChange={(event) => setPanoramaRadius(Number(event.target.value))} type="range" value={panoramaRadius} />
+                  </label>
+                  <label className="field"><span>水平旋转 {Math.round(panoramaYaw * DEG)}°</span>
+                    <input max={Math.PI * 2} min={0} onChange={(event) => setPanoramaYaw(Number(event.target.value))} step={0.02} type="range" value={panoramaYaw} />
+                  </label>
+                </>
+              ) : null}
+            </>
+          ) : (
+            <p className="hint">把全景图节点(720° 或 world 资产)连到这个导演节点,就能当环境球。</p>
+          )}
+        </section>
 
         <section>
           <header>视口</header>
