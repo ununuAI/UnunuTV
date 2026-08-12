@@ -8,7 +8,7 @@ import { NODE_ITEM_DEFINITIONS } from "./CanvasMenus.jsx";
 import { CinematicControllerNode } from "./CinematicControllerNode.jsx";
 import { CinematicDomainNode } from "./CinematicDomainNode.jsx";
 import { CinematicWorkspacePanel } from "./CinematicWorkspacePanel.jsx";
-import { DirectorConsolePanel } from "./DirectorConsolePanel.jsx";
+import { DirectorStageFrame, directorPanoramas } from "./DirectorStageFrame.jsx";
 import { EditableNodeTitle } from "./EditableNodeTitle.jsx";
 import { NodePromptCard } from "./NodePromptCard.jsx";
 import { MomoAssetNode, industrialAssetTypeLabel } from "./MomoAssetNode.jsx";
@@ -126,7 +126,18 @@ function CanvasNodeCard({ data, selected }) {
         ) : isInlineExpanded && (isCinematic || isCinematicDomain) ? (
           <CinematicWorkspacePanel embedded notify={actions.notify} onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }} onFit={() => actions.fitNode(node.id)} projectId={node.projectId} readOnly={readOnly} selected={node} />
         ) : isInlineExpanded && isDirector ? (
-          <DirectorConsolePanel canvas={canvas} notify={actions.notify} onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }} onFit={() => actions.fitNode(node.id)} projectId={node.projectId} refresh={actions.refresh} selected={node} />
+          <div className="director-console-node-workspace">
+            <DirectorStageFrame
+              canvasId={canvas.id}
+              node={node}
+              notify={actions.notify}
+              onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }}
+              panoramas={directorPanoramas(canvas, node)}
+              projectId={node.projectId}
+              refresh={actions.refresh}
+            />
+            <button className="director-node-fit nodrag nopan" onClick={() => actions.fitNode(node.id)} type="button">适应当前视野</button>
+          </div>
         ) : isInlineExpanded && isScript ? (
           <CinematicWorkspacePanel embedded notify={actions.notify} onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }} onFit={() => actions.fitNode(node.id)} projectId={node.projectId} readOnly={readOnly} selected={node} />
         ) : isCinematic ? (
