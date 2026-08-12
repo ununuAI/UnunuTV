@@ -11,7 +11,7 @@
 
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Grid, Line, OrbitControls, PerspectiveCamera, TransformControls, useGLTF } from "@react-three/drei";
+import { Grid, Line, OrbitControls, PerspectiveCamera, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { BODY_TYPES, JOINT, readBodyType, readPose } from "./director-pose-presets.js";
@@ -305,99 +305,74 @@ function AxisViewRig({ request }) {
   return null;
 }
 
-/** 变换手柄,支持多选整组拖动。
- *  直接按 name 从场景里查对象,不走"子组件回调上报"那套 —— 父组件的清空 effect
- *  会在子组件上报之后才跑,把刚附上的对象抹掉,手柄就永远不显示。
+/** 地面拖拽:直接抓住角色在地面上拖,选中几个就一起动。
  *
- *  多选时在质心放一个不可见的支点,手柄挂支点上;支点一动,把位移原样加到
- *  每个成员身上,旋转则让成员绕支点转。松手一次性提交全部。 */
-function SelectionGizmo({ selectedIds, mode, snap, onTransform }) {
-  const { scene } = useThree();
-  const [targets, setTargets] = useState([]);
-  const pivot = useRef(null);
-  const start = useRef(null);
+ *  不用 TransformControls —— three r169+ 把它改成了 Controls 子类、手柄要走
+ *  getHelper(),而 drei 10.7.7 还按旧方式处理,在 three r182 下手柄不渲染;
+ *  即便自己接上,细箭头对摆人也不如直接拖顺手。这里用一块隐形地面接管
+ *  指针,把位移原样加到所有选中对象上,松手一次提交。 */
+function GroundDrag({ selectedIds, enabled, snap, onTransform, onSelect }) {
+  const { scene, controls } = useThree();
+  const drag = useRef(null);
 
-  useEffect(() => {
-    const resolve = () => setTargets(selectedIds.map((id) => scene.getObjectByName(id)).filter(Boolean));
-    resolve();
-    const raf = requestAnimationFrame(resolve);
-    return () => cancelAnimationFrame(raf);
-  }, [scene, selectedIds]);
+  const snapTo = (value) => (snap ? Math.round(value / snap) * snap : value);
 
-  // 拖动开始:记录支点与各成员的初始状态
-  const begin = () => {
-    if (!pivot.current || !targets.length) return;
-    const center = new THREE.Vector3();
-    for (const t of targets) center.add(t.position);
-    center.divideScalar(targets.length);
-    pivot.current.position.copy(center);
-    pivot.current.rotation.set(0, 0, 0);
-    start.current = {
-      center: center.clone(),
-      members: targets.map((t) => ({
-        object: t,
-        offset: t.position.clone().sub(center),
-        rotationY: t.rotation.y
-      }))
+  const begin = (event) => {
+    if (!enabled) return;
+    const ids = selectedIds.length ? selectedIds : [];
+    const members = ids.map((id) => scene.getObjectByName(id)).filter(Boolean);
+    if (!members.length) return;
+    event.stopPropagation();
+    if (controls) controls.enabled = false;
+    event.target?.setPointerCapture?.(event.pointerId);
+    drag.current = {
+      origin: event.point.clone(),
+      members: members.map((object) => ({ object, from: object.position.clone() }))
     };
   };
 
-  const apply = () => {
-    const s = start.current;
-    if (!s || !pivot.current) return;
-    const delta = pivot.current.position.clone().sub(s.center);
-    const spin = pivot.current.rotation.y;
-    for (const m of s.members) {
-      const offset = m.offset.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), spin);
-      m.object.position.copy(s.center).add(offset).add(delta);
-      m.object.rotation.y = m.rotationY + spin;
+  const move = (event) => {
+    const state = drag.current;
+    if (!state) return;
+    event.stopPropagation();
+    const delta = event.point.clone().sub(state.origin);
+    for (const m of state.members) {
+      m.object.position.set(
+        snapTo(m.from.x + delta.x),
+        m.from.y,
+        snapTo(m.from.z + delta.z)
+      );
     }
   };
 
-  const commit = () => {
-    const s = start.current;
-    if (!s) return;
-    onTransform?.(s.members.map((m) => ({
+  const finish = (event) => {
+    const state = drag.current;
+    drag.current = null;
+    if (controls) controls.enabled = true;
+    event?.target?.releasePointerCapture?.(event.pointerId);
+    if (!state) return;
+    const moved = state.members.filter((m) => m.object.position.distanceTo(m.from) > 0.001);
+    if (!moved.length) return;
+    onTransform?.(state.members.map((m) => ({
       id: m.object.name,
       position: { x: round(m.object.position.x), y: round(m.object.position.y), z: round(m.object.position.z) },
       rotation: { x: round(m.object.rotation.x), y: round(m.object.rotation.y), z: round(m.object.rotation.z) }
     })));
-    start.current = null;
   };
 
-  if (!targets.length) return null;
-
-  // 单选直接挂对象,行为和以前一致;多选才用支点
-  if (targets.length === 1) {
-    const target = targets[0];
-    return (
-      <TransformControls
-        mode={mode}
-        object={target}
-        onMouseUp={() => onTransform?.([{
-          id: target.name,
-          position: { x: round(target.position.x), y: round(target.position.y), z: round(target.position.z) },
-          rotation: { x: round(target.rotation.x), y: round(target.rotation.y), z: round(target.rotation.z) }
-        }])}
-        translationSnap={snap || null}
-      />
-    );
-  }
-
   return (
-    <>
-      <object3D ref={pivot} />
-      {pivot.current ? (
-        <TransformControls
-          mode={mode === "scale" ? "translate" : mode}
-          object={pivot.current}
-          onMouseDown={begin}
-          onMouseUp={commit}
-          onObjectChange={apply}
-          translationSnap={snap || null}
-        />
-      ) : null}
-    </>
+    <mesh
+      onPointerDown={begin}
+      onPointerMove={move}
+      onPointerUp={finish}
+      onPointerLeave={finish}
+      position={[0, 0, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      visible={false}
+    >
+      <planeGeometry args={[400, 400]} />
+      <meshBasicMaterial />
+    </mesh>
   );
 }
 
@@ -485,8 +460,9 @@ export function DirectorStageScene({
       ))}
 
       {/* 场景内直接拖拽摆位:松手才落盘,拖动期间由 makeDefault 的 OrbitControls 自动让位 */}
-      {!cameraView && gizmo ? (
-        <SelectionGizmo mode={gizmo} onTransform={onTransform} selectedIds={selectedIds} snap={gridSnap} />
+      {!cameraView ? (
+        <GroundDrag enabled={Boolean(gizmo)} onSelect={onSelect} onTransform={onTransform}
+          selectedIds={selectedIds} snap={gridSnap} />
       ) : null}
 
       {!cameraView ? <AxisViewRig request={axisView} /> : null}

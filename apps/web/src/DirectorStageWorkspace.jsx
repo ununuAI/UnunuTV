@@ -131,11 +131,18 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
       const existing = await api.director(projectId, node.id).catch(() => null);
       if (!alive) return;
       if (existing?.director?.stage) { setStage(existing.director.stage); return; }
+      // 开发模式下 effect 会跑两遍,两次都判定"尚无 stage",第二条 initialize
+      // 必然撞 409。失败时重拉一次即可——拿到就是别人刚建好的,不该报错。
       const created = await api.applyDirectorCommand(projectId, node.id, command({
         type: "initialize", expectedRevision: 0,
         payload: { dimensions: { width: 24, height: 8, depth: 24, unit: "m" } }
-      })).catch((error) => { notify?.(error); return null; });
-      if (alive && created) setStage(created.director.stage);
+      })).catch(async () => {
+        const again = await api.director(projectId, node.id).catch(() => null);
+        return again?.director?.stage ? again : null;
+      });
+      if (!alive) return;
+      if (created?.director?.stage) setStage(created.director.stage);
+      else notify?.(new Error("导演台初始化失败,请重新打开这个节点。"));
     })();
     return () => { alive = false; };
   }, [node.id, notify, projectId]);
@@ -383,12 +390,26 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
         });
         const mediaId = media?.mediaId ?? media?.id ?? media?.media?.id;
         if (!mediaId) continue;
+        // 画布图片节点读的是 currentMediaId,不是 mediaId ——
+        // 写错字段的话节点会一直停在「等待图片生成」的空状态。
+        const mediaUrl = `/api/projects/${projectId}/media/${mediaId}`;
         const imageNode = await api.createNode(projectId, canvasId, {
           kind: "image", title: shot.label,
           x: Math.round((node.x ?? 0) + (node.width ?? 560) + 80),
           y: Math.round((node.y ?? 0) + index * 340),
           width: 430, height: 310,
-          payload: { mediaId, mime: "image/png", source: "director_stage_capture", directorNodeId: node.id }
+          payload: {
+            createdBy: "director-stage-camera-export",
+            currentMediaId: mediaId,
+            mediaIds: [mediaId],
+            currentImage: { mediaId, url: mediaUrl },
+            imageArtifacts: {
+              version: "image_artifacts_v1",
+              classification: "control_map",
+              controlMap: { mediaId, url: mediaUrl }
+            },
+            directorNodeId: node.id
+          }
         });
         if (!imageNode?.id) continue;
         await api.connect(projectId, {
@@ -457,7 +478,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
         <DirectorStageScene
           activeCameraId={activeCamera?.id}
           axisView={axisView}
-          gizmo={selectedObject ? gizmo : null}
+          gizmo={selectedIds.length ? gizmo : null}
           gridSnap={gridSnap}
           groundOpacity={groundOpacity}
           localModels={localModels}
