@@ -41,6 +41,10 @@ export const foreignStageOf = (node) => node?.payload?.foreignStage ?? null;
 
 const PANORAMA_TYPES = ["scene_panorama_equirectangular", "panorama_equirectangular"];
 
+/** 机位 id 用可读 slug,便于在分镜验收标准里认出是哪个机位。 */
+const slug = (text) =>
+  String(text).trim().toLowerCase().replace(/[^\w一-鿿]+/g, "-").replace(/^-|-$/g, "") || "camera";
+
 /** 连进导演节点的全景图 / 世界节点 → 导演台的环境球。
  *  形状按对方契约:{ edgeId, sourceNodeId, imageUrl, fileName, projectionMode } */
 export function directorPanoramas(canvas, directorNode) {
@@ -112,9 +116,53 @@ export function DirectorStageFrame({
     }
   }, [notify, projectId]);
 
-  /** 机位截图 → 媒体 → 画布图片节点 → 连回导演节点。 */
+  /** 确保 UnuTV 侧的 stage 文档存在。截图必须记进它,
+   *  否则 bind-shot → cameraTrajectoryPlan → director_stage_blocking 参考图
+   *  这条既有链路接不上,导演台就只是个看图工具。 */
+  const ensureStage = useCallback(async () => {
+    const existing = await api.director(projectId, nodeRef.current.id).catch(() => null);
+    if (existing?.director?.stage) return existing.director.stage;
+    const created = await api.applyDirectorCommand(projectId, nodeRef.current.id, {
+      version: "director_stage_command_v1",
+      commandId: `director-init-${crypto.randomUUID()}`,
+      idempotencyKey: `director-init:${nodeRef.current.id}`,
+      type: "initialize",
+      expectedRevision: 0,
+      actor: { actorType: "owner", actorId: "web-director-stage-frame" },
+      payload: { dimensions: { width: 24, height: 8, depth: 24, unit: "m" } }
+    });
+    return created.director.stage;
+  }, [projectId]);
+
+  /** 尽量从外来场景里取真实机位参数;取不到就用占位值,
+   *  下游真正依赖的是 cameraSnapshot.label 与绑定本身。 */
+  const cameraFromForeign = useCallback((capture, index) => {
+    const foreign = foreignStageOf(nodeRef.current);
+    const label = (capture.fileName || `机位 ${index + 1}`).replace(/\.[^.]+$/, "");
+    const list = Array.isArray(foreign?.cameras) ? foreign.cameras : [];
+    const hit = list.find((item) => item?.name === label || item?.label === label) ?? list[index] ?? null;
+    const vec = (value, fallback) => (
+      Array.isArray(value) && value.length === 3 && value.every(Number.isFinite)
+        ? { x: value[0], y: value[1], z: value[2] }
+        : (value && Number.isFinite(value.x) ? { x: value.x, y: value.y, z: value.z } : fallback)
+    );
+    return {
+      id: `foreign-${slug(label)}`,
+      label,
+      position: vec(hit?.position, { x: 0, y: 1.6, z: 6 }),
+      target: vec(hit?.target ?? hit?.lookAt, { x: 0, y: 1.2, z: 0 }),
+      fov: Number.isFinite(hit?.fov) ? Math.min(179, Math.max(1, hit.fov)) : 40,
+      aspectRatio: typeof hit?.aspectRatio === "string" ? hit.aspectRatio : "16:9",
+      shotIds: []
+    };
+  }, []);
+
+  /** 机位截图 → 媒体 → 画布图片节点 → 连回导演节点 → 记进 stage。 */
   const ingestCaptures = useCallback(async (captures) => {
     const base = nodeRef.current;
+    let stage = await ensureStage().catch((error) => { notify?.(error); return null; });
+    if (!stage) return;
+
     let created = 0;
     for (const [index, capture] of captures.entries()) {
       try {
@@ -125,30 +173,64 @@ export function DirectorStageFrame({
         });
         const mediaId = media?.mediaId ?? media?.id ?? media?.media?.id;
         if (!mediaId) continue;
+
+        const camera = cameraFromForeign(capture, index);
         const imageNode = await api.createNode(projectId, canvasId, {
           kind: "image",
-          title: capture.fileName?.replace(/\.[^.]+$/, "") || `导演台机位 ${index + 1}`,
+          title: camera.label,
           x: Math.round((base.x ?? 0) + (base.width ?? 480) + 80),
           y: Math.round((base.y ?? 0) + index * 340),
           width: 430,
           height: 310,
           payload: { mediaId, mime: "image/png", source: "director_stage_capture", directorNodeId: base.id }
         });
-        if (imageNode?.id) {
-          await api
-            .connect(projectId, { canvasId, fromNodeId: base.id, toNodeId: imageNode.id, role: "director_capture" })
-            .catch(() => {});
-        }
+        if (!imageNode?.id) continue;
+
+        await api
+          .connect(projectId, { canvasId, fromNodeId: base.id, toNodeId: imageNode.id, role: "director-camera-export" })
+          .catch(() => {});
+
+        // 机位先入册,record_capture 才能引用它
+        const withCamera = await api.applyDirectorCommand(projectId, base.id, {
+          version: "director_stage_command_v1",
+          commandId: `director-camera-${crypto.randomUUID()}`,
+          idempotencyKey: `director-camera:${base.id}:${camera.id}:${stage.revision}`,
+          type: "upsert_camera",
+          expectedRevision: stage.revision,
+          actor: { actorType: "owner", actorId: "web-director-stage-frame" },
+          payload: { camera }
+        });
+        stage = withCamera.director.stage;
+
+        const recorded = await api.applyDirectorCommand(projectId, base.id, {
+          version: "director_stage_command_v1",
+          commandId: `director-capture-${crypto.randomUUID()}`,
+          idempotencyKey: `director-capture:${base.id}:${imageNode.id}:${mediaId}`,
+          type: "record_capture",
+          expectedRevision: stage.revision,
+          actor: { actorType: "owner", actorId: "web-director-stage-frame" },
+          payload: {
+            capture: {
+              id: `capture-${crypto.randomUUID()}`,
+              imageNodeId: imageNode.id,
+              mediaId,
+              cameraId: camera.id,
+              stageRevision: stage.revision,
+              capturedAt: new Date().toISOString()
+            }
+          }
+        });
+        stage = recorded.director.stage;
         created += 1;
       } catch (error) {
         notify?.(error);
       }
     }
     if (created) {
-      notify?.(`已把 ${created} 张机位截图放到画布`, false);
+      notify?.(`已把 ${created} 张机位截图放到画布,并记入导演台。到分镜上绑定即可作为空间参考进入生成。`, false);
       await refresh?.();
     }
-  }, [canvasId, notify, projectId, refresh]);
+  }, [cameraFromForeign, canvasId, ensureStage, notify, projectId, refresh]);
 
   useEffect(() => {
     function onMessage(event) {
