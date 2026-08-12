@@ -4580,7 +4580,10 @@ textarea { padding: 10px; resize: vertical; font-family: "SFMono-Regular", Conso
   position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 8;
   display: flex; align-items: center; gap: 6px; padding: 6px 8px; max-width: calc(100% - 28px);
   background: rgba(22,24,29,.94); border: 1px solid #2c313a; border-radius: 11px;
-  backdrop-filter: blur(12px); box-shadow: 0 16px 40px rgba(0,0,0,.45); overflow-x: auto;
+  backdrop-filter: blur(12px); box-shadow: 0 16px 40px rgba(0,0,0,.45);
+  /* 不能用 overflow:auto——CSS 规范下 overflow-x:auto 会把 overflow-y 也变成 auto,
+     向上弹出的下拉会被裁掉,虽然还在 DOM 里但那块区域的命中目标变成了 3D canvas。 */
+  flex-wrap: wrap; justify-content: center;
 }
 .dock-group { display: flex; align-items: center; gap: 3px; flex: 0 0 auto; }
 .dock-group + .dock-group { padding-left: 6px; border-left: 1px solid #2c313a; }
@@ -4591,10 +4594,10 @@ textarea { padding: 10px; resize: vertical; font-family: "SFMono-Regular", Conso
 .director-dock button:hover { background: #1e2127; border-color: #6fb3b8; color: #6fb3b8; }
 .director-dock button.on { background: rgba(27,46,48,.92); border-color: #6fb3b8; color: #6fb3b8; }
 .director-dock button:disabled { opacity: .35; }
-.dock-menu { position: relative; flex: 0 0 auto; }
+.dock-menu { position: relative; flex: 0 0 auto; z-index: 1; }
 .dock-menu-pop {
   position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
-  min-width: 148px; display: grid; gap: 2px; padding: 5px;
+  min-width: 148px; display: grid; gap: 2px; padding: 5px; z-index: 30;
   background: #1a1d22; border: 1px solid #2c313a; border-radius: 8px;
   box-shadow: 0 14px 36px rgba(0,0,0,.5);
 }
