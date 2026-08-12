@@ -21,19 +21,40 @@ test("cinematic controller is project-level and no longer appears as an addable 
   }
 });
 
-test("agent-derived production nodes still render but lose their hand-placement entry", () => {
-  for (const kind of ["script", "storyboard", "shot", "generationUnit", "qa"]) {
+// 无限画布是普通创作画布,和三个 skill 没关系。剧作生产链属于 skill,
+// 数据照常写进同一份库,但完全不在画布上呈现,也没有创建入口。
+test("skill-owned production kinds stay off the canvas entirely", () => {
+  for (const kind of ["script", "batch", "storyboard", "shot", "generationUnit", "qa"]) {
     assert.equal(
       nodeHasCanvasPresentation({ id: kind, kind }),
-      true,
-      `${kind} 已经存在的节点必须照常显示`
+      false,
+      `${kind} 属于 skill,不该出现在画布上`
     );
     assert.equal(
       nodeKindCanBeAddedToCanvas(kind),
       false,
-      `${kind} 由 skill 经 API 落盘,不给手工创建入口`
+      `${kind} 也不该有手工创建入口`
     );
   }
+});
+
+test("canvas keeps the ordinary creative node kinds", () => {
+  for (const kind of ["text", "image", "video", "audio", "grid", "asset", "imageEdit", "compare", "world", "director"]) {
+    assert.equal(nodeHasCanvasPresentation({ id: kind, kind }), true, `${kind} 是普通画布节点`);
+    assert.equal(nodeKindCanBeAddedToCanvas(kind), true, `${kind} 应当可以手工添加`);
+  }
+});
+
+test("edges into skill-owned nodes are dropped so the canvas has no dangling wires", () => {
+  const nodes = [
+    { id: "img", kind: "image" },
+    { id: "shot-1", kind: "shot" }
+  ];
+  const edges = [
+    { id: "visible", fromNodeId: "img", toNodeId: "img" },
+    { id: "into-shot", fromNodeId: "img", toNodeId: "shot-1" }
+  ];
+  assert.deepEqual(filterCanvasPresentationEdges(edges, nodes).map((edge) => edge.id), ["visible"]);
 });
 
 // CanvasMenus.jsx 带 JSX,node --test 加载不了,所以按源码里的分组表比对而不是 import

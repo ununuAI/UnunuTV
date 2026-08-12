@@ -1,9 +1,10 @@
 const PROJECT_LEVEL_ENTRY_KINDS = new Set(["cinematic"]);
 
-// 电影工业链路上的节点由本地 agent 跑 skill 后经 API 落到画布,自带上游血缘。
-// 手工从菜单摆一个空的镜头节点没有剧本与故事板来源,进不了生产链,所以只砍创建入口——
-// 已经存在的这些节点照常显示,nodeHasCanvasPresentation 不看这个集合。
-const AGENT_DERIVED_KINDS = new Set(["script", "storyboard", "shot", "generationUnit", "qa"]);
+// 无限画布是普通创作画布,和三个 skill 没有关系:节点各自独立,拖一张图、
+// 连一条线、跑一次生成,就这样。剧作生产链属于 skill,它在自己那条线上跑,
+// 数据照常写进同一份库,但不该在画布上开出一整套 compile / preflight / 批处理
+// 的驱动界面。所以这些节点在画布上不呈现——数据仍在,skill 仍然读写。
+const SKILL_OWNED_KINDS = new Set(["script", "batch", "storyboard", "shot", "generationUnit", "qa"]);
 
 function isProjectLevelEntry(node) {
   return PROJECT_LEVEL_ENTRY_KINDS.has(node?.kind)
@@ -13,13 +14,14 @@ function isProjectLevelEntry(node) {
 export function nodeHasCanvasPresentation(node) {
   return Boolean(node?.id)
     && !isProjectLevelEntry(node)
+    && !SKILL_OWNED_KINDS.has(node?.kind)
     && node?.payload?.productionPlanState !== "superseded";
 }
 
 export function nodeKindCanBeAddedToCanvas(kind) {
   return typeof kind === "string"
     && !PROJECT_LEVEL_ENTRY_KINDS.has(kind)
-    && !AGENT_DERIVED_KINDS.has(kind);
+    && !SKILL_OWNED_KINDS.has(kind);
 }
 
 export function filterCanvasPresentationEdges(edges = [], nodes = []) {

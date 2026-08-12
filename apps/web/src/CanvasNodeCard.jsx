@@ -3,12 +3,9 @@
 import { memo, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { NodeResizeControl } from "@xyflow/react";
-import { Boxes, Check, ChevronDown, Clapperboard, Drama, FileText, Grid2X2Plus, Image as ImageIcon, LoaderCircle, Sparkles, Trash2 } from "lucide-react";
+import { Boxes, Check, ChevronDown, Drama, FileText, Grid2X2Plus, Image as ImageIcon, LoaderCircle, Trash2 } from "lucide-react";
 import { CanvasConnectionHandle } from "./CanvasConnectionHandle.jsx";
 import { NODE_ITEM_DEFINITIONS } from "./CanvasMenus.jsx";
-import { CinematicControllerNode } from "./CinematicControllerNode.jsx";
-import { CinematicDomainNode } from "./CinematicDomainNode.jsx";
-import { CinematicWorkspacePanel } from "./CinematicWorkspacePanel.jsx";
 import { DirectorFullscreen } from "./DirectorStageWorkspace.jsx";
 import { EditableNodeTitle } from "./EditableNodeTitle.jsx";
 import { NodePromptCard } from "./NodePromptCard.jsx";
@@ -53,10 +50,7 @@ function CanvasNodeCard({ data, selected }) {
   const isImage = ["image", "subject", "upload", "material", "historyPick"].includes(node.kind);
   const isVideo = ["video", "videoShot", "compose", "video-clip"].includes(node.kind);
   const isText = node.kind === "text" || node.kind === "story";
-  const isScript = node.kind === "script" || node.kind === "batch";
   const isDirector = node.kind === "director";
-  const isCinematic = node.kind === "cinematic";
-  const isCinematicDomain = ["storyboard", "shot", "generationUnit", "qa"].includes(node.kind);
   const isInlineExpanded = canvasNodeIsExpanded(node);
   const density = nodePresentationDensity(zoomPercent);
   const definition = NODE_ITEM_DEFINITIONS.find((item) => item.kind === node.kind);
@@ -120,15 +114,15 @@ function CanvasNodeCard({ data, selected }) {
     : null;
 
   return (
-    <div className={`node-wrap density-${density}${selected ? " selected" : ""}${isGenerating ? " is-generating" : ""}${isScript ? " script-node-wrap" : ""}${isCinematic ? " cinematic-node-wrap" : ""}${isInlineExpanded ? " is-expanded" : ""}${isVideo ? " video-node-wrap" : ""}${isAudio ? " audio-node-wrap" : ""}`}>
+    <div className={`node-wrap density-${density}${selected ? " selected" : ""}${isGenerating ? " is-generating" : ""}${isInlineExpanded ? " is-expanded" : ""}${isVideo ? " video-node-wrap" : ""}${isAudio ? " audio-node-wrap" : ""}`}>
       {directorOverlay}
       {selected && !hasMultiSelection && !readOnly && isImage && mediaUrl && !isPanorama ? <div className="image-derivation-toolbar nodrag nopan">
         <button onClick={(event) => { stop(event); void actions.deriveImage(node, "scene_panorama_equirectangular", "720°完整环境全景"); }} type="button">720° 全景</button>
         <details><summary><Grid2X2Plus size={14} /><span>专业版式</span><ChevronDown size={12} /></summary><div className="image-derivation-menu nowheel">{IMAGE_DERIVATION_TYPES.map(([type, label]) => <button key={type} onClick={(event) => { stop(event); void actions.deriveImage(node, type, label); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">{label}</button>)}</div></details>
         <button aria-label="删除节点" onClick={(event) => { stop(event); void actions.deleteOne(node.id); }} title="删除节点" type="button"><Trash2 size={14} /></button>
       </div> : null}
-      <div className={`node-caption${isImage && mediaUrl ? " image-result-caption" : ""}${isText || isScript ? " text-node-caption" : ""}`}>
-        <EditableNodeTitle editing={!readOnly && editingTitleId === node.id} icon={isText ? <FileText size={12} /> : isScript ? <Sparkles size={12} /> : isCinematic ? <Clapperboard size={12} /> : isAsset || isVideo ? <NodeIcon size={12} /> : null} onBegin={() => { if (!readOnly) actions.editTitle(node.id); }} onCancel={actions.cancelTitle} onSave={(value) => actions.saveTitle(node, value)} title={title} />
+      <div className={`node-caption${isImage && mediaUrl ? " image-result-caption" : ""}${isText ? " text-node-caption" : ""}`}>
+        <EditableNodeTitle editing={!readOnly && editingTitleId === node.id} icon={isText ? <FileText size={12} /> : isAsset || isVideo ? <NodeIcon size={12} /> : null} onBegin={() => { if (!readOnly) actions.editTitle(node.id); }} onCancel={actions.cancelTitle} onSave={(value) => actions.saveTitle(node, value)} title={title} />
         {isGenerating ? <span aria-label="节点生成中" className="node-caption-generation"><LoaderCircle aria-hidden="true" size={12} /><b>生成中</b></span> : null}
       </div>
       {enableInvisibleResize ? INVISIBLE_NODE_RESIZE_HANDLES.map(({ cursor, position }) => (
@@ -138,14 +132,6 @@ function CanvasNodeCard({ data, selected }) {
         {!isGrid ? <CanvasConnectionHandle id="target" label={`输入：${presentation.inputLabel}`} readOnly={readOnly} side="input" zoomPercent={zoomPercent} /> : null}
         {isInlineExpanded && isImageEdit ? (
           <ImageEditCanvasWorkspace actions={actions} connectedNodes={connectedNodes} node={node} readOnly={readOnly} />
-        ) : isInlineExpanded && (isCinematic || isCinematicDomain) ? (
-          <CinematicWorkspacePanel embedded notify={actions.notify} onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }} onFit={() => actions.fitNode(node.id)} projectId={node.projectId} readOnly={readOnly} selected={node} />
-        ) : isInlineExpanded && isScript ? (
-          <CinematicWorkspacePanel embedded notify={actions.notify} onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }} onFit={() => actions.fitNode(node.id)} projectId={node.projectId} readOnly={readOnly} selected={node} />
-        ) : isCinematic ? (
-          <CinematicControllerNode node={node} onOpen={() => actions.openWorkspace(node.id)} />
-        ) : isCinematicDomain ? (
-          <CinematicDomainNode node={node} onOpen={() => actions.openWorkspace(node.id)} />
         ) : isImageEdit ? (
           <MomoImageEditNode actions={actions} mediaUrl={mediaUrl} node={node} readOnly={readOnly} selected={selected && !hasMultiSelection} />
         ) : isImage && mediaUrl ? (
@@ -172,7 +158,7 @@ function CanvasNodeCard({ data, selected }) {
           <>
             <div className="node-topline"><strong>{presentation.typeLabel}</strong><span className={`node-status status-${status}`}>{status === "ready" || status === "succeeded" ? "可用" : status === "running" ? "生成中" : status === "failed" ? "失败" : status === "readonly" ? "只读" : "待输入"}</span></div>
             <div className={`canvas-node-preview preview-${node.kind}`}>
-              {isScript ? <><Sparkles size={22} /><strong>{presentation.typeLabel}</strong><p>{shortSummary || presentation.description}</p></> : isDirector ? <><Drama size={27} /><strong>{presentation.typeLabel}</strong><p>{shortSummary || presentation.description}</p></> : <><NodeIcon size={24} /><strong>{presentation.typeLabel}</strong><p>{shortSummary || presentation.description}</p></>}
+              {isDirector ? <><Drama size={27} /><strong>{presentation.typeLabel}</strong><p>{shortSummary || presentation.description}</p></> : <><NodeIcon size={24} /><strong>{presentation.typeLabel}</strong><p>{shortSummary || presentation.description}</p></>}
             </div>
             <div className="node-footer"><span>{node.payload?.currentMediaId ? "本地媒体" : "本地节点"}</span><small>r{node.revision}</small></div>
           </>
