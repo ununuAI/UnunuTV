@@ -98,7 +98,15 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
   const three = useRef(null);
   const fileRef = useRef(null);
   const stageRef = useRef(null);
-  stageRef.current = stage;
+  // 只在 revision 更新时同步,避免覆盖命令队列刚推进的值
+  if (!stageRef.current || (stage && Number(stage.revision) >= Number(stageRef.current.revision))) {
+    stageRef.current = stage ?? stageRef.current;
+  }
+
+  /** 滑杆一类连续输入先写这里,3D 立刻跟手,松手才发一条命令。 */
+  const [draft, setDraft] = useState(null);   // { id, patch }
+  const draftRef = useRef(null);
+  draftRef.current = draft;
 
   const panoramas = useMemo(() => panoramaSources(canvas, node), [canvas, node]);
   const panorama = useMemo(() => {
@@ -124,22 +132,31 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
     return () => { alive = false; };
   }, [node.id, notify, projectId]);
 
-  const run = useCallback(async (type, payload) => {
-    const current = stageRef.current;
-    if (!current) return null;
-    setBusy(true);
-    try {
-      const result = await api.applyDirectorCommand(projectId, node.id, command({
-        type, expectedRevision: current.revision, payload
-      }));
-      setStage(result.director.stage);
-      return result.director.stage;
-    } catch (error) {
-      notify?.(error);
-      return null;
-    } finally {
-      setBusy(false);
-    }
+  /** 命令必须串行。滑杆一类连续输入会在极短时间里连发多条,
+   *  若各自拿同一个 expectedRevision,第二条起就会被乐观并发拒掉——
+   *  表现就是"拖了没反应"。这里排成一条队,每条都用上一条返回的最新 revision。 */
+  const chainRef = useRef(Promise.resolve());
+  const run = useCallback((type, payload) => {
+    const task = chainRef.current.then(async () => {
+      const current = stageRef.current;
+      if (!current) return null;
+      setBusy(true);
+      try {
+        const result = await api.applyDirectorCommand(projectId, node.id, command({
+          type, expectedRevision: current.revision, payload
+        }));
+        stageRef.current = result.director.stage;   // 同步推进,下一条立刻可用
+        setStage(result.director.stage);
+        return result.director.stage;
+      } catch (error) {
+        notify?.(error);
+        return null;
+      } finally {
+        setBusy(false);
+      }
+    });
+    chainRef.current = task.catch(() => {});
+    return task;
   }, [node.id, notify, projectId]);
 
   /** 连发多条命令时必须串行并逐条接住新 revision,否则第二条就撞乐观并发。 */
@@ -153,6 +170,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
           type, expectedRevision: current.revision, payload
         }));
         current = result.director.stage;
+        stageRef.current = current;
       }
       setStage(current);
       return current;
@@ -165,9 +183,16 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
     }
   }, [node.id, notify, projectId]);
 
-  const objects = stage?.objects ?? [];
-  const cameras = stage?.cameras ?? [];
-  const routes = stage?.routes ?? [];
+  /** 把未落盘的草稿叠在 stage 上,3D 场景读的是这份。 */
+  const liveStage = useMemo(() => {
+    if (!stage || !draft) return stage;
+    const apply = (list) => list.map((item) => (item.id === draft.id ? { ...item, ...draft.patch } : item));
+    return { ...stage, objects: apply(stage.objects ?? []), cameras: apply(stage.cameras ?? []) };
+  }, [draft, stage]);
+
+  const objects = liveStage?.objects ?? [];
+  const cameras = liveStage?.cameras ?? [];
+  const routes = liveStage?.routes ?? [];
   const selectedObject = objects.find((item) => item.id === selectedId) ?? null;
   const selectedRoute = routes.find((item) => item.id === selectedId) ?? null;
   const activeCamera = cameras.find((item) => item.id === activeCameraId) ?? cameras[0] ?? null;
@@ -177,7 +202,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
   }, [activeCameraId, cameras]);
 
   /* ── 增删 ──────────────────────────────────────────────── */
-  const addCharacter = () => run("upsert_object", {
+  const addCharacter = (bodyType = "男性素体") => run("upsert_object", {
     object: {
       id: `actor-${uid()}`,
       label: `角色 ${objects.filter((item) => item.type === "character").length + 1}`,
@@ -187,7 +212,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
       size: { x: 0.5, y: 1.8, z: 0.4 },
       color: "#c9ced8",
       visible: true,
-      bodyType: "男性素体",
+      bodyType,
       pose: POSE_PRESETS.站立
     }
   });
@@ -288,6 +313,20 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
 
   const patchObject = (patch) => selectedObject && run("upsert_object", { object: { ...selectedObject, ...patch } });
   const patchCamera = (patch) => activeCamera && run("upsert_camera", { camera: { ...activeCamera, ...patch } });
+
+  /** 连续输入:拖动期间只更新草稿,松手提交一次。 */
+  const nudge = (id, patch) => setDraft((current) => ({
+    id, patch: { ...(current?.id === id ? current.patch : {}), ...patch }
+  }));
+  const commitDraft = () => {
+    const pending = draftRef.current;
+    setDraft(null);
+    if (!pending) return;
+    const object = (stageRef.current?.objects ?? []).find((item) => item.id === pending.id);
+    if (object) { void run("upsert_object", { object: { ...object, ...pending.patch } }); return; }
+    const camera = (stageRef.current?.cameras ?? []).find((item) => item.id === pending.id);
+    if (camera) void run("upsert_camera", { camera: { ...camera, ...pending.patch } });
+  };
 
   /* ── 截图 ──────────────────────────────────────────────── */
   const renderFrom = useCallback((position, target, fov, aspect) => {
@@ -400,7 +439,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
           onTransform={commitTransform}
           panorama={panorama}
           selectedId={selectedId}
-          stage={stage}
+          stage={liveStage}
           viewMode={viewMode}
         />
         {viewMode === "camera" ? <ViewportOverlay aspect={overlayAspect} showMask={showMask} showThirds={showThirds} /> : null}
@@ -420,36 +459,65 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
           </div>
         ) : null}
 
-        {viewMode === "director" && selectedObject ? (
-          <div className="director-gizmobar nodrag nopan">
+
+        {/* 底部工具坞:高频动作放这里,右侧面板只留属性 */}
+        <div className="director-dock nodrag nopan nowheel">
+          <DockGroup>
             {[["translate", "移动"], ["rotate", "旋转"], ["scale", "缩放"]].map(([mode, label]) => (
               <button className={gizmo === mode ? "on" : ""} key={mode} onClick={() => setGizmo(mode)} type="button">{label}</button>
             ))}
-            <button className={gizmo === null ? "on" : ""} onClick={() => setGizmo(null)} type="button">关闭</button>
-          </div>
-        ) : null}
+          </DockGroup>
 
-        <div className="director-captures nodrag nopan">
-          <button disabled={busy || !activeCamera} onClick={captureCurrent} type="button">当前机位截图</button>
-          <button disabled={busy || !activeCamera} onClick={() => captureOrbit(4)} type="button">四方位</button>
-          <button disabled={busy || !activeCamera} onClick={() => captureOrbit(12)} type="button">十二方位</button>
+          <DockGroup>
+            <DockMenu disabled={busy} label="+ 角色">
+              {BODY_TYPE_NAMES.map((name) => (
+                <button key={name} onClick={() => addCharacter(name)} type="button">{name}</button>
+              ))}
+            </DockMenu>
+            <DockMenu disabled={busy} label="+ 群众">
+              <div className="dock-form">
+                <label>行<input max={8} min={1} onChange={(event) => setCrowd({ ...crowd, rows: event.target.value })} type="number" value={crowd.rows} /></label>
+                <label>列<input max={8} min={1} onChange={(event) => setCrowd({ ...crowd, cols: event.target.value })} type="number" value={crowd.cols} /></label>
+                <label>间距<input min={0.4} onChange={(event) => setCrowd({ ...crowd, gap: event.target.value })} step={0.1} type="number" value={crowd.gap} /></label>
+                <button className="primary" onClick={addCrowd} type="button">生成阵列</button>
+              </div>
+            </DockMenu>
+            <DockMenu disabled={busy} label="+ 模型">
+              {GEOMETRIES.map(([key, label]) => (
+                <button key={key} onClick={() => addProp(key)} type="button">{label}</button>
+              ))}
+              <hr />
+              <button onClick={() => fileRef.current?.click()} type="button">本地导入 .glb …</button>
+            </DockMenu>
+            <button disabled={busy} onClick={addCamera} type="button">+ 机位</button>
+            <button disabled={busy} onClick={addRoute} type="button">+ 走位</button>
+          </DockGroup>
+
+          <DockGroup>
+            <DockMenu disabled={!activeCamera} label={`画幅 ${activeCamera?.aspectRatio || "16:9"}`}>
+              {ASPECTS.map((ratio) => (
+                <button key={ratio} onClick={() => patchCamera({ aspectRatio: ratio })} type="button">{ratio}</button>
+              ))}
+            </DockMenu>
+            <DockMenu disabled={!panoramas.length} label="全景背景">
+              <button onClick={() => setPanoramaId("")} type="button">不使用</button>
+              {panoramas.map((item) => (
+                <button key={item.id} onClick={() => setPanoramaId(item.id)} type="button">{item.label}</button>
+              ))}
+            </DockMenu>
+          </DockGroup>
+
+          <DockGroup>
+            <button disabled={busy || !activeCamera} onClick={captureCurrent} type="button">当前机位截图</button>
+            <button disabled={busy || !activeCamera} onClick={() => captureOrbit(4)} type="button">四方位</button>
+            <button disabled={busy || !activeCamera} onClick={() => captureOrbit(12)} type="button">十二方位</button>
+          </DockGroup>
         </div>
       </div>
 
       <aside className="director-stage-panel nodrag nopan nowheel">
         <section>
           <header>场景对象<small>{objects.length}</small></header>
-          <div className="director-add-row">
-            <button disabled={busy} onClick={addCharacter} type="button">+ 角色</button>
-            <button disabled={busy} onClick={addCamera} type="button">+ 机位</button>
-            <button disabled={busy} onClick={addRoute} type="button">+ 走位</button>
-            <button disabled={busy} onClick={() => fileRef.current?.click()} type="button">+ 本地模型</button>
-          </div>
-          <div className="director-add-row">
-            {GEOMETRIES.map(([key, label]) => (
-              <button disabled={busy} key={key} onClick={() => addProp(key)} type="button">{label}</button>
-            ))}
-          </div>
           <input
             accept=".glb,.gltf"
             onChange={(event) => { void importLocalModel(event.target.files?.[0]); event.target.value = ""; }}
@@ -457,15 +525,6 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
             style={{ display: "none" }}
             type="file"
           />
-          <div className="crowd-row">
-            <span>群众阵列</span>
-            <input min={1} max={8} onChange={(event) => setCrowd({ ...crowd, rows: event.target.value })} type="number" value={crowd.rows} />
-            <em>×</em>
-            <input min={1} max={8} onChange={(event) => setCrowd({ ...crowd, cols: event.target.value })} type="number" value={crowd.cols} />
-            <em>间距</em>
-            <input min={0.4} step={0.1} onChange={(event) => setCrowd({ ...crowd, gap: event.target.value })} type="number" value={crowd.gap} />
-            <button disabled={busy} onClick={addCrowd} type="button">生成</button>
-          </div>
           <ul className="director-list">
             {objects.map((object) => (
               <li key={object.id}>
@@ -513,12 +572,12 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
                           label={label}
                           onChange={(axis, value) => {
                             const pose = { ...(selectedObject.pose ?? {}) };
-                            const current = pose[key] ?? [0, 0, 0];
-                            const next = [...current];
+                            const next = [...(pose[key] ?? [0, 0, 0])];
                             next[axis] = value / DEG;
                             pose[key] = next;
-                            patchObject({ pose });
+                            nudge(selectedObject.id, { pose });
                           }}
+                          onCommit={commitDraft}
                           value={selectedObject.pose?.[key] ?? [0, 0, 0]}
                         />
                       ))}
@@ -585,7 +644,8 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
             <VectorRow label="机位" onChange={(value) => patchCamera({ position: value })} step={0.25} value={activeCamera.position} />
             <VectorRow label="注视" onChange={(value) => patchCamera({ target: value })} step={0.25} value={activeCamera.target} />
             <label className="field"><span>FOV {Math.round(activeCamera.fov || 40)}°</span>
-              <input max={110} min={12} onChange={(event) => patchCamera({ fov: Number(event.target.value) })} type="range" value={activeCamera.fov || 40} />
+              <input max={110} min={12} onChange={(event) => nudge(activeCamera.id, { fov: Number(event.target.value) })}
+                onPointerUp={commitDraft} onKeyUp={commitDraft} type="range" value={activeCamera.fov || 40} />
             </label>
             <label className="field"><span>画幅</span>
               <select onChange={(event) => patchCamera({ aspectRatio: event.target.value })} value={activeCamera.aspectRatio || "16:9"}>
@@ -639,6 +699,28 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
   );
 }
 
+function DockGroup({ children }) {
+  return <div className="dock-group">{children}</div>;
+}
+
+/** 坞上的下拉:点开一层浮层,避免把所有按钮平铺成一长条。 */
+function DockMenu({ label, disabled, children }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = () => setOpen(false);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [open]);
+  return (
+    <span className="dock-menu">
+      <button className={open ? "on" : ""} disabled={disabled}
+        onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }} type="button">{label}</button>
+      {open ? <div className="dock-menu-pop" onClick={(event) => event.stopPropagation()}>{children}</div> : null}
+    </span>
+  );
+}
+
 function VectorRow({ label, value, onChange, step = 0.25, deg = false }) {
   const scale = deg ? DEG : 1;
   const read = (axis) => Number(((value?.[axis] ?? 0) * scale).toFixed(2));
@@ -657,7 +739,7 @@ function VectorRow({ label, value, onChange, step = 0.25, deg = false }) {
   );
 }
 
-function JointRow({ label, value, onChange }) {
+function JointRow({ label, value, onChange, onCommit }) {
   return (
     <div className="joint-row">
       <span>{label}</span>
@@ -667,6 +749,8 @@ function JointRow({ label, value, onChange }) {
           max={170}
           min={-170}
           onChange={(event) => onChange(axis, Number(event.target.value))}
+          onKeyUp={onCommit}
+          onPointerUp={onCommit}
           type="range"
           value={Math.round((value[axis] ?? 0) * DEG)}
         />

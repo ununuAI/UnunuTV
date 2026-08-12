@@ -30,7 +30,7 @@ export function aspectOf(ratio) {
 }
 
 /** 一个演员。GLB 只加载一次,每个实例克隆骨架后各自摆姿势。 */
-function Mannequin({ object, selected, onSelect, onAttach }) {
+function Mannequin({ object, selected, onSelect }) {
   const { scene } = useGLTF(MODEL_URL);
   const group = useRef(null);
 
@@ -77,7 +77,6 @@ function Mannequin({ object, selected, onSelect, onAttach }) {
     });
   }, [instance, object.color, selected]);
 
-  useEffect(() => { if (selected) onAttach?.(group.current); }, [onAttach, selected]);
 
   const position = v3(object.position);
   const rotation = v3(object.rotation);
@@ -131,9 +130,8 @@ function Billboard({ label }) {
 }
 
 /** 几何体道具。object.geometry 决定形状,缺省是盒子。 */
-function StageGeometry({ object, selected, onSelect, onAttach }) {
+function StageGeometry({ object, selected, onSelect }) {
   const group = useRef(null);
-  useEffect(() => { if (selected) onAttach?.(group.current); }, [onAttach, selected]);
   const position = v3(object.position);
   const rotation = v3(object.rotation);
   const size = v3(object.size, 1);
@@ -171,10 +169,9 @@ function StageGeometry({ object, selected, onSelect, onAttach }) {
 }
 
 /** 会话内导入的本地 GLB。不落盘,刷新即失效。 */
-function LocalModel({ object, url, selected, onSelect, onAttach }) {
+function LocalModel({ object, url, selected, onSelect }) {
   const { scene } = useGLTF(url);
   const group = useRef(null);
-  useEffect(() => { if (selected) onAttach?.(group.current); }, [onAttach, selected]);
   const clone = useMemo(() => scene.clone(true), [scene]);
   const position = v3(object.position);
   const rotation = v3(object.rotation);
@@ -302,6 +299,36 @@ function AxisViewRig({ request }) {
   return null;
 }
 
+/** 选中对象的变换手柄。
+ *  直接按 name 从场景里查对象,不走"子组件回调上报"那套 —— 父组件的清空 effect
+ *  会在子组件上报之后才跑,把刚附上的对象抹掉,手柄就永远不显示。 */
+function SelectionGizmo({ selectedId, mode, snap, onTransform }) {
+  const { scene } = useThree();
+  const [target, setTarget] = useState(null);
+
+  useEffect(() => {
+    if (!selectedId) { setTarget(null); return undefined; }
+    // 对象可能在同一帧刚挂载,下一帧再找一次
+    const found = scene.getObjectByName(selectedId);
+    if (found) { setTarget(found); return undefined; }
+    const raf = requestAnimationFrame(() => setTarget(scene.getObjectByName(selectedId) ?? null));
+    return () => cancelAnimationFrame(raf);
+  }, [scene, selectedId]);
+
+  if (!target) return null;
+  return (
+    <TransformControls
+      mode={mode}
+      object={target}
+      onMouseUp={() => onTransform?.(selectedId, {
+        position: { x: round(target.position.x), y: round(target.position.y), z: round(target.position.z) },
+        rotation: { x: round(target.rotation.x), y: round(target.rotation.y), z: round(target.rotation.z) }
+      })}
+      translationSnap={snap || null}
+    />
+  );
+}
+
 export function ViewportOverlay({ aspect, showThirds, showMask }) {
   if (!showThirds && !showMask) return null;
   return (
@@ -341,9 +368,6 @@ export function DirectorStageScene({
   const cameras = stage?.cameras ?? [];
   const activeCamera = cameras.find((item) => item.id === activeCameraId) ?? cameras[0] ?? null;
   const cameraView = viewMode === "camera" && activeCamera;
-  const [attached, setAttached] = useState(null);
-
-  useEffect(() => { setAttached(null); }, [selectedId]);
 
   return (
     <Canvas gl={{ preserveDrawingBuffer: true, antialias: true }} onCreated={(state) => onReady?.(state)} shadows>
@@ -371,7 +395,7 @@ export function DirectorStageScene({
 
       <Suspense fallback={null}>
         {objects.map((object) => {
-          const shared = { key: object.id, object, onSelect, selected: object.id === selectedId, onAttach: setAttached };
+          const shared = { key: object.id, object, onSelect, selected: object.id === selectedId };
           if (object.type === "character") return <Mannequin {...shared} />;
           const localUrl = localModels?.[object.id];
           if (localUrl) return <LocalModel {...shared} url={localUrl} />;
@@ -387,17 +411,9 @@ export function DirectorStageScene({
         <CameraMarker active={camera.id === activeCameraId} camera={camera} key={camera.id} onSelect={onSelect} />
       ))}
 
-      {/* 场景内直接拖拽摆位:松手才落盘,拖动期间锁住轨道控制 */}
-      {!cameraView && gizmo && attached ? (
-        <TransformControls
-          mode={gizmo}
-          object={attached}
-          onMouseUp={() => onTransform?.(selectedId, {
-            position: { x: round(attached.position.x), y: round(attached.position.y), z: round(attached.position.z) },
-            rotation: { x: round(attached.rotation.x), y: round(attached.rotation.y), z: round(attached.rotation.z) }
-          })}
-          translationSnap={gridSnap || null}
-        />
+      {/* 场景内直接拖拽摆位:松手才落盘,拖动期间由 makeDefault 的 OrbitControls 自动让位 */}
+      {!cameraView && gizmo ? (
+        <SelectionGizmo mode={gizmo} onTransform={onTransform} selectedId={selectedId} snap={gridSnap} />
       ) : null}
 
       {!cameraView ? <AxisViewRig request={axisView} /> : null}
