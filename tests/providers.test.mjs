@@ -448,3 +448,79 @@ test("OpenSpeech Seed Audio adapter uses its independent X-Api-Key", async (cont
   assert.equal(submitted.headers["x-api-key"], "openspeech-test-key");
   assert.equal(submitted.payload.references[0].speaker, "speaker-test");
 });
+
+test("text node prompt generates body copy through chat/completions and writes it back into the node", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-text-"));
+  let submitted;
+  const fetchImpl = async (url, options = {}) => {
+    submitted = { url, headers: options.headers, payload: JSON.parse(options.body) };
+    return Response.json({
+      id: "cmpl-1",
+      model: "openai/gpt-5.6-sol",
+      choices: [{ message: { role: "assistant", content: "雨夜的校门口，路灯把水洼照成一片碎金。" } }],
+      usage: { total_tokens: 42 }
+    });
+  };
+  const runtime = createLocalRuntime({ dataRoot, env: { UNUNU_GATE_API_KEY: "text-test-key" }, fetchImpl });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const node = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "text", payload: {} });
+
+  const completed = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: node.id,
+    request: { prompt: "写一段雨夜校门口的环境描写" }
+  });
+
+  assert.equal(completed.status, "succeeded");
+  assert.equal(submitted.url, "https://api.ununu.ai/v1/chat/completions");
+  assert.equal(submitted.headers.authorization, "Bearer text-test-key");
+  assert.equal(submitted.payload.model, "openai/gpt-5.6-sol");
+  assert.deepEqual(submitted.payload.messages, [{ role: "user", content: "写一段雨夜校门口的环境描写" }]);
+  // 文本产物不是媒体,不该被当成 artifact 落盘
+  assert.deepEqual(completed.result.artifacts, []);
+  const saved = (await runtime.app.openCanvas({ projectId: project.id, canvasId: canvas.id }))
+    .nodes.find((candidate) => candidate.id === node.id);
+  assert.equal(saved.payload.text, "雨夜的校门口，路灯把水洼照成一片碎金。");
+});
+
+test("text generation carries the node's existing body as context so rewrite instructions have something to work on", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-text-ctx-"));
+  let submitted;
+  const fetchImpl = async (url, options = {}) => {
+    submitted = { url, payload: JSON.parse(options.body) };
+    return Response.json({ choices: [{ message: { content: "改写后的段落。" } }] });
+  };
+  const runtime = createLocalRuntime({ dataRoot, env: { UNUNU_GATE_API_KEY: "text-test-key" }, fetchImpl });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const node = await runtime.app.createNode({
+    projectId: project.id, canvasId: canvas.id, kind: "text", payload: { text: "原始的第一段。" }
+  });
+
+  await runtime.app.runNode({ projectId: project.id, nodeId: node.id, request: { prompt: "把它改得更冷峻" } });
+
+  assert.deepEqual(submitted.payload.messages, [
+    { role: "user", content: "当前正文：\n原始的第一段。" },
+    { role: "user", content: "把它改得更冷峻" }
+  ]);
+  const saved = (await runtime.app.openCanvas({ projectId: project.id, canvasId: canvas.id }))
+    .nodes.find((candidate) => candidate.id === node.id);
+  assert.equal(saved.payload.text, "改写后的段落。");
+});
+
+test("a text node with an empty prompt fails before any paid provider call", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-text-empty-"));
+  let called = false;
+  const fetchImpl = async () => { called = true; return Response.json({}); };
+  const runtime = createLocalRuntime({ dataRoot, env: { UNUNU_GATE_API_KEY: "text-test-key" }, fetchImpl });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const node = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "text", payload: {} });
+
+  const completed = await runtime.app.runNode({ projectId: project.id, nodeId: node.id, request: { prompt: "   " } });
+
+  assert.equal(called, false, "空 Prompt 不该发出付费请求");
+  assert.equal(completed.status, "blocked");
+  assert.equal(completed.result.code, "text_prompt_required");
+});

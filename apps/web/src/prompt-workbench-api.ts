@@ -1,3 +1,7 @@
+// 网关默认模型。文本原本走 GPT-5.6,画布上写死成 DeepSeek 是历史遗留。
+export const DEFAULT_TEXT_MODEL_ID = "openai/gpt-5.6-sol";
+export const DEFAULT_IMAGE_MODEL_ID = "openai/gpt-image-2";
+
 export interface WorkbenchModelParameterControl {
   defaultValue: string | number | boolean;
   key: string;
@@ -47,9 +51,29 @@ export async function listWorkbenchModels(capability: "text" | "image" | "video"
   const settings = response.ok ? await response.json() : {};
   const ununuConfigured = Boolean(settings?.providers?.ununu?.configured);
   const openrouterConfigured = Boolean(settings?.providers?.openrouter?.configured);
-  const ununuModel = capability === "image"
-    ? { capability, enabled: true, id: "openai/gpt-image-2", label: "GPT Image 2", parameterControls: imageControls, protocol: "local", providerId: "ununu", providerLabel: "Ununu", routeId: "ununu-image" }
-    : { capability, enabled: true, id: "deepseek/deepseek-v4-pro", label: "DeepSeek V4 Pro", parameterControls: [], protocol: "local", providerId: "ununu", providerLabel: "Ununu", routeId: "ununu-text" };
+  // 模型目录读网关真实列表;网关不可达时退回内置默认值,选择器不至于空掉
+  const gateway = await fetch(`/api/settings/models?capability=${capability}`)
+    .then((result) => (result.ok ? result.json() : { models: [] }))
+    .catch(() => ({ models: [] }));
+  const gatewayModels: Array<{ id: string; label: string }> = Array.isArray(gateway?.models) ? gateway.models : [];
+  const asCatalogItem = (model: { id: string; label: string }) => ({
+    capability,
+    enabled: true,
+    id: model.id,
+    label: model.label,
+    parameterControls: capability === "image" ? imageControls : [],
+    protocol: "local",
+    providerId: "ununu",
+    providerLabel: "Ununu",
+    routeId: capability === "image" ? "ununu-image" : "ununu-text"
+  });
+  const fallbackModel = capability === "image"
+    ? { capability, enabled: true, id: DEFAULT_IMAGE_MODEL_ID, label: "GPT Image 2", parameterControls: imageControls, protocol: "local", providerId: "ununu", providerLabel: "Ununu", routeId: "ununu-image" }
+    : { capability, enabled: true, id: DEFAULT_TEXT_MODEL_ID, label: "GPT 5.6 Sol", parameterControls: [], protocol: "local", providerId: "ununu", providerLabel: "Ununu", routeId: "ununu-text" };
+  const ununuModels = gatewayModels.length ? gatewayModels.map(asCatalogItem) : [fallbackModel];
+  // 默认值优先用内置的那个,它在列表里就选它,不在就退回网关给的第一个
+  const preferredId = capability === "image" ? DEFAULT_IMAGE_MODEL_ID : DEFAULT_TEXT_MODEL_ID;
+  const ununuModel = ununuModels.find((model) => model.id === preferredId) ?? ununuModels[0];
   const openrouterImageModel = {
     capability: "image" as const,
     enabled: openrouterConfigured,
@@ -64,7 +88,7 @@ export async function listWorkbenchModels(capability: "text" | "image" | "video"
   return {
     capability,
     defaultSelection: { modelId: ununuModel.id, providerId: "ununu" },
-    models: capability === "image" ? [ununuModel, openrouterImageModel] : [ununuModel],
+    models: capability === "image" ? [...ununuModels, openrouterImageModel] : ununuModels,
     providers: [
       { configured: ununuConfigured, id: "ununu", label: "Ununu", note: "本地 UnuTV 模型路由" },
       ...(capability === "image" ? [{ configured: openrouterConfigured, id: "openrouter", label: "OpenRouter", note: "请先配置 OpenRouter API Key" }] : [])

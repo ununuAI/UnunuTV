@@ -5,6 +5,7 @@ import { api } from "./api.js";
 import { PromptCard } from "./PromptCard.tsx";
 import { cinematicPromptFactsForNode } from "./cinematic-prompt-facts-view-model.js";
 import { imageGenerationStarterPrompt } from "@ununu/unutv-contracts";
+import { DEFAULT_TEXT_MODEL_ID } from "./prompt-workbench-api.ts";
 import { normalizePromptOutputMode, promptOutputModeForNode } from "./prompt-output-mode-policy.js";
 import { providerFrameReferenceSources, providerReferenceMediaIds } from "./node-provider-reference-policy.js";
 
@@ -38,7 +39,7 @@ function outputModeSelection(outputMode, hasVisualReference) {
   if (outputMode === "image") return { provider: "ununu", modelId: "openai/gpt-image-2", parameters: { outputMode } };
   if (outputMode === "audio") return { provider: "openspeech", modelId: "seed-audio-1.0", parameters: { outputMode, responseFormat: "mp3", speed: 1 } };
   if (outputMode === "video") return { provider: "openrouter", modelId: "x-ai/grok-imagine-video", parameters: { outputMode, mode: hasVisualReference ? "image_reference" : "text_to_video", ratio: "16:9", resolution: "720p", duration: 4, n: 1, generateAudio: true } };
-  return { provider: "ununu", modelId: "deepseek/deepseek-v4-pro", parameters: { outputMode } };
+  return { provider: "ununu", modelId: DEFAULT_TEXT_MODEL_ID, parameters: { outputMode } };
 }
 
 function exactPromptAssetReferences(document) {
@@ -287,7 +288,7 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
     sendPrompt: async (_nodeId, value, selection) => {
       if (readOnly) return null;
       setRunState({ status: "submitting", runId: null });
-      const provider = selection?.providerId || prompt?.provider || (outputMode === "audio" ? "openspeech" : outputMode === "image" ? "ununu" : "openrouter");
+      const provider = selection?.providerId || prompt?.provider || (outputMode === "audio" ? "openspeech" : ["image", "text"].includes(outputMode) ? "ununu" : "openrouter");
       const next = {
         document: prompt?.document,
         text: value,
@@ -312,7 +313,7 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
           }
           if (actions.createPromptOutputNode) return applyRunResult(await actions.createPromptOutputNode(node, outputMode, next));
         }
-        if (["image", "video", "videoShot", "compose", "audio"].includes(node.kind)) return applyRunResult(await actions.runNode(node, next));
+        if (["image", "video", "videoShot", "compose", "audio", "text"].includes(node.kind)) return applyRunResult(await actions.runNode(node, next));
         await load(); setRunState({ status: "idle", runId: null });
       } catch (error) { setRunState({ status: "failed", runId: null }); throw error; }
     },

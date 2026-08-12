@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { INVISIBLE_NODE_RESIZE_HANDLES, shouldEnableInvisibleNodeResize, shouldShowNodePrompt } from "../apps/web/src/canvas-node-selection-policy.js";
 
-test("only generative image and audio execution nodes expose the generic Prompt surface", () => {
+test("generative image, audio and text execution nodes expose the generic Prompt surface", () => {
   assert.equal(shouldShowNodePrompt({ kind: "image", selected: true, selectionCount: 1 }), true);
   assert.equal(shouldShowNodePrompt({ kind: "audio", selected: true, selectionCount: 1 }), true);
+  // 文本节点既能双击手写,也能用 Prompt 生成正文
+  assert.equal(shouldShowNodePrompt({ kind: "text", selected: true, selectionCount: 1 }), true);
   assert.equal(shouldShowNodePrompt({ kind: "asset", selected: true, selectionCount: 1 }), false);
 });
 

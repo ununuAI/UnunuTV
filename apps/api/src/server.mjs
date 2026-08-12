@@ -178,6 +178,9 @@ async function dispatch(request, response, runtime, webRoot) {
   if (method === "POST" && pathname === "/api/projects") return json(response, 201, await runtime.app.createProject(await body(request)));
   if (method === "GET" && pathname === "/api/model-capabilities") return json(response, 200, await runtime.app.getModelCapabilities({ capability: url.searchParams.get("capability") }));
   if (method === "GET" && pathname === "/api/settings/providers") return json(response, 200, await runtime.app.getProviderSettings());
+  if (method === "GET" && pathname === "/api/settings/models") {
+    return json(response, 200, await runtime.app.listProviderModels({ capability: url.searchParams.get("capability") }));
+  }
   if (method === "PUT" && pathname === "/api/settings/providers") return json(response, 200, await runtime.app.updateProviderSettings(await body(request)));
 
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId"))) {

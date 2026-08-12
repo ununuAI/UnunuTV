@@ -74,6 +74,7 @@ export * from "./workbench-contracts.mjs";
 export * from "./storyboard-contracts.mjs";
 export * from "./node-presentation-contracts.mjs";
 export * from "./node-prompt-capability-policy.mjs";
+export * from "./gateway-model-catalog-policy.mjs";
 export * from "./prompt-document-contracts.mjs";
 export * from "./timeline-contracts.mjs";
 export * from "./budget-contracts.mjs";

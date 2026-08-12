@@ -4,6 +4,7 @@ import { ArrowUp, AtSign, ChevronDown, FileText, Image as ImageIcon, LoaderCircl
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AUDIO_VOICE_OPTIONS, audioVoiceLabel } from "./audio-voice-catalog";
+import { DEFAULT_TEXT_MODEL_ID } from "./prompt-workbench-api";
 import type { CanvasNode, ModelExecutionSelection, ScriptAssetItem, VideoP0Actions } from "./prompt-types";
 import { ModelReferencePacket } from "./ModelReferencePacket";
 import { ModelRequestManifest } from "./ModelRequestManifest";
@@ -757,7 +758,7 @@ export function PromptCard({
           <ModelExecutionControls.Provider
             busy={isNodeGenerating}
             capability={isImageExecutionNode ? "image" : "text"}
-            initialSelection={isImageExecutionNode ? imageInitialSelection : node.modelSelection ?? { modelId: "deepseek/deepseek-v4-pro", providerId: "ununu" }}
+            initialSelection={isImageExecutionNode ? imageInitialSelection : node.modelSelection ?? { modelId: DEFAULT_TEXT_MODEL_ID, providerId: "ununu" }}
             onSelectionChange={(selection) => {
               if (readOnly) return;
               latestSelectionRef.current = selection;

@@ -34,7 +34,6 @@ function useModelExecution() {
 }
 
 function modelLabel(modelId: string) {
-  if (modelId === "deepseek/deepseek-v4-pro") return "DeepSeek V4 Pro";
   if (modelId === "openai/gpt-image-2") return "GPT Image 2";
   if (modelId === "google/gemini-3.1-flash-image-preview") return "Nano Banana 2";
   return modelId.split("/").at(-1) ?? modelId;

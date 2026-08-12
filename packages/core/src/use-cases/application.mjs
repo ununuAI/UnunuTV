@@ -42,7 +42,7 @@ export function createApplication(ports) {
   const foundation = createApplicationFoundationUseCases({ ports, saveNodePrompt });
   const {
     addGroupMember, cancelRun, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
-    disconnectEdge, getDirectorStage, getPanorama, getProviderSettings, getWorkflow, listProjects, listReviews, listRuns,
+    disconnectEdge, getDirectorStage, getPanorama, getProviderSettings, getWorkflow, listProjects, listProviderModels, listReviews, listRuns,
     openCanvas, openProject, pollRun, restoreNode, runNode, saveDirectorStage, setPanorama, setWorkflowLayer,
     updateNode, updateProject, updateProviderSettings
   } = foundation;
@@ -322,6 +322,7 @@ export function createApplication(ports) {
     importDataMedia,
     importMedia,
     listAssets,
+    listProviderModels,
     listReviews,
     listRuns,
     listProjects,

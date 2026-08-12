@@ -5,6 +5,9 @@ import { arkVirtualPersonAssetIds } from "./ark-video-reference-policy.mjs";
 import { normalizeAuthorityImageOutput } from "./authority-image-output-normalizer.mjs";
 import { fetchUnunuImage, readUnunuImageResponse, ununuImageTimeoutMs } from "./ununu-image-response-adapter.mjs";
 import { buildUnunuImageEditForm } from "./ununu-image-edit-form.mjs";
+import { responseError } from "./provider-response-error.mjs";
+import { submitTextCompletion } from "./text-completion.mjs";
+import { listGatewayModels } from "./gateway-model-listing.mjs";
 const VIDEO_SUCCESS = new Set(["completed", "complete", "succeeded", "success", "done"]);
 const VIDEO_FAILURE = new Set(["failed", "error", "cancelled", "canceled", "expired"]);
 function deterministicGatewayRequestId(input) {
@@ -14,10 +17,6 @@ function deterministicGatewayRequestId(input) {
 }
 function credential(...values) {
   return values.find((value) => typeof value === "string" && value.trim())?.trim();
-}
-async function responseError(response, fallback) {
-  const payload = await response.json().catch(() => ({}));
-  return new UnuTvError("provider_request_failed", payload?.error?.message || payload?.message || `${fallback} (HTTP ${response.status})`, 502);
 }
 function findTaskId(payload) {
   return payload?.id ?? payload?.task_id ?? payload?.taskId ?? payload?.data?.id;
@@ -449,6 +448,12 @@ export function createProviderRouter(options = {}) {
         imageModel: env.OPENROUTER_IMAGE_MODEL || "google/gemini-3.1-flash-image-preview",
         model: env.OPENROUTER_VIDEO_MODEL || "alibaba/happyhorse-1.1"
       },
+      // 文本生成按 provider 分别取 baseUrl 与 key;模型优先用 Prompt 里选的,env 只兜底
+      text: {
+        ununu: { provider: "ununu", label: "Ununu 网关", apiKey: credential(env.UNUNU_GATE_API_KEY, env.UNUNU_API_KEY), baseUrl: env.UNUNU_GATE_BASE_URL || env.UNUNU_BASE_URL || "https://api.ununu.ai/v1", model: env.UNUNU_TEXT_MODEL || "openai/gpt-5.6-sol" },
+        openrouter: { provider: "openrouter", label: "OpenRouter", apiKey: credential(env.OPENROUTER_API_KEY, env.OPENROUTER_KEY), baseUrl: env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1", model: env.OPENROUTER_TEXT_MODEL || null },
+        ark: { provider: "ark", label: "Ark", apiKey: credential(env.ARK_API_KEY, env.VOLCENGINE_ARK_API_KEY, env.ARK_BEARER_TOKEN), baseUrl: env.ARK_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3", model: env.ARK_TEXT_MODEL || null }
+      },
       "ark-tts": { apiKey: credential(env.ARK_TTS_API_KEY, env.ARK_API_KEY, env.VOLCENGINE_ARK_API_KEY), baseUrl: env.ARK_TTS_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3", path: env.ARK_TTS_SPEECH_PATH || "/audio/speech", model: env.ARK_TTS_MODEL || "doubao-seed-tts-2.0", voiceId: env.ARK_TTS_VOICE_ID },
       openspeech: { apiKey: credential(env.OPENSPEECH_API_KEY), baseUrl: env.OPENSPEECH_BASE_URL || "https://openspeech.bytedance.com/api/v3", model: env.OPENSPEECH_AUDIO_MODEL || "seed-audio-1.0", speakerId: env.OPENSPEECH_SPEAKER_ID }
     };
@@ -457,6 +462,12 @@ export function createProviderRouter(options = {}) {
     async run(input) {
       const configs = configured();
       const enriched = { ...input, media: options.media, publisher: options.publisher };
+      // 文本节点先分流:同一个 provider 名下文本走 chat/completions,和图片/视频不是一个端点
+      if (input.node.kind === "text") {
+        const textConfig = configs.text[input.run.provider];
+        if (!textConfig) throw new UnuTvError("provider_not_configured", `文本生成不支持 provider: ${input.run.provider}`, 409);
+        return submitTextCompletion(enriched, textConfig, fetchImpl);
+      }
       if (input.run.provider === "ununu") return submitUnunuImage(enriched, configs.ununu, fetchImpl);
       if (input.run.provider === "ark") return submitArk(enriched, configs.ark, fetchImpl);
       if (input.run.provider === "openrouter" && input.node.kind === "image") return submitOpenRouterImage(enriched, configs.openrouter, fetchImpl);
@@ -464,6 +475,10 @@ export function createProviderRouter(options = {}) {
       if (input.run.provider === "ark-tts") return submitTts(enriched, configs["ark-tts"], fetchImpl);
       if (input.run.provider === "openspeech") return submitOpenSpeech(enriched, configs.openspeech, fetchImpl);
       throw new UnuTvError("provider_not_configured", `Unknown or disabled provider: ${input.run.provider}`, 409);
+    },
+    // 网关的模型目录,失败时给空表,由调用方退回内置默认值
+    listModels() {
+      return listGatewayModels(configured().text.ununu, fetchImpl);
     },
     poll(input) {
       return pollVideo(input, configured(), fetchImpl);

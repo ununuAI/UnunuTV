@@ -2,7 +2,9 @@ const GENERATIVE_EXECUTION_KIND_BY_NODE_KIND = Object.freeze({
   image: "image",
   video: "video",
   videoShot: "video",
-  audio: "audio"
+  audio: "audio",
+  // 文本节点既能直接双击手写,也能用 Prompt 生成正文,走 chat/completions
+  text: "text"
 });
 
 export function resolveNodePromptCapability(node = {}) {

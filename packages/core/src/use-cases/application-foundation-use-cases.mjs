@@ -1,6 +1,6 @@
 import {
   NODE_KINDS, REVIEW_STATES, UnuTvError, WORKFLOW_LAYERS, createId, defaultNodeSize, isPromptCapableNode,
-  nowIso, optionalText, requireEnum, requireNumber, requireObject, requireText
+  nowIso, optionalText, projectGatewayModels, requireEnum, requireNumber, requireObject, requireText
 } from "@ununu/unutv-contracts";
 import { compileNodeGenerationRequest } from "../image-generation-request-policy.mjs";
 import { assessCinematicDialogueAudioRun } from "../cinematic-dialogue-voice-policy.mjs";
@@ -181,6 +181,17 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
 
   async function getProviderSettings() { return ports.credentials.status(); }
 
+  // 模型目录来自网关,不写死在前端。网关加了模型,选择器立刻能看到。
+  async function listProviderModels(input = {}) {
+    const capability = ["text", "image", "video", "audio"].includes(input.capability) ? input.capability : "text";
+    const result = await ports.provider.listModels?.() ?? { models: [], reason: "provider_not_configured" };
+    return {
+      capability,
+      models: projectGatewayModels(result.models, capability),
+      ...(result.reason ? { reason: result.reason } : {})
+    };
+  }
+
   async function updateProviderSettings(input = {}) {
     const settings = requireObject(input, "settings");
     const allowed = new Set(["ununuApiKey", "arkApiKey", "openrouterApiKey", "arkTtsApiKey", "arkTtsVoiceId", "openspeechApiKey", "openspeechSpeakerId"]);
@@ -200,7 +211,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     const prompt = await ports.projects.getNodePrompt(projectId, nodeId);
     const requested = { ...(prompt?.text && input.request?.prompt === undefined ? { prompt: prompt.text } : {}), ...requireObject(input.request, "request", {}) };
     const request = compileNodeGenerationRequest(node, requested);
-    const provider = optionalText(input.provider, optionalText(prompt?.provider, optionalText(node.payload?.provider, node.kind === "audio" ? "openspeech" : "openrouter")));
+    const provider = optionalText(input.provider, optionalText(prompt?.provider, optionalText(node.payload?.provider, node.kind === "audio" ? "openspeech" : node.kind === "text" ? "ununu" : "openrouter")));
     if (node.kind === "audio" && node.payload?.resourceType === "cinematic_dialogue_line") {
       const productionId = requireText(node.payload?.productionId, "node.payload.productionId");
       const [authorities, canvas, reviews] = await Promise.all([
@@ -241,7 +252,33 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
   async function finishProviderResult(projectId, nodeId, runId, result) {
     const materialized = [];
     for (const artifact of result.artifacts ?? []) materialized.push(await ports.media.importBytes({ projectId, nodeId, kind: artifact.kind, mimeType: artifact.mimeType, bytes: artifact.bytes, title: artifact.title }));
+    // 文本生成的产物不是媒体二进制,直接写回节点正文,和手写落同一个字段
+    if (typeof result.text === "string" && result.text.trim()) {
+      await writeGeneratedNodeText(projectId, nodeId, result.text);
+    }
     return ports.projects.finishRun(projectId, runId, result.status ?? "succeeded", { ...result, artifacts: materialized });
+  }
+
+  async function writeGeneratedNodeText(projectId, nodeId, text) {
+    const node = await ports.projects.getNode(projectId, nodeId);
+    if (!node) return;
+    const payload = node.payload || {};
+    await ports.projects.updateNode(projectId, nodeId, {
+      payload: {
+        ...payload,
+        text,
+        ...(payload.textDocument
+          ? {
+            textDocument: {
+              ...payload.textDocument,
+              plainText: text,
+              html: text.split("\n").map((line) => `<p>${line}</p>`).join(""),
+              updatedAt: nowIso()
+            }
+          }
+          : {})
+      }
+    });
   }
 
   async function pollRun(input = {}) {
@@ -344,7 +381,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
   return {
     addGroupMember, cancelRun, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
     disconnectEdge, finishProviderResult, getDirectorStage, getPanorama, getProviderSettings, getWorkflow,
-    listProjects, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode,
+    listProjects, listProviderModels, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode,
     saveDirectorStage, setPanorama, setWorkflowLayer, updateNode, updateProject, updateProviderSettings
   };
 }
