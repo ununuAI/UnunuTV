@@ -401,11 +401,11 @@ export function DirectorStageScene({
 
       <Suspense fallback={null}>
         {objects.map((object) => {
-          const shared = { key: object.id, object, onSelect, selected: object.id === selectedId };
-          if (object.type === "character") return <Mannequin {...shared} />;
+          const shared = { object, onSelect, selected: object.id === selectedId };
           const localUrl = localModels?.[object.id];
-          if (localUrl) return <LocalModel {...shared} url={localUrl} />;
-          return <StageGeometry {...shared} />;
+          if (object.type === "character") return <Mannequin key={object.id} {...shared} />;
+          if (localUrl) return <LocalModel key={object.id} url={localUrl} {...shared} />;
+          return <StageGeometry key={object.id} {...shared} />;
         })}
       </Suspense>
 
