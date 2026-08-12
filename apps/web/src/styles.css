@@ -4474,3 +4474,57 @@ textarea { padding: 10px; resize: vertical; font-family: "SFMono-Regular", Conso
   position: absolute; inset: 0; display: grid; place-items: center;
   color: rgba(255, 255, 255, .55); font-size: 13px; pointer-events: none;
 }
+
+/* ── 自建 3D 导演台 ─────────────────────────────────────── */
+.director-stage-v2 { display: flex; width: 100%; height: 100%; min-height: 460px; gap: 0; }
+.director-stage-viewport { position: relative; flex: 1; min-width: 0; border-radius: 8px 0 0 8px; overflow: hidden; background: #101216; }
+.director-stage-panel {
+  width: 268px; flex: 0 0 268px; overflow-y: auto; background: #16181d;
+  border-left: 1px solid #262a31; border-radius: 0 8px 8px 0; font-size: 12px;
+}
+.director-stage-panel section { padding: 11px 12px; border-bottom: 1px solid #21252b; display: grid; gap: 8px; }
+.director-stage-panel header { display: flex; align-items: center; font-weight: 600; font-size: 12.5px; color: #e5e4e0; }
+.director-stage-panel header small { margin-left: auto; color: #6e7076; font-family: ui-monospace, Menlo, monospace; }
+.director-stage-panel .hint { margin: 0; color: #8b8e95; font-size: 11.5px; line-height: 1.6; }
+.director-stage-panel button { background: #1e2127; border: 1px solid #2c313a; color: #d3d4d8; border-radius: 5px; padding: 5px 9px; font-size: 12px; }
+.director-stage-panel button:hover { border-color: #6fb3b8; color: #6fb3b8; }
+.director-stage-panel button.danger:hover { border-color: #d97a6a; color: #d97a6a; }
+.director-stage-panel button:disabled { opacity: .4; }
+.director-add-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.director-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; max-height: 190px; overflow-y: auto; }
+.director-list li.empty { color: #6e7076; padding: 8px 2px; font-size: 11.5px; }
+.director-list button { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; background: none; border: 1px solid transparent; }
+.director-list button.on { background: #1b2e30; border-color: #6fb3b8; color: #6fb3b8; }
+.director-list .dot { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 8px; }
+.director-list em { margin-left: auto; font-style: normal; color: #6e7076; font-size: 10.5px; }
+.director-stage-panel .field { display: grid; grid-template-columns: 66px 1fr; align-items: center; gap: 8px; }
+.director-stage-panel .field > span { color: #8b8e95; font-size: 11.5px; }
+.director-stage-panel select, .director-stage-panel input[type="number"] {
+  background: #101216; border: 1px solid #2c313a; color: #d3d4d8; border-radius: 4px; padding: 4px 6px; font-size: 11.5px; width: 100%;
+}
+.director-stage-panel input[type="range"] { width: 100%; accent-color: #6fb3b8; }
+.director-stage-panel input[type="color"] { width: 100%; height: 24px; background: none; border: 1px solid #2c313a; border-radius: 4px; padding: 1px; }
+.director-stage-panel .check { display: flex; align-items: center; gap: 7px; color: #b4b6bb; font-size: 11.5px; }
+.vector-row { display: grid; grid-template-columns: 46px repeat(3, 1fr); gap: 4px; align-items: center; }
+.vector-row > span { color: #8b8e95; font-size: 11px; }
+.director-joints > summary { cursor: pointer; color: #8b8e95; font-size: 11.5px; padding: 3px 0; }
+.joint-group { padding: 5px 0 2px; }
+.joint-group strong { display: block; color: #6e7076; font-size: 10.5px; margin-bottom: 3px; }
+.joint-row { display: grid; grid-template-columns: 40px repeat(3, 1fr); gap: 3px; align-items: center; }
+.joint-row > span { color: #8b8e95; font-size: 10.5px; }
+.director-rev { padding: 8px 12px; color: #6e7076; font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; }
+.director-viewtabs { position: absolute; top: 10px; left: 10px; display: flex; gap: 5px; z-index: 6; }
+.director-viewtabs button, .director-captures button {
+  background: rgba(22,24,29,.9); border: 1px solid #2c313a; color: #d3d4d8;
+  border-radius: 5px; padding: 5px 10px; font-size: 11.5px; backdrop-filter: blur(8px);
+}
+.director-viewtabs button.on { border-color: #6fb3b8; color: #6fb3b8; background: rgba(27,46,48,.92); }
+.director-viewtabs button:hover, .director-captures button:hover { border-color: #6fb3b8; color: #6fb3b8; }
+.director-captures { position: absolute; bottom: 10px; left: 10px; display: flex; gap: 5px; z-index: 6; }
+.director-captures button:disabled { opacity: .4; }
+.director-overlay { position: absolute; inset: 0; pointer-events: none; display: grid; place-items: center; z-index: 5; }
+.director-frame { position: relative; aspect-ratio: var(--frame-aspect); max-width: 100%; max-height: 100%; width: 100%; }
+.director-frame-edge { position: absolute; inset: 0; box-shadow: 0 0 0 9999px rgba(8,9,11,.55); }
+.director-thirds { position: absolute; background: rgba(255,255,255,.22); }
+.director-thirds.v { top: 0; bottom: 0; width: 1px; }
+.director-thirds.h { left: 0; right: 0; height: 1px; }
