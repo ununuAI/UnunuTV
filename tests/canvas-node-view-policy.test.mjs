@@ -17,8 +17,8 @@ test("node presentation density follows canvas zoom", () => {
   assert.equal(nodePresentationDensity(100), "detail");
 });
 
-test("director, script and cinematic domain workspaces expand inside the canvas and remember compact size", () => {
-  for (const kind of ["director", "script", "batch", "storyboard", "shot", "generationUnit", "qa", "imageEdit"]) {
+test("script and cinematic domain workspaces expand inside the canvas and remember compact size", () => {
+  for (const kind of ["script", "batch", "storyboard", "shot", "generationUnit", "qa", "imageEdit"]) {
     const node = { kind, width: 520, height: 340, payload: {} };
     const expanded = canvasNodeViewTransition(node, true);
     assert.equal(nodeSupportsInlineWorkspace(kind), true);
@@ -27,6 +27,28 @@ test("director, script and cinematic domain workspaces expand inside the canvas 
     const collapsed = canvasNodeViewTransition({ ...node, ...expanded }, false);
     assert.deepEqual({ width: collapsed.width, height: collapsed.height }, { width: 520, height: 340 });
   }
+});
+
+test("director opens as a fullscreen overlay, so its node keeps geometry across open and close", () => {
+  const node = { id: "d1", kind: "director", x: 1200, y: 800, width: 520, height: 340, payload: {} };
+  const neighbour = { id: "n2", kind: "image", x: 1500, y: 820, width: 430, height: 310 };
+
+  const opened = planCanvasNodeViewTransition(node, true, [node, neighbour]);
+  assert.equal(opened.payload.canvasExpanded, true);
+  assert.equal(opened.width, undefined, "打开导演台不得改变节点宽度");
+  assert.equal(opened.height, undefined, "打开导演台不得改变节点高度");
+  assert.equal(opened.x, undefined, "打开导演台不得触发避让重排");
+  assert.equal(opened.y, undefined);
+
+  const merged = { ...node, ...opened };
+  const closed = planCanvasNodeViewTransition(merged, false, [merged, neighbour]);
+  const final = { ...merged, ...closed };
+  assert.equal(closed.payload.canvasExpanded, false);
+  assert.deepEqual(
+    { x: final.x, y: final.y, width: final.width, height: final.height },
+    { x: 1200, y: 800, width: 520, height: 340 },
+    "开关一次之后节点位置与尺寸必须原样不动"
+  );
 });
 
 test("read-only view projection can expand without persisting the source node", () => {
