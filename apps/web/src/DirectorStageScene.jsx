@@ -91,7 +91,7 @@ function Mannequin({ object, selected, onSelect }) {
   return (
     <group
       name={object.id}
-      onClick={(event) => { event.stopPropagation(); onSelect(object.id); }}
+      onClick={(event) => { event.stopPropagation(); onSelect(object.id, event.nativeEvent?.shiftKey || event.nativeEvent?.metaKey); }}
       position={[position.x, position.y, position.z]}
       ref={group}
       rotation={[rotation.x, rotation.y, rotation.z]}
@@ -157,7 +157,7 @@ function StageGeometry({ object, selected, onSelect }) {
   return (
     <group
       name={object.id}
-      onClick={(event) => { event.stopPropagation(); onSelect(object.id); }}
+      onClick={(event) => { event.stopPropagation(); onSelect(object.id, event.nativeEvent?.shiftKey || event.nativeEvent?.metaKey); }}
       position={[position.x, position.y + half, position.z]}
       ref={group}
       rotation={[rotation.x, rotation.y, rotation.z]}
@@ -184,7 +184,7 @@ function LocalModel({ object, url, selected, onSelect }) {
   return (
     <group
       name={object.id}
-      onClick={(event) => { event.stopPropagation(); onSelect(object.id); }}
+      onClick={(event) => { event.stopPropagation(); onSelect(object.id, event.nativeEvent?.shiftKey || event.nativeEvent?.metaKey); }}
       position={[position.x, position.y, position.z]}
       ref={group}
       rotation={[rotation.x, rotation.y, rotation.z]}
@@ -206,7 +206,7 @@ function StageRoute({ route, selected, onSelect }) {
   if (points.length < 2) return null;
   const color = route.color || (route.type === "camera" ? "#d9a441" : "#6fb3b8");
   return (
-    <group onClick={(event) => { event.stopPropagation(); onSelect(route.id); }}>
+    <group onClick={(event) => { event.stopPropagation(); onSelect(route.id, event.nativeEvent?.shiftKey || event.nativeEvent?.metaKey); }}>
       <Line color={color} dashSize={0.18} dashed={route.type === "camera"} gapSize={0.12}
         lineWidth={selected ? 3 : 1.8} points={points} />
       {points.map((point, index) => (
@@ -305,33 +305,99 @@ function AxisViewRig({ request }) {
   return null;
 }
 
-/** 选中对象的变换手柄。
+/** 变换手柄,支持多选整组拖动。
  *  直接按 name 从场景里查对象,不走"子组件回调上报"那套 —— 父组件的清空 effect
- *  会在子组件上报之后才跑,把刚附上的对象抹掉,手柄就永远不显示。 */
-function SelectionGizmo({ selectedId, mode, snap, onTransform }) {
+ *  会在子组件上报之后才跑,把刚附上的对象抹掉,手柄就永远不显示。
+ *
+ *  多选时在质心放一个不可见的支点,手柄挂支点上;支点一动,把位移原样加到
+ *  每个成员身上,旋转则让成员绕支点转。松手一次性提交全部。 */
+function SelectionGizmo({ selectedIds, mode, snap, onTransform }) {
   const { scene } = useThree();
-  const [target, setTarget] = useState(null);
+  const [targets, setTargets] = useState([]);
+  const pivot = useRef(null);
+  const start = useRef(null);
 
   useEffect(() => {
-    if (!selectedId) { setTarget(null); return undefined; }
-    // 对象可能在同一帧刚挂载,下一帧再找一次
-    const found = scene.getObjectByName(selectedId);
-    if (found) { setTarget(found); return undefined; }
-    const raf = requestAnimationFrame(() => setTarget(scene.getObjectByName(selectedId) ?? null));
+    const resolve = () => setTargets(selectedIds.map((id) => scene.getObjectByName(id)).filter(Boolean));
+    resolve();
+    const raf = requestAnimationFrame(resolve);
     return () => cancelAnimationFrame(raf);
-  }, [scene, selectedId]);
+  }, [scene, selectedIds]);
 
-  if (!target) return null;
+  // 拖动开始:记录支点与各成员的初始状态
+  const begin = () => {
+    if (!pivot.current || !targets.length) return;
+    const center = new THREE.Vector3();
+    for (const t of targets) center.add(t.position);
+    center.divideScalar(targets.length);
+    pivot.current.position.copy(center);
+    pivot.current.rotation.set(0, 0, 0);
+    start.current = {
+      center: center.clone(),
+      members: targets.map((t) => ({
+        object: t,
+        offset: t.position.clone().sub(center),
+        rotationY: t.rotation.y
+      }))
+    };
+  };
+
+  const apply = () => {
+    const s = start.current;
+    if (!s || !pivot.current) return;
+    const delta = pivot.current.position.clone().sub(s.center);
+    const spin = pivot.current.rotation.y;
+    for (const m of s.members) {
+      const offset = m.offset.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), spin);
+      m.object.position.copy(s.center).add(offset).add(delta);
+      m.object.rotation.y = m.rotationY + spin;
+    }
+  };
+
+  const commit = () => {
+    const s = start.current;
+    if (!s) return;
+    onTransform?.(s.members.map((m) => ({
+      id: m.object.name,
+      position: { x: round(m.object.position.x), y: round(m.object.position.y), z: round(m.object.position.z) },
+      rotation: { x: round(m.object.rotation.x), y: round(m.object.rotation.y), z: round(m.object.rotation.z) }
+    })));
+    start.current = null;
+  };
+
+  if (!targets.length) return null;
+
+  // 单选直接挂对象,行为和以前一致;多选才用支点
+  if (targets.length === 1) {
+    const target = targets[0];
+    return (
+      <TransformControls
+        mode={mode}
+        object={target}
+        onMouseUp={() => onTransform?.([{
+          id: target.name,
+          position: { x: round(target.position.x), y: round(target.position.y), z: round(target.position.z) },
+          rotation: { x: round(target.rotation.x), y: round(target.rotation.y), z: round(target.rotation.z) }
+        }])}
+        translationSnap={snap || null}
+      />
+    );
+  }
+
   return (
-    <TransformControls
-      mode={mode}
-      object={target}
-      onMouseUp={() => onTransform?.(selectedId, {
-        position: { x: round(target.position.x), y: round(target.position.y), z: round(target.position.z) },
-        rotation: { x: round(target.rotation.x), y: round(target.rotation.y), z: round(target.rotation.z) }
-      })}
-      translationSnap={snap || null}
-    />
+    <>
+      <object3D ref={pivot} />
+      {pivot.current ? (
+        <TransformControls
+          mode={mode === "scale" ? "translate" : mode}
+          object={pivot.current}
+          onMouseDown={begin}
+          onMouseUp={commit}
+          onObjectChange={apply}
+          translationSnap={snap || null}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -356,7 +422,7 @@ export function ViewportOverlay({ aspect, showThirds, showMask }) {
 
 export function DirectorStageScene({
   stage,
-  selectedId,
+  selectedIds = [],
   activeCameraId,
   viewMode,
   gridSnap,
@@ -374,6 +440,7 @@ export function DirectorStageScene({
   const cameras = stage?.cameras ?? [];
   const activeCamera = cameras.find((item) => item.id === activeCameraId) ?? cameras[0] ?? null;
   const cameraView = viewMode === "camera" && activeCamera;
+  const isSelected = (id) => selectedIds.includes(id);
 
   return (
     <Canvas gl={{ preserveDrawingBuffer: true, antialias: true }} onCreated={(state) => onReady?.(state)} shadows>
@@ -401,7 +468,7 @@ export function DirectorStageScene({
 
       <Suspense fallback={null}>
         {objects.map((object) => {
-          const shared = { object, onSelect, selected: object.id === selectedId };
+          const shared = { object, onSelect, selected: isSelected(object.id) };
           const localUrl = localModels?.[object.id];
           if (object.type === "character") return <Mannequin key={object.id} {...shared} />;
           if (localUrl) return <LocalModel key={object.id} url={localUrl} {...shared} />;
@@ -410,7 +477,7 @@ export function DirectorStageScene({
       </Suspense>
 
       {routes.map((route) => (
-        <StageRoute key={route.id} onSelect={onSelect} route={route} selected={route.id === selectedId} />
+        <StageRoute key={route.id} onSelect={onSelect} route={route} selected={isSelected(route.id)} />
       ))}
 
       {!cameraView && cameras.map((camera) => (
@@ -419,7 +486,7 @@ export function DirectorStageScene({
 
       {/* 场景内直接拖拽摆位:松手才落盘,拖动期间由 makeDefault 的 OrbitControls 自动让位 */}
       {!cameraView && gizmo ? (
-        <SelectionGizmo mode={gizmo} onTransform={onTransform} selectedId={selectedId} snap={gridSnap} />
+        <SelectionGizmo mode={gizmo} onTransform={onTransform} selectedIds={selectedIds} snap={gridSnap} />
       ) : null}
 
       {!cameraView ? <AxisViewRig request={axisView} /> : null}

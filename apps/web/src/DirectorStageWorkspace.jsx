@@ -80,7 +80,8 @@ export function DirectorFullscreen({ node, canvas, notify, refresh, onClose }) {
 
 export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, notify, refresh, onClose, onFit, fullscreen = false }) {
   const [stage, setStage] = useState(null);
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const [activeCameraId, setActiveCameraId] = useState(null);
   const [viewMode, setViewMode] = useState("director");
   const [showThirds, setShowThirds] = useState(true);
@@ -197,6 +198,15 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
     return { ...stage, objects: apply(stage.objects ?? []), cameras: apply(stage.cameras ?? []) };
   }, [draft, stage]);
 
+  /** 点选。按住 Shift / Cmd 追加或取消,便于整片群众一起拖。 */
+  const select = useCallback((id, additive = false) => {
+    setSelectedIds((current) => {
+      if (!id) return [];
+      if (!additive) return [id];
+      return current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+    });
+  }, []);
+
   const objects = liveStage?.objects ?? [];
   const cameras = liveStage?.cameras ?? [];
   const routes = liveStage?.routes ?? [];
@@ -238,27 +248,30 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
     const cols = Math.max(1, Math.min(8, Number(crowd.cols) || 1));
     const gap = Number(crowd.gap) || 1.1;
     const base = objects.filter((item) => item.type === "character").length;
+    const crowdId = `crowd-${uid()}`;
     const commands = [];
+    const ids = [];
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < cols; col += 1) {
         commands.push({
           type: "upsert_object",
           payload: {
             object: {
-              id: `crowd-${uid()}`,
+              id: (() => { const id = `crowd-${uid()}`; ids.push(id); return id; })(),
               label: `群众 ${base + commands.length + 1}`,
               type: "character",
               position: { x: (col - (cols - 1) / 2) * gap, y: 0, z: -2 - row * gap },
               rotation: { x: 0, y: 0, z: 0 },
               size: { x: 0.5, y: 1.75 + (Math.random() - 0.5) * 0.12, z: 0.4 },
               color: "#8f959f", visible: true, bodyType: "男性素体",
+              crowdId,
               pose: POSE_PRESETS.站立
             }
           }
         });
       }
     }
-    void runMany(commands);
+    void runMany(commands).then((next) => { if (next) setSelectedIds(ids); });
   };
 
   /** 本地模型:会话内有效,不落盘(没有通用二进制上传端点)。 */
@@ -275,19 +288,26 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
     });
     if (saved) {
       setLocalModels((current) => ({ ...current, [id]: url }));
-      setSelectedId(id);
+      setSelectedIds([id]);
       notify?.("本地模型已载入当前会话。刷新后需重新导入 —— 目前没有服务端模型上传通道。", false);
     }
   };
 
-  /** 场景内拖拽摆位,松手落盘。 */
-  const commitTransform = (id, patch) => {
-    const object = objects.find((item) => item.id === id);
-    if (!object) return;
-    const half = object.type === "character" ? 0 : (object.size?.y ?? 1) / 2;
-    void run("upsert_object", {
-      object: { ...object, position: { ...patch.position, y: Number((patch.position.y - half).toFixed(3)) }, rotation: patch.rotation }
-    });
+  /** 场景内拖拽摆位,松手落盘。多选时一次提交全部。 */
+  const commitTransform = (changes) => {
+    const list = Array.isArray(changes) ? changes : [changes];
+    const commands = [];
+    for (const patch of list) {
+      const object = objects.find((item) => item.id === patch.id);
+      if (!object) continue;
+      const half = object.type === "character" ? 0 : (object.size?.y ?? 1) / 2;
+      commands.push({
+        type: "upsert_object",
+        payload: { object: { ...object, position: { ...patch.position, y: Number((patch.position.y - half).toFixed(3)) }, rotation: patch.rotation } }
+      });
+    }
+    if (commands.length === 1) void run(commands[0].type, commands[0].payload);
+    else if (commands.length) void runMany(commands);
   };
 
   const addCamera = () => {
@@ -442,10 +462,10 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
           groundOpacity={groundOpacity}
           localModels={localModels}
           onReady={(state) => { three.current = state; }}
-          onSelect={setSelectedId}
+          onSelect={select}
           onTransform={commitTransform}
           panorama={panorama}
-          selectedId={selectedId}
+          selectedIds={selectedIds}
           stage={liveStage}
           viewMode={viewMode}
         />
@@ -481,6 +501,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
             {[["translate", "移动"], ["rotate", "旋转"], ["scale", "缩放"]].map(([mode, label]) => (
               <button className={gizmo === mode ? "on" : ""} key={mode} onClick={() => setGizmo(mode)} type="button">{label}</button>
             ))}
+            {selectedIds.length > 1 ? <span className="dock-badge">已选 {selectedIds.length}</span> : null}
           </DockGroup>
 
           <DockGroup>
@@ -543,7 +564,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
           <ul className="director-list">
             {objects.map((object) => (
               <li key={object.id}>
-                <button className={object.id === selectedId ? "on" : ""} onClick={() => setSelectedId(object.id)} type="button">
+                <button className={selectedIds.includes(object.id) ? "on" : ""} onClick={(event) => select(object.id, event.shiftKey || event.metaKey)} type="button">
                   <span className="dot" style={{ background: object.color }} />{object.label}
                   <em>{object.type === "character" ? "角色" : "对象"}</em>
                 </button>
@@ -551,7 +572,7 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
             ))}
             {routes.map((route) => (
               <li key={route.id}>
-                <button className={route.id === selectedId ? "on" : ""} onClick={() => setSelectedId(route.id)} type="button">
+                <button className={selectedIds.includes(route.id) ? "on" : ""} onClick={(event) => select(route.id, event.shiftKey || event.metaKey)} type="button">
                   <span className="dot" style={{ background: route.color }} />{route.label}<em>走位</em>
                 </button>
               </li>
@@ -559,6 +580,21 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
             {!objects.length && !routes.length ? <li className="empty">还没有对象。先加一个角色。</li> : null}
           </ul>
         </section>
+
+        {selectedIds.length > 1 ? (
+          <section>
+            <header>已选 {selectedIds.length} 个<small>整组可拖</small></header>
+            <p className="hint">在场景里拖动手柄可整组移动;切到「旋转」会绕这组的质心转。</p>
+            <div className="director-add-row">
+              <button disabled={busy} onClick={() => setSelectedIds([])} type="button">取消选择</button>
+              <button className="danger" disabled={busy} onClick={() => {
+                const ids = [...selectedIds];
+                setSelectedIds([]);
+                void runMany(ids.map((id) => ({ type: "remove_object", payload: { objectId: id } })));
+              }} type="button">删除这 {selectedIds.length} 个</button>
+            </div>
+          </section>
+        ) : null}
 
         {selectedObject ? (
           <section>
@@ -601,12 +637,17 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
                 </details>
               </>
             ) : null}
+            {selectedObject.crowdId ? (
+              <button onClick={() => setSelectedIds(objects.filter((item) => item.crowdId === selectedObject.crowdId).map((item) => item.id))} type="button">
+                选中整片群众({objects.filter((item) => item.crowdId === selectedObject.crowdId).length} 个)
+              </button>
+            ) : null}
             <VectorRow label="位置" onChange={(value) => patchObject({ position: value })} step={gridSnap} value={selectedObject.position} />
             <VectorRow deg label="旋转" onChange={(value) => patchObject({ rotation: value })} step={15} value={selectedObject.rotation} />
             <label className="field"><span>颜色</span>
               <input onChange={(event) => patchObject({ color: event.target.value })} type="color" value={selectedObject.color || "#c9ced8"} />
             </label>
-            <button className="danger" disabled={busy} onClick={() => { void run("remove_object", { objectId: selectedObject.id }); setSelectedId(null); }} type="button">删除对象</button>
+            <button className="danger" disabled={busy} onClick={() => { void run("remove_object", { objectId: selectedObject.id }); setSelectedIds([]); }} type="button">删除对象</button>
           </section>
         ) : null}
 
