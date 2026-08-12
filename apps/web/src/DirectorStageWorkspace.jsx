@@ -40,7 +40,45 @@ function panoramaSources(canvas, directorNode) {
     .filter((item) => item.mediaId);
 }
 
-export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, notify, refresh, onClose, onFit }) {
+/** 全屏浮层。导演台需要整屏才够用,双击导演节点进入,右上角或 Esc 退出。 */
+export function DirectorFullscreen({ node, canvas, notify, refresh, onClose }) {
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === "Escape") onClose?.(); };
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [onClose]);
+
+  return (
+    <div className="director-fullscreen" onPointerDown={(event) => event.stopPropagation()} role="dialog">
+      <header className="director-fullscreen-bar">
+        <span className="director-fullscreen-title">
+          <b>3D 导演台</b>
+          <small>{node.title || "导演节点"}</small>
+        </span>
+        <span className="director-fullscreen-hint">Esc 退出</span>
+        <button aria-label="关闭导演台" className="director-fullscreen-close" onClick={onClose} type="button">✕</button>
+      </header>
+      <div className="director-fullscreen-body">
+        <DirectorStageWorkspace
+          canvas={canvas}
+          canvasId={canvas.id}
+          fullscreen
+          node={node}
+          notify={notify}
+          projectId={node.projectId}
+          refresh={refresh}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, notify, refresh, onClose, onFit, fullscreen = false }) {
   const [stage, setStage] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [activeCameraId, setActiveCameraId] = useState(null);
@@ -370,8 +408,8 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
         <div className="director-viewtabs nodrag nopan">
           <button className={viewMode === "director" ? "on" : ""} onClick={() => setViewMode("director")} type="button">导演视角</button>
           <button className={viewMode === "camera" ? "on" : ""} disabled={!activeCamera} onClick={() => setViewMode("camera")} type="button">机位视角</button>
-          {onFit ? <button onClick={onFit} type="button">适应视野</button> : null}
-          {onClose ? <button onClick={onClose} type="button">收起</button> : null}
+          {!fullscreen && onFit ? <button onClick={onFit} type="button">适应视野</button> : null}
+          {!fullscreen && onClose ? <button onClick={onClose} type="button">收起</button> : null}
         </div>
 
         {viewMode === "director" ? (

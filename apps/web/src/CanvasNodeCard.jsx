@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { NodeResizeControl } from "@xyflow/react";
 import { Boxes, Check, ChevronDown, Clapperboard, Drama, FileText, Grid2X2Plus, Image as ImageIcon, LoaderCircle, Sparkles, Trash2 } from "lucide-react";
 import { CanvasConnectionHandle } from "./CanvasConnectionHandle.jsx";
@@ -8,7 +9,7 @@ import { NODE_ITEM_DEFINITIONS } from "./CanvasMenus.jsx";
 import { CinematicControllerNode } from "./CinematicControllerNode.jsx";
 import { CinematicDomainNode } from "./CinematicDomainNode.jsx";
 import { CinematicWorkspacePanel } from "./CinematicWorkspacePanel.jsx";
-import { DirectorStageWorkspace } from "./DirectorStageWorkspace.jsx";
+import { DirectorFullscreen } from "./DirectorStageWorkspace.jsx";
 import { EditableNodeTitle } from "./EditableNodeTitle.jsx";
 import { NodePromptCard } from "./NodePromptCard.jsx";
 import { MomoAssetNode, industrialAssetTypeLabel } from "./MomoAssetNode.jsx";
@@ -105,8 +106,22 @@ function CanvasNodeCard({ data, selected }) {
     );
   }
 
+  const directorOverlay = isDirector && isInlineExpanded && typeof document !== "undefined"
+    ? createPortal(
+        <DirectorFullscreen
+          canvas={canvas}
+          node={node}
+          notify={actions.notify}
+          onClose={() => actions.setNodeExpanded(node, false)}
+          refresh={actions.refresh}
+        />,
+        document.body
+      )
+    : null;
+
   return (
     <div className={`node-wrap density-${density}${selected ? " selected" : ""}${isGenerating ? " is-generating" : ""}${isScript ? " script-node-wrap" : ""}${isCinematic ? " cinematic-node-wrap" : ""}${isInlineExpanded ? " is-expanded" : ""}${isVideo ? " video-node-wrap" : ""}${isAudio ? " audio-node-wrap" : ""}`}>
+      {directorOverlay}
       {selected && !hasMultiSelection && !readOnly && isImage && mediaUrl && !isPanorama ? <div className="image-derivation-toolbar nodrag nopan">
         <button onClick={(event) => { stop(event); void actions.deriveImage(node, "scene_panorama_equirectangular", "720°完整环境全景"); }} type="button">720° 全景</button>
         <details><summary><Grid2X2Plus size={14} /><span>专业版式</span><ChevronDown size={12} /></summary><div className="image-derivation-menu nowheel">{IMAGE_DERIVATION_TYPES.map(([type, label]) => <button key={type} onClick={(event) => { stop(event); void actions.deriveImage(node, type, label); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">{label}</button>)}</div></details>
@@ -125,17 +140,6 @@ function CanvasNodeCard({ data, selected }) {
           <ImageEditCanvasWorkspace actions={actions} connectedNodes={connectedNodes} node={node} readOnly={readOnly} />
         ) : isInlineExpanded && (isCinematic || isCinematicDomain) ? (
           <CinematicWorkspacePanel embedded notify={actions.notify} onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }} onFit={() => actions.fitNode(node.id)} projectId={node.projectId} readOnly={readOnly} selected={node} />
-        ) : isInlineExpanded && isDirector ? (
-          <DirectorStageWorkspace
-            canvas={canvas}
-            canvasId={canvas.id}
-            node={node}
-            notify={actions.notify}
-            onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }}
-            onFit={() => actions.fitNode(node.id)}
-            projectId={node.projectId}
-            refresh={actions.refresh}
-          />
         ) : isInlineExpanded && isScript ? (
           <CinematicWorkspacePanel embedded notify={actions.notify} onClose={(event) => { event?.stopPropagation?.(); actions.setNodeExpanded(node, false); }} onFit={() => actions.fitNode(node.id)} projectId={node.projectId} readOnly={readOnly} selected={node} />
         ) : isCinematic ? (
