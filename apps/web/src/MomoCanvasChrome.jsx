@@ -2,6 +2,8 @@
 
 import {
   Boxes,
+  Hand,
+  MousePointer2,
   Clapperboard,
   Eye,
   EyeOff,
@@ -27,6 +29,7 @@ function ChromeButton({ active = false, className = "", disabled = false, icon: 
 export function MomoCanvasChrome({
   activePanel,
   canMutate,
+  canvasTool,
   light,
   onAdd,
   onAssets,
@@ -40,6 +43,7 @@ export function MomoCanvasChrome({
   onTheme,
   onTimeline,
   onToolbox,
+  onTool,
   onToggleConnections,
   onWorkflow,
   onZoom,
@@ -61,6 +65,11 @@ export function MomoCanvasChrome({
     </nav>
 
     <nav className="momo-bottom-controls" aria-label="画布显示与工作区控制">
+      <div className="momo-control-group">
+        <ChromeButton active={canvasTool === "pan"} icon={Hand} label="平移画布" onClick={() => onTool("pan")} />
+        <ChromeButton active={canvasTool === "select"} icon={MousePointer2} label="框选节点(拖拽圈选)" onClick={() => onTool("select")} />
+      </div>
+      <span className="momo-control-divider" />
       <div className="momo-control-group">
         <ChromeButton active={showConnections} icon={showConnections ? Eye : EyeOff} label="显示或隐藏连线" onClick={onToggleConnections} />
         <ChromeButton active={showMiniMap} icon={Map} label="画布小地图" onClick={onMiniMap} />

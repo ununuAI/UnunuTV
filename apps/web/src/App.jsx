@@ -352,6 +352,7 @@ export default function App({ initialProjectId = null }) {
     <MomoCanvasChrome
       activePanel={tab}
       canMutate
+      canvasTool={canvasTool}
       light={light}
       onAdd={(event) => { setSideToolbarSurface(null); const rect = event.currentTarget.getBoundingClientRect(); canvasRef.current?.openAddMenu({ x: rect.right + 16, y: Math.max(16, rect.top - 42) }); }}
       onAssets={() => toggleSideToolbarPanel("assets")}
@@ -364,6 +365,7 @@ export default function App({ initialProjectId = null }) {
       onSettings={() => toggleSideToolbarPanel("settings")}
       onTheme={() => setLight((value) => !value)}
       onTimeline={() => setTimelineOpen((value) => !value)}
+      onTool={setCanvasTool}
       onToolbox={() => toggleSideToolbarPanel("toolbox")}
       onToggleConnections={() => setShowConnections((value) => !value)}
       onWorkflow={() => toggleSideToolbarPanel("assetManager")}

@@ -461,6 +461,7 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
       panOnDrag={canvasTool === "pan"}
       panOnScroll
       onlyRenderVisibleElements
+      selectionMode="partial"
       selectionOnDrag={canvasTool === "select"}
       selectionKeyCode={null}
       zoomOnDoubleClick={false}

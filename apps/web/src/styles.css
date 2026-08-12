@@ -4627,3 +4627,7 @@ textarea { padding: 10px; resize: vertical; font-family: "SFMono-Regular", Conso
   flex: 0 0 auto; padding: 4px 9px; border-radius: 5px; font-size: 11.5px;
   background: rgba(27,46,48,.92); border: 1px solid #6fb3b8; color: #6fb3b8; white-space: nowrap;
 }
+/* 框选模式:光标提示当前是圈选而不是平移 */
+.canvas-tool-select .react-flow__pane { cursor: crosshair; }
+.canvas-tool-pan .react-flow__pane { cursor: grab; }
+.canvas-tool-pan .react-flow__pane.dragging { cursor: grabbing; }
