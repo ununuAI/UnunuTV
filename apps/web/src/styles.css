@@ -4631,3 +4631,10 @@ textarea { padding: 10px; resize: vertical; font-family: "SFMono-Regular", Conso
 .canvas-tool-select .react-flow__pane { cursor: crosshair; }
 .canvas-tool-pan .react-flow__pane { cursor: grab; }
 .canvas-tool-pan .react-flow__pane.dragging { cursor: grabbing; }
+/* 导演台框选矩形 */
+.director-marquee {
+  position: absolute; z-index: 7; pointer-events: none;
+  border: 1px solid #6fb3b8; background: rgba(111, 179, 184, .14);
+  border-radius: 2px;
+}
+.director-stage-viewport.is-marquee canvas { cursor: crosshair; }

@@ -305,6 +305,72 @@ function AxisViewRig({ request }) {
   return null;
 }
 
+/** 框选:在视口上拖出一个矩形,把投影落在框内的对象一次选中。
+ *  用世界坐标投影到屏幕来判定,不做 GPU 拾取——对 previs 这种量级足够,
+ *  而且不受遮挡影响(被前排挡住的人也能框到)。 */
+function MarqueeSelect({ active, objectIds, onRect, onPick }) {
+  const { camera, gl, scene, controls, size } = useThree();
+  const state = useRef(null);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const el = gl.domElement;
+    const local = (event) => {
+      const rect = el.getBoundingClientRect();
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    };
+
+    const down = (event) => {
+      if (event.button !== 0) return;
+      state.current = { from: local(event), to: local(event) };
+      if (controls) controls.enabled = false;
+      el.setPointerCapture?.(event.pointerId);
+      onRect?.(state.current);
+    };
+    const move = (event) => {
+      if (!state.current) return;
+      state.current = { ...state.current, to: local(event) };
+      onRect?.(state.current);
+    };
+    const up = (event) => {
+      const box = state.current;
+      state.current = null;
+      if (controls) controls.enabled = true;
+      el.releasePointerCapture?.(event.pointerId);
+      onRect?.(null);
+      if (!box) return;
+      const left = Math.min(box.from.x, box.to.x);
+      const right = Math.max(box.from.x, box.to.x);
+      const top = Math.min(box.from.y, box.to.y);
+      const bottom = Math.max(box.from.y, box.to.y);
+      if (right - left < 4 && bottom - top < 4) { onPick?.([], event.shiftKey || event.metaKey); return; }
+      const picked = [];
+      const vector = new THREE.Vector3();
+      for (const id of objectIds) {
+        const object = scene.getObjectByName(id);
+        if (!object) continue;
+        object.getWorldPosition(vector).project(camera);
+        const sx = (vector.x * 0.5 + 0.5) * size.width;
+        const sy = (-vector.y * 0.5 + 0.5) * size.height;
+        if (sx >= left && sx <= right && sy >= top && sy <= bottom) picked.push(id);
+      }
+      onPick?.(picked, event.shiftKey || event.metaKey);
+    };
+
+    el.addEventListener("pointerdown", down);
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    return () => {
+      el.removeEventListener("pointerdown", down);
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      if (controls) controls.enabled = true;
+    };
+  }, [active, camera, controls, gl, objectIds, onPick, onRect, scene, size]);
+
+  return null;
+}
+
 /** 地面拖拽:直接抓住角色在地面上拖,选中几个就一起动。
  *
  *  不用 TransformControls —— three r169+ 把它改成了 Controls 子类、手柄要走
@@ -405,6 +471,9 @@ export function DirectorStageScene({
   panorama,
   localModels,
   gizmo,            // "translate" | "rotate" | "scale" | null
+  marquee,          // true 时左键拖拽为框选
+  onMarqueeRect,
+  onMarqueePick,
   axisView,
   onSelect,
   onTransform,
@@ -461,12 +530,16 @@ export function DirectorStageScene({
 
       {/* 场景内直接拖拽摆位:松手才落盘,拖动期间由 makeDefault 的 OrbitControls 自动让位 */}
       {!cameraView ? (
-        <GroundDrag enabled={Boolean(gizmo)} onSelect={onSelect} onTransform={onTransform}
+        <GroundDrag enabled={Boolean(gizmo) && !marquee} onSelect={onSelect} onTransform={onTransform}
           selectedIds={selectedIds} snap={gridSnap} />
+      ) : null}
+      {!cameraView ? (
+        <MarqueeSelect active={Boolean(marquee)} objectIds={objects.map((item) => item.id)}
+          onPick={onMarqueePick} onRect={onMarqueeRect} />
       ) : null}
 
       {!cameraView ? <AxisViewRig request={axisView} /> : null}
-      {!cameraView ? <OrbitControls makeDefault maxPolarAngle={Math.PI / 2.02} target={[0, 1, 0]} /> : null}
+      {!cameraView ? <OrbitControls enableRotate={!marquee} makeDefault maxPolarAngle={Math.PI / 2.02} target={[0, 1, 0]} /> : null}
     </Canvas>
   );
 }

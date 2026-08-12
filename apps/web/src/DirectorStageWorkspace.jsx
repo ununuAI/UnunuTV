@@ -90,6 +90,8 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
   const [groundOpacity, setGroundOpacity] = useState(0.85);
   const [busy, setBusy] = useState(false);
   const [gizmo, setGizmo] = useState("translate");
+  const [stageTool, setStageTool] = useState("drag");   // drag | marquee
+  const [marqueeRect, setMarqueeRect] = useState(null);
   const [axisView, setAxisView] = useState(null);
   const [panoramaId, setPanoramaId] = useState("");
   const [panoramaRadius, setPanoramaRadius] = useState(40);
@@ -212,6 +214,21 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
       if (!additive) return [id];
       return current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
     });
+  }, []);
+
+  /** 把同一处改动套到所有选中对象上,一次串行提交。 */
+  const patchSelected = (patch, onlyCharacters = false) => {
+    const list = (stageRef.current?.objects ?? []).filter((item) =>
+      selectedIds.includes(item.id) && (!onlyCharacters || item.type === "character"));
+    if (!list.length) return;
+    void runMany(list.map((object) => ({
+      type: "upsert_object",
+      payload: { object: { ...object, ...(typeof patch === "function" ? patch(object) : patch) } }
+    })));
+  };
+
+  const onMarqueePick = useCallback((ids, additive) => {
+    setSelectedIds((current) => (additive ? [...new Set([...current, ...ids])] : ids));
   }, []);
 
   const objects = liveStage?.objects ?? [];
@@ -474,11 +491,14 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
 
   return (
     <div className="director-console-node-workspace director-stage-v2">
-      <div className="director-stage-viewport">
+      <div className={`director-stage-viewport${stageTool === "marquee" ? " is-marquee" : ""}`}>
         <DirectorStageScene
           activeCameraId={activeCamera?.id}
           axisView={axisView}
           gizmo={selectedIds.length ? gizmo : null}
+          marquee={stageTool === "marquee"}
+          onMarqueePick={onMarqueePick}
+          onMarqueeRect={setMarqueeRect}
           gridSnap={gridSnap}
           groundOpacity={groundOpacity}
           localModels={localModels}
@@ -491,6 +511,17 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
           viewMode={viewMode}
         />
         {viewMode === "camera" ? <ViewportOverlay aspect={overlayAspect} showMask={showMask} showThirds={showThirds} /> : null}
+        {marqueeRect ? (
+          <div
+            className="director-marquee"
+            style={{
+              left: Math.min(marqueeRect.from.x, marqueeRect.to.x),
+              top: Math.min(marqueeRect.from.y, marqueeRect.to.y),
+              width: Math.abs(marqueeRect.to.x - marqueeRect.from.x),
+              height: Math.abs(marqueeRect.to.y - marqueeRect.from.y)
+            }}
+          />
+        ) : null}
 
         <div className="director-viewtabs nodrag nopan">
           <button className={viewMode === "director" ? "on" : ""} onClick={() => setViewMode("director")} type="button">导演视角</button>
@@ -519,9 +550,8 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
         {/* 底部工具坞:高频动作放这里,右侧面板只留属性 */}
         <div className="director-dock nodrag nopan nowheel">
           <DockGroup>
-            {[["translate", "移动"], ["rotate", "旋转"], ["scale", "缩放"]].map(([mode, label]) => (
-              <button className={gizmo === mode ? "on" : ""} key={mode} onClick={() => setGizmo(mode)} type="button">{label}</button>
-            ))}
+            <button className={stageTool === "drag" ? "on" : ""} onClick={() => setStageTool("drag")} type="button">拖动</button>
+            <button className={stageTool === "marquee" ? "on" : ""} onClick={() => setStageTool("marquee")} type="button">框选</button>
             {selectedIds.length > 1 ? <span className="dock-badge">已选 {selectedIds.length}</span> : null}
           </DockGroup>
 
@@ -605,7 +635,31 @@ export function DirectorStageWorkspace({ node, canvas, projectId, canvasId, noti
         {selectedIds.length > 1 ? (
           <section>
             <header>已选 {selectedIds.length} 个<small>整组可拖</small></header>
-            <p className="hint">在场景里拖动手柄可整组移动;切到「旋转」会绕这组的质心转。</p>
+            <p className="hint">直接在地面上拖动可整组移动。下面的改动会套用到选中的全部角色。</p>
+            <label className="field"><span>素体</span>
+              <select onChange={(event) => { patchSelected({ bodyType: event.target.value }, true); event.target.value = ""; }} value="">
+                <option disabled value="">批量设置…</option>
+                {BODY_TYPE_NAMES.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+            <label className="field"><span>姿势</span>
+              <select onChange={(event) => { patchSelected({ pose: POSE_PRESETS[event.target.value] }, true); event.target.value = ""; }} value="">
+                <option disabled value="">批量设置…</option>
+                {POSE_NAMES.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+            <label className="field"><span>姿势抖动</span>
+              <button disabled={busy} onClick={() => patchSelected((object) => {
+                // 群众整齐划一很假,给每个人叠一点随机偏移
+                const base = object.pose ?? POSE_PRESETS.站立;
+                const jitter = (v) => v + (Math.random() - 0.5) * 0.18;
+                return { pose: Object.fromEntries(Object.entries(base).map(([k, v]) => [k, v.map(jitter)])),
+                         rotation: { ...object.rotation, y: (object.rotation?.y ?? 0) + (Math.random() - 0.5) * 0.5 } };
+              }, true)} type="button">打散一点</button>
+            </label>
+            <label className="field"><span>颜色</span>
+              <input onChange={(event) => patchSelected({ color: event.target.value })} type="color" value="#8f959f" />
+            </label>
             <div className="director-add-row">
               <button disabled={busy} onClick={() => setSelectedIds([])} type="button">取消选择</button>
               <button className="danger" disabled={busy} onClick={() => {
