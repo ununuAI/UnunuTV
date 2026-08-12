@@ -37,8 +37,9 @@ export function MomoAssetNode({ actions, boardHistory = [], displayedMediaId, me
   const displayedBoard = boardHistory.find((entry) => entry.mediaId === displayedMediaId) || null;
   const reviewState = mediaReviewStateForNode(node, displayedMediaId);
   const authorityAggregate = node.payload?.authorityAggregation || node.payload?.authorityAggregate || null;
-  const aggregateFormal = Boolean(authorityAggregate.currentApproved || authorityAggregate.displayMediaFormal);
-  const aggregateVersionCount = authorityAggregate.versions?.length || authorityAggregate.candidates?.length || 0;
+  // 没有权威聚合是常态,两个派生值只在下面 authorityAggregate 为真的分支里用到
+  const aggregateFormal = Boolean(authorityAggregate?.currentApproved || authorityAggregate?.displayMediaFormal);
+  const aggregateVersionCount = authorityAggregate?.versions?.length || authorityAggregate?.candidates?.length || 0;
   const visibleTypes = useMemo(() => {
     const needle = typeQuery.trim().toLowerCase();
     return needle ? INDUSTRIAL_ASSET_TYPES.filter(([id, label]) => `${id} ${label}`.toLowerCase().includes(needle)) : INDUSTRIAL_ASSET_TYPES;
