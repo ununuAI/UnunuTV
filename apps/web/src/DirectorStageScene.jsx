@@ -13,12 +13,10 @@ import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Grid, Line, OrbitControls, PerspectiveCamera, TransformControls, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { BODY_TYPES, JOINT, readBodyType, readPose } from "./director-pose-presets.js";
 
 const MODEL_URL = "/models/mannequin.glb";
-// 模型原始网格 182.12 单位高,骨骼根 Bones_01 带 0.0254 缩放(英寸→米),
-// 因此实际渲染高度约 4.63 单位。按目标身高归一化,否则每个人都有四米六。
-const MODEL_NATIVE_HEIGHT = 182.12 * 0.0254;
 useGLTF.preload(MODEL_URL);
 
 const v3 = (value, fallback = 0) => new THREE.Vector3(
@@ -37,20 +35,24 @@ function Mannequin({ object, selected, onSelect }) {
   const { scene } = useGLTF(MODEL_URL);
   const group = useRef(null);
 
+  // 蒙皮模型必须用 SkeletonUtils.clone:普通 clone 不会重新 bind,
+  // 骨骼失效后网格会按原始 182 单位渲染,相机就埋在它脚背里 —— 看起来就是空场景。
   const instance = useMemo(() => {
-    const clone = scene.clone(true);
+    const clone = cloneSkinned(scene);
     const bones = new Map();
-    clone.traverse((child) => { if (child.isBone) bones.set(child.name, child); });
+    const bind = new Map();
     clone.traverse((child) => {
-      if (!child.isSkinnedMesh) return;
-      const source = child.skeleton;
-      child.skeleton = new THREE.Skeleton(
-        source.bones.map((bone) => bones.get(bone.name) ?? bone),
-        source.boneInverses
-      );
-      child.material = child.material.clone();
+      if (child.isBone) {
+        bones.set(child.name, child);
+        // 记下绑定姿态:姿势是在它之上的偏移,直接归零会把骨架拧坏
+        bind.set(child.name, child.rotation.clone());
+      }
+      if (child.isSkinnedMesh || child.isMesh) child.material = child.material.clone();
     });
-    return { clone, bones };
+    // 按实测包围盒归一化,不依赖任何写死的尺度常量
+    const box = new THREE.Box3().setFromObject(clone);
+    const nativeHeight = Math.max(0.001, box.max.y - box.min.y);
+    return { clone, bones, bind, nativeHeight };
   }, [scene]);
 
   const pose = readPose(object);
@@ -61,9 +63,9 @@ function Mannequin({ object, selected, onSelect }) {
     for (const [short, prefix] of Object.entries(JOINT)) {
       const bone = find(prefix);
       if (!bone) continue;
-      const angles = pose[short];
-      bone.rotation.set(0, 0, 0);
-      if (Array.isArray(angles) && angles.length === 3) bone.rotation.set(...angles);
+      const base = instance.bind.get(bone.name) ?? new THREE.Euler();
+      const angles = Array.isArray(pose[short]) && pose[short].length === 3 ? pose[short] : [0, 0, 0];
+      bone.rotation.set(base.x + angles[0], base.y + angles[1], base.z + angles[2]);
     }
     const spine = find(JOINT.spine);
     if (spine) spine.scale.set(body.girth, 1, body.girth);
@@ -84,7 +86,7 @@ function Mannequin({ object, selected, onSelect }) {
   const position = v3(object.position);
   const rotation = v3(object.rotation);
   const targetHeight = Number.isFinite(object.size?.y) ? object.size.y : 1.8;
-  const scale = body.scale * (targetHeight / MODEL_NATIVE_HEIGHT);
+  const scale = body.scale * (targetHeight / instance.nativeHeight);
 
   return (
     <group
@@ -103,12 +105,12 @@ function Mannequin({ object, selected, onSelect }) {
           <meshBasicMaterial color="#6fb3b8" opacity={0.9} transparent />
         </mesh>
       ) : null}
-      <Billboard label={object.label} />
+      <Billboard height={instance.nativeHeight} label={object.label} />
     </group>
   );
 }
 
-function Billboard({ label }) {
+function Billboard({ label, height = 2 }) {
   const ref = useRef(null);
   useFrame(({ camera }) => { ref.current?.quaternion.copy(camera.quaternion); });
   const texture = useMemo(() => {
@@ -127,7 +129,7 @@ function Billboard({ label }) {
     return map;
   }, [label]);
   return (
-    <sprite position={[0, 2.1, 0]} ref={ref} scale={[0.9, 0.225, 1]}>
+    <sprite position={[0, height * 1.08, 0]} ref={ref} scale={[height * 0.5, height * 0.125, 1]}>
       <spriteMaterial depthTest={false} map={texture} transparent />
     </sprite>
   );
