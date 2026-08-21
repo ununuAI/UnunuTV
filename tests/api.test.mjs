@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import http from "node:http";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -87,6 +87,46 @@ test("HTTP API creates and reopens a canvas", async (context) => {
   assert.equal(restored.id, node.id);
   const canvas = await fetch(`${base}/api/projects/${created.project.id}/canvases/${created.canvas.id}`).then((response) => response.json());
   assert.equal(canvas.nodes[0].title, "镜头 A");
+});
+
+test("signed public media supports HEAD validation before a remote provider downloads it", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-provider-media-head-"));
+  const service = createUnuTvServer({
+    dataRoot,
+    publisher: { publicBaseUrl: "https://media.example.test", signingSecret: "provider-media-head-secret" }
+  });
+  context.after(() => service.close());
+  const address = await service.listen(0);
+  const base = `http://127.0.0.1:${address.port}`;
+  const { project } = await fetch(`${base}/api/projects`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "Provider media HEAD" })
+  }).then((response) => response.json());
+  const imagePath = path.join(dataRoot, "provider-reference.png");
+  await writeFile(imagePath, Buffer.from("provider-reference-image"));
+  const media = await fetch(`${base}/api/projects/${project.id}/media/import`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ filePath: imagePath, kind: "image" })
+  }).then((response) => response.json());
+  const publication = await fetch(`${base}/api/projects/${project.id}/media/${media.id}/publish`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "autodl", expiresInSeconds: 3600 })
+  }).then((response) => response.json());
+  const remoteUrl = new URL(publication.remoteUrl);
+  const head = await new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: "127.0.0.1",
+      port: address.port,
+      path: `${remoteUrl.pathname}${remoteUrl.search}`,
+      method: "HEAD",
+      headers: { host: remoteUrl.host }
+    }, (response) => {
+      response.resume();
+      response.on("end", () => resolve({ status: response.statusCode, headers: response.headers }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers["content-type"], "image/png");
+  assert.equal(Number(head.headers["content-length"]), Buffer.byteLength("provider-reference-image"));
 });
 
 test("HTTP API sends large multibyte JSON bodies without truncation", async (context) => {

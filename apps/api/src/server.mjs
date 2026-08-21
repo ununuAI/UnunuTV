@@ -181,7 +181,7 @@ async function dispatch(request, response, runtime, webRoot) {
       publicMediaBaseUrl: runtime.publisher.publicBaseUrl || null
     });
   }
-  if ((params = route(method, pathname, "GET", "/provider-media/:projectId/:mediaId"))) {
+  if ((params = route(method, pathname, method === "HEAD" ? "HEAD" : "GET", "/provider-media/:projectId/:mediaId"))) {
     const media = runtime.publisher.openSigned({
       ...params,
       expires: url.searchParams.get("expires"),
