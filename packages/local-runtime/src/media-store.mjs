@@ -5,7 +5,6 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { UnuTvError, createId, nowIso } from "@ununu/unutv-contracts";
 import { mediaDirectoryForKind } from "@ununu/unutv-core";
-import { projectDirectory } from "./paths.mjs";
 
 const MIME_BY_EXTENSION = {
   ".png": "image/png",
@@ -13,6 +12,7 @@ const MIME_BY_EXTENSION = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
   ".gif": "image/gif",
+  ".avif": "image/avif",
   ".mp4": "video/mp4",
   ".mov": "video/quicktime",
   ".m4v": "video/x-m4v",
@@ -22,6 +22,7 @@ const MIME_BY_EXTENSION = {
   ".m4a": "audio/mp4",
   ".aac": "audio/aac",
   ".flac": "audio/flac",
+  ".ogg": "audio/ogg",
   ".spz": "model/vnd.gaussian-splat",
   ".ply": "model/vnd.gaussian-splat",
   ".splat": "model/vnd.gaussian-splat",
@@ -31,9 +32,9 @@ const MIME_BY_EXTENSION = {
 };
 
 const EXTENSION_BY_MIME = {
-  "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+  "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif", "image/avif": ".avif",
   "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
-  "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/wav": ".wav", "audio/mp4": ".m4a", "audio/aac": ".aac",
+  "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/wave": ".wav", "audio/vnd.wave": ".wav", "audio/mp4": ".m4a", "audio/x-m4a": ".m4a", "audio/aac": ".aac", "audio/flac": ".flac", "audio/ogg": ".ogg",
   "model/vnd.gaussian-splat": ".spz"
 };
 
@@ -99,6 +100,9 @@ export class LocalMediaStore {
     this.audioSeparatorModel = options.audioSeparatorModel ?? process.env.UNUTV_AUDIO_SEPARATOR_MODEL ?? "htdemucs";
   }
 
+  projectRoot(projectId) {
+    return this.projects.mediaRoot(projectId);
+  }
   async importFile(input) {
     const sourceStat = await stat(input.filePath);
     if (!sourceStat.isFile()) throw new Error(`Media source is not a file: ${input.filePath}`);
@@ -106,8 +110,8 @@ export class LocalMediaStore {
     const extension = path.extname(input.filePath).toLowerCase();
     const relativeDirectory = mediaDirectoryForKind(input.kind, input.generated);
     const relativePath = path.posix.join(relativeDirectory, `${id}${extension}`);
-    const directory = path.join(projectDirectory(this.dataRoot, input.projectId), relativeDirectory);
-    const targetPath = path.join(projectDirectory(this.dataRoot, input.projectId), relativePath);
+    const directory = path.join(this.projectRoot(input.projectId), relativeDirectory);
+    const targetPath = path.join(this.projectRoot(input.projectId), relativePath);
     const partialPath = `${targetPath}.partial`;
     await mkdir(directory, { recursive: true });
     await copyFile(input.filePath, partialPath);
@@ -138,8 +142,8 @@ export class LocalMediaStore {
     const extension = EXTENSION_BY_MIME[input.mimeType] || (input.kind === "image" ? ".png" : input.kind === "video" ? ".mp4" : input.kind === "world" ? ".spz" : ".mp3");
     const relativeDirectory = mediaDirectoryForKind(input.kind, true);
     const relativePath = path.posix.join(relativeDirectory, `${id}${extension}`);
-    const directory = path.join(projectDirectory(this.dataRoot, input.projectId), relativeDirectory);
-    const targetPath = path.join(projectDirectory(this.dataRoot, input.projectId), relativePath);
+    const directory = path.join(this.projectRoot(input.projectId), relativeDirectory);
+    const targetPath = path.join(this.projectRoot(input.projectId), relativePath);
     const partialPath = `${targetPath}.partial`;
     await mkdir(directory, { recursive: true });
     await writeFile(partialPath, bytes);
@@ -171,10 +175,27 @@ export class LocalMediaStore {
     const opened = this.open(input.projectId, input.mediaId);
     if (!opened) throw new UnuTvError("media_not_found", `Media not found: ${input.mediaId}`, 404);
     if (opened.kind !== "video") throw new UnuTvError("video_media_required", "Frame extraction requires video media", 400);
-    const bytes = await runProcess(this.ffmpegPath, [
-      "-hide_banner", "-loglevel", "error", "-ss", String(input.seconds), "-i", opened.filePath,
+    const decodeAt = (seconds) => runProcess(this.ffmpegPath, [
+      "-hide_banner", "-loglevel", "error", "-ss", String(seconds), "-i", opened.filePath,
       "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"
-    ], { captureStdout: true, maxStdoutBytes: 64_000_000 });
+    ], {
+      captureStdout: true,
+      failureCode: "frame_extraction_failed",
+      failureMessage: "当前时间点的视频帧解码失败，请稍微移动播放位置后重试。",
+      maxStdoutBytes: 64_000_000
+    });
+    let extractedSeconds = Number(input.seconds) || 0;
+    let bytes = await decodeAt(extractedSeconds);
+    if (!bytes.length && extractedSeconds > 0) {
+      extractedSeconds = Math.max(0, extractedSeconds - 0.1);
+      bytes = await decodeAt(extractedSeconds);
+    }
+    if (!bytes.length) {
+      throw new UnuTvError("frame_extraction_empty", "当前时间点没有可解码画面，请把播放位置稍微向前移动后重试。", 422, {
+        requestedSeconds: input.seconds,
+        retriedSeconds: extractedSeconds
+      });
+    }
     return this.importBytes({
       projectId: input.projectId,
       nodeId: input.nodeId ?? null,
@@ -191,7 +212,7 @@ export class LocalMediaStore {
     if (!["audio", "video"].includes(opened.kind)) {
       throw new UnuTvError("audio_source_media_required", "Audio separation requires audio or video media", 400);
     }
-    const projectRoot = projectDirectory(this.dataRoot, input.projectId);
+    const projectRoot = this.projectRoot(input.projectId);
     const temporaryRoot = await mkdtemp(path.join(projectRoot, ".audio-separation-"));
     const sourceBaseName = path.basename(opened.filePath, path.extname(opened.filePath));
     const originalMixPath = path.join(temporaryRoot, "original_mix.wav");
@@ -221,8 +242,9 @@ export class LocalMediaStore {
         { filePath: path.join(separatedDirectory, "vocals.wav"), role: "dialogue_candidate", title: "对白/人声候选 stem（待审核）" },
         { filePath: path.join(separatedDirectory, "no_vocals.wav"), role: "background_candidate", title: "环境/音乐/拟音候选 stem（待审核）" }
       ];
+      const requestedRoles = Array.isArray(input.roles) && input.roles.length ? new Set(input.roles) : null;
       const stems = [];
-      for (const definition of definitions) {
+      for (const definition of definitions.filter((item) => !requestedRoles || requestedRoles.has(item.role))) {
         const media = await this.importFile({
           projectId: input.projectId,
           nodeId: null,
@@ -249,9 +271,9 @@ export class LocalMediaStore {
   async prepare(input) {
     const opened = this.open(input.projectId, input.mediaId);
     if (!opened) throw new UnuTvError("media_not_found", `Media not found: ${input.mediaId}`, 404);
-    const projectRoot = projectDirectory(this.dataRoot, input.projectId);
-    const thumbnailRelativePath = opened.kind === "video" || opened.kind === "image" ? path.posix.join("media/thumbnails", `${opened.id}.jpg`) : null;
-    const proxyRelativePath = opened.kind === "video" ? path.posix.join("media/proxies", `${opened.id}.mp4`) : null;
+    const projectRoot = this.projectRoot(input.projectId);
+    const thumbnailRelativePath = opened.kind === "video" || opened.kind === "image" ? path.posix.join(".cache/thumbnails", `${opened.id}.jpg`) : null;
+    const proxyRelativePath = opened.kind === "video" ? path.posix.join(".cache/proxies", `${opened.id}.mp4`) : null;
     const thumbnailPath = thumbnailRelativePath ? path.join(projectRoot, thumbnailRelativePath) : null;
     const proxyPath = proxyRelativePath ? path.join(projectRoot, proxyRelativePath) : null;
     const probeBytes = await runProcess(this.ffprobePath, ["-v", "error", "-show_streams", "-show_format", "-of", "json", opened.filePath], { captureStdout: true, maxStdoutBytes: 4_000_000 });
@@ -278,7 +300,7 @@ export class LocalMediaStore {
   open(projectId, mediaId) {
     const media = this.projects.getMedia(projectId, mediaId);
     if (!media) return undefined;
-    return { ...media, filePath: path.join(projectDirectory(this.dataRoot, projectId), media.relativePath) };
+    return { ...media, filePath: path.join(this.projectRoot(projectId), media.relativePath) };
   }
 
   openPrepared(projectId, mediaId, role) {
@@ -287,7 +309,7 @@ export class LocalMediaStore {
     const relativePath = role === "proxy" ? preparation.proxyRelativePath : role === "thumbnail" ? preparation.thumbnailRelativePath : null;
     if (!relativePath) return undefined;
     return {
-      filePath: path.join(projectDirectory(this.dataRoot, projectId), relativePath),
+      filePath: path.join(this.projectRoot(projectId), relativePath),
       mimeType: role === "proxy" ? "video/mp4" : "image/jpeg"
     };
   }

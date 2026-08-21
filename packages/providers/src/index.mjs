@@ -8,6 +8,8 @@ import { buildUnunuImageEditForm } from "./ununu-image-edit-form.mjs";
 import { responseError } from "./provider-response-error.mjs";
 import { submitTextCompletion } from "./text-completion.mjs";
 import { listGatewayModels } from "./gateway-model-listing.mjs";
+import { cancelLocalH3, pollLocalH3, submitLocalH3 } from "./local-h3-comfy-provider.mjs";
+import { inspectH3MotionContextCapabilities } from "./local-h3-motion-context-provider.mjs";
 const VIDEO_SUCCESS = new Set(["completed", "complete", "succeeded", "success", "done"]);
 const VIDEO_FAILURE = new Set(["failed", "error", "cancelled", "canceled", "expired"]);
 function deterministicGatewayRequestId(input) {
@@ -19,11 +21,11 @@ function credential(...values) {
   return values.find((value) => typeof value === "string" && value.trim())?.trim();
 }
 function findTaskId(payload) {
-  return payload?.id ?? payload?.task_id ?? payload?.taskId ?? payload?.data?.id;
+  return payload?.id ?? payload?.task_id ?? payload?.taskId ?? payload?.task?.id ?? payload?.task?.task_id ?? payload?.data?.id;
 }
 
 function statusOf(payload) {
-  return String(payload?.status ?? payload?.task_status ?? payload?.state ?? "pending").toLowerCase();
+  return String(payload?.status ?? payload?.task_status ?? payload?.state ?? payload?.task?.status ?? payload?.task?.state ?? "pending").toLowerCase();
 }
 
 function videoUrls(payload) {
@@ -258,6 +260,69 @@ async function submitArk(input, config, fetchImpl) {
   };
 }
 
+async function submitMiniMaxH3(input, config, fetchImpl) {
+  if (!config.apiKey) throw new UnuTvError("provider_not_configured", "MINIMAX_API_KEY is not configured", 409);
+  const prompt = String(input.request.prompt || "").trim();
+  if (!prompt) throw new UnuTvError("h3_prompt_required", "MiniMax H3 requires a prompt", 400);
+  const firstFrameId = input.request.firstFrameMediaId;
+  const lastFrameId = input.request.lastFrameMediaId;
+  const ordinaryReferenceIds = referenceIds(input).filter((id) => id !== firstFrameId && id !== lastFrameId);
+  if ((firstFrameId || lastFrameId) && ordinaryReferenceIds.length) {
+    throw new UnuTvError(
+      "provider_mode_reference_conflict",
+      "MiniMax H3 cannot mix first/last-frame input with ordinary reference media",
+      409
+    );
+  }
+  if (ordinaryReferenceIds.length > 9) {
+    throw new UnuTvError("too_many_video_references", "MiniMax H3 accepts at most 9 reference images", 400);
+  }
+  const firstFrame = firstFrameId ? await mediaUrl(firstFrameId, input) : null;
+  const lastFrame = lastFrameId ? await mediaUrl(lastFrameId, input) : null;
+  const references = await Promise.all(ordinaryReferenceIds.map((mediaId) => mediaUrl(mediaId, input)));
+  const content = [{ type: "text", text: prompt }];
+  if (firstFrame) content.push({ type: "image_url", image_url: { url: firstFrame.url }, role: "first_frame" });
+  if (lastFrame) content.push({ type: "image_url", image_url: { url: lastFrame.url }, role: "last_frame" });
+  for (const reference of references) {
+    if (reference.media.kind !== "image") {
+      throw new UnuTvError("h3_reference_kind_unsupported", "The current H3 canvas mode accepts image references only", 400);
+    }
+    content.push({ type: "image_url", image_url: { url: reference.url }, role: "reference_image" });
+  }
+  const frameMode = Boolean(firstFrame || lastFrame);
+  const requestPayload = {
+    model: input.request.model || config.model,
+    content,
+    duration: Math.max(4, Math.min(15, Number(input.request.duration) || 4)),
+    resolution: String(input.request.resolution || "768p").toLowerCase() === "2k" ? "2K" : "768P",
+    ratio: frameMode ? "adaptive" : input.request.aspectRatio || "16:9"
+  };
+  const response = await fetchImpl(config.baseUrl + "/v2/video_generation", {
+    method: "POST",
+    headers: { authorization: "Bearer " + config.apiKey, "content-type": "application/json" },
+    body: JSON.stringify(requestPayload)
+  });
+  if (!response.ok) throw await responseError(response, "MiniMax H3 video submit failed");
+  const payload = await response.json();
+  const taskId = findTaskId(payload);
+  if (!taskId) throw new UnuTvError("provider_task_missing", "MiniMax H3 response did not contain a task id", 502);
+  return {
+    status: "running",
+    task: { provider: "minimax", taskId: String(taskId) },
+    requestSummary: {
+      model: requestPayload.model,
+      duration: requestPayload.duration,
+      resolution: requestPayload.resolution,
+      ratio: requestPayload.ratio,
+      firstFrameMediaId: firstFrameId,
+      lastFrameMediaId: lastFrameId,
+      referenceMediaIds: ordinaryReferenceIds,
+      promptSource: "node_prompt"
+    },
+    submitResponse: payload
+  };
+}
+
 async function submitOpenRouter(input, config, fetchImpl) {
   if (!config.apiKey) throw new UnuTvError("provider_not_configured", "OPENROUTER_API_KEY is not configured", 409);
   const firstFrameId = input.request.firstFrameMediaId;
@@ -382,8 +447,10 @@ async function pollVideo(input, configs, fetchImpl) {
   const config = configs[task.provider];
   if (!config?.apiKey) throw new UnuTvError("provider_not_configured", `Credential is not configured for ${task.provider}`, 409);
   const url = task.pollingUrl || (task.provider === "ark"
-    ? `${config.baseUrl}/contents/generations/tasks/${encodeURIComponent(task.taskId)}`
-    : `${config.baseUrl}/videos/${encodeURIComponent(task.taskId)}`);
+    ? config.baseUrl + "/contents/generations/tasks/" + encodeURIComponent(task.taskId)
+    : task.provider === "minimax"
+      ? config.baseUrl + "/v2/query/video_generation/" + encodeURIComponent(task.taskId)
+      : config.baseUrl + "/videos/" + encodeURIComponent(task.taskId));
   const response = await fetchImpl(url, { headers: { authorization: `Bearer ${config.apiKey}`, accept: "application/json" } });
   if (!response.ok) throw await responseError(response, "Video task polling failed");
   const payload = await response.json();
@@ -455,7 +522,7 @@ export function createProviderRouter(options = {}) {
         ark: { provider: "ark", label: "Ark", apiKey: credential(env.ARK_API_KEY, env.VOLCENGINE_ARK_API_KEY, env.ARK_BEARER_TOKEN), baseUrl: env.ARK_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3", model: env.ARK_TEXT_MODEL || null }
       },
       "ark-tts": { apiKey: credential(env.ARK_TTS_API_KEY, env.ARK_API_KEY, env.VOLCENGINE_ARK_API_KEY), baseUrl: env.ARK_TTS_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3", path: env.ARK_TTS_SPEECH_PATH || "/audio/speech", model: env.ARK_TTS_MODEL || "doubao-seed-tts-2.0", voiceId: env.ARK_TTS_VOICE_ID },
-      openspeech: { apiKey: credential(env.OPENSPEECH_API_KEY), baseUrl: env.OPENSPEECH_BASE_URL || "https://openspeech.bytedance.com/api/v3", model: env.OPENSPEECH_AUDIO_MODEL || "seed-audio-1.0", speakerId: env.OPENSPEECH_SPEAKER_ID }
+      openspeech: { apiKey: credential(env.OPENSPEECH_API_KEY, env.ARK_API_KEY, env.VOLCENGINE_ARK_API_KEY, env.ARK_BEARER_TOKEN), baseUrl: env.OPENSPEECH_BASE_URL || "https://openspeech.bytedance.com/api/v3", model: env.OPENSPEECH_AUDIO_MODEL || "seed-audio-1.0", speakerId: env.OPENSPEECH_SPEAKER_ID }
     };
   };
   return {
@@ -463,13 +530,17 @@ export function createProviderRouter(options = {}) {
       const configs = configured();
       const enriched = { ...input, media: options.media, publisher: options.publisher };
       // 文本节点先分流:同一个 provider 名下文本走 chat/completions,和图片/视频不是一个端点
-      if (input.node.kind === "text") {
+      if (input.node.kind === "text" || input.node.kind === "script") {
         const textConfig = configs.text[input.run.provider];
         if (!textConfig) throw new UnuTvError("provider_not_configured", `文本生成不支持 provider: ${input.run.provider}`, 409);
         return submitTextCompletion(enriched, textConfig, fetchImpl);
       }
       if (input.run.provider === "ununu") return submitUnunuImage(enriched, configs.ununu, fetchImpl);
       if (input.run.provider === "ark") return submitArk(enriched, configs.ark, fetchImpl);
+      if (input.run.provider === "minimax") {
+        if (!options.h3Remote) throw new UnuTvError("provider_not_configured", "H3 local runtime is not configured", 409);
+        return submitLocalH3(enriched, options.h3Remote, fetchImpl);
+      }
       if (input.run.provider === "openrouter" && input.node.kind === "image") return submitOpenRouterImage(enriched, configs.openrouter, fetchImpl);
       if (input.run.provider === "openrouter") return submitOpenRouter(enriched, configs.openrouter, fetchImpl);
       if (input.run.provider === "ark-tts") return submitTts(enriched, configs["ark-tts"], fetchImpl);
@@ -480,11 +551,35 @@ export function createProviderRouter(options = {}) {
     listModels() {
       return listGatewayModels(configured().text.ununu, fetchImpl);
     },
+    checkHealth(providerId) {
+      if (providerId === "minimax") return options.h3Remote?.checkHealth?.() ?? { configured: false, ok: false, state: "not_configured", message: "H3 local runtime is not configured" };
+      return { configured: true, ok: true, state: "not_applicable", message: "Provider does not expose a remote health probe" };
+    },
+    inspectH3MotionContext() {
+      if (!options.h3Remote) throw new UnuTvError("provider_not_configured", "H3 local runtime is not configured", 409);
+      return inspectH3MotionContextCapabilities(options.h3Remote, fetchImpl);
+    },
+    installH3MotionContext(input) {
+      if (!options.h3Remote?.installMotionContextPackage) throw new UnuTvError("h3_motion_context_install_unsupported", "H3 Motion Context installation is unavailable", 409);
+      return options.h3Remote.installMotionContextPackage(input);
+    },
+    exportH3MotionContextWorkflows(input) {
+      if (!options.h3Remote?.exportMotionContextWorkflows) throw new UnuTvError("h3_motion_context_export_unsupported", "H3 Motion Context workflow export is unavailable", 409);
+      return options.h3Remote.exportMotionContextWorkflows(input);
+    },
     poll(input) {
+      if (input.run.result?.task?.provider === "h3-local") return pollLocalH3(input, options.h3Remote, fetchImpl);
       return pollVideo(input, configured(), fetchImpl);
     },
     cancel(input) {
+      if (input.run.result?.task?.provider === "h3-local") {
+        if (!options.h3Remote) throw new UnuTvError("provider_not_configured", "H3 local runtime is not configured", 409);
+        return cancelLocalH3(input, options.h3Remote, fetchImpl);
+      }
       return cancelVideo(input, configured(), fetchImpl);
     }
   };
 }
+
+export { H3_LOCAL_PROFILES, buildLocalH3Workflow, h3Dimensions, h3FrameCount } from "./local-h3-comfy-provider.mjs";
+export { buildLocalH3MotionContextWorkflow, H3_MOTION_CONTEXT_NODE_TYPES, H3_MOTION_CONTEXT_SUPPORT_NODE_TYPES, inspectH3MotionContextCapabilities } from "./local-h3-motion-context-provider.mjs";

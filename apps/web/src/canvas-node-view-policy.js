@@ -103,8 +103,8 @@ export function canvasNodeIsExpanded(node) {
 export function canvasNodeViewTransition(node, expanded) {
   if (!nodeSupportsInlineWorkspace(node)) return node;
   if (node.kind === "cinematic") return cinematicNodeViewTransition(node, expanded);
-  // 导演台以全屏浮层打开,节点框不参与放大缩小,否则来回一次位置就会被避让算法挪动
-  if (node.kind === "director") return { payload: { ...(node.payload || {}), canvasExpanded: expanded } };
+  // 导演台、分镜脚本和图片编辑器以全屏浮层打开，节点框不参与放大缩小。
+  if (["director", "script", "imageEdit"].includes(node.kind)) return { payload: { ...(node.payload || {}), canvasExpanded: expanded } };
 
   const payload = node.payload || {};
   const currentSize = validSize(node, { width: 520, height: 340 });
@@ -128,8 +128,8 @@ export function canvasNodeViewTransition(node, expanded) {
 
 export function planCanvasNodeViewTransition(node, expanded, canvasNodes = [], { gutter = CANVAS_NODE_VIEW_GUTTER } = {}) {
   if (!nodeSupportsInlineWorkspace(node)) return node;
-  // 导演台不改尺寸,也就不需要避让重排——直接返回,位置保持原样
-  if (node.kind === "director") return canvasNodeViewTransition(node, expanded);
+  // 全屏浮层不改节点尺寸，也不触发避让重排。
+  if (["director", "script", "imageEdit"].includes(node.kind)) return canvasNodeViewTransition(node, expanded);
   const transition = canvasNodeViewTransition(node, expanded);
   const payload = transition.payload || {};
   const compactPosition = validPosition(payload.canvasCompactPosition, validPosition(node, { x: 0, y: 0 }));

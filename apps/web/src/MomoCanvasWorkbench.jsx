@@ -11,7 +11,7 @@ import { groupAsCanvasNode, imageGenerationStarterPrompt } from "./canvas-node-p
 import { useCanvasGenerationRunner } from "./canvas-generation-runner.js";
 import { exportPanoramaViews } from "./panorama-export.js";
 import { fittedMediaNodeHeight } from "./media-node-fit.js";
-import { gridCellRole } from "@ununu/unutv-contracts";
+import { gridCellRole, resolveTextNodeMode } from "@ununu/unutv-contracts";
 import { canvasNodeIsExpanded, nodeSupportsInlineWorkspace, planCanvasNodeViewTransition, projectCanvasNodeView } from "./canvas-node-view-policy.js";
 import { CANVAS_NODE_TYPES, DEFAULT_EDGE_OPTIONS, TEMP_NODE_ID } from "./canvas-flow-elements.jsx";
 import { useNodePayloadUpdater } from "./use-node-payload-updater.js";
@@ -21,12 +21,14 @@ import { usePromptOutputNodeActions } from "./use-prompt-output-node-actions.js"
 import { useNativeMediaNodeActions } from "./use-native-media-node-actions.js";
 import { executeCanvasHistoryCommand } from "./canvas-history-command.js";
 import { useCanvasConnectionActions } from "./use-canvas-connection-actions.js";
-import { filterCanvasPresentationEdges, nodeHasCanvasPresentation } from "./canvas-entry-policy.js";
+import { filterCanvasPresentationEdges, nodeHasCanvasPresentation, nodeKindCanBeAddedToCanvas } from "./canvas-entry-policy.js";
+import { resolveScriptDocument } from "./script-group-policy.js";
 import { useCanvasAssetDrop } from "./use-canvas-asset-drop.js";
 import { toFlowEdge } from "./canvas-edge-presentation.js";
 import { toFlowNode } from "./canvas-flow-node-presentation.js";
 import { buildCanonicalAuthorityCanvasView } from "./canonical-authority-aggregation-view-model.js";
 import { useAuthorityAggregateProjection } from "./use-authority-aggregate-projection.js";
+import { projectedNodePosition, projectedPositionHasPersisted } from "./canvas-node-position-policy.js";
 function stop(event) { event.preventDefault(); event.stopPropagation(); }
 export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ canvas, canvasTool, notify, onExpandNode, onSelect, onZoomChange, projectId, readOnly = false, refresh, showConnections, showMiniMap = false, zoom }, ref) {
   const flowRef = useRef(null);
@@ -35,6 +37,8 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
   const connectSourceRef = useRef(null);
   const historyRef = useRef({ undo: [], redo: [] });
   const fittingMediaRef = useRef(new Set());
+  const draggingNodeIdsRef = useRef(new Set());
+  const pendingNodePositionsRef = useRef(new Map());
   const [historyTick, setHistoryTick] = useState(0);
   const [selectedIds, setSelectedIds] = useState([]);
   const [editingTextId, setEditingTextId] = useState(null);
@@ -107,11 +111,14 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
     try { for (const group of deletedGroups) await api.deleteGroup(projectId, group.id); for (const node of deletedNodes) await api.deleteNode(projectId, node.id); if (deletedNodes.length) pushHistory({ type: "delete", nodes: deletedNodes, edges: deletedEdges }); syncSelection([]); setMenu(null); await refresh(); notify(deletedGroups.length && !deletedNodes.length ? "组已删除，组内节点已保留" : "已删除", false); } catch (error) { notify(error); }
   }, [canvas.edges, canvas.groups, canvas.nodes, notify, projectId, pushHistory, readOnly, refresh, selectedIds, syncSelection]);
 
-  const createNode = useCallback(async (kind) => {
+  const createNode = useCallback(async (definition) => {
+    const kind = typeof definition === "string" ? definition : definition?.kind;
+    const textMode = typeof definition === "object" ? definition?.textMode : null;
     if (readOnly) return;
+    if (!nodeKindCanBeAddedToCanvas(kind)) return;
     const x = typeof menu?.flowX === "number" ? menu.flowX : 80 + (canvas.nodes.length % 3) * 420;
     const y = typeof menu?.flowY === "number" ? menu.flowY : 100 + Math.floor(canvas.nodes.length / 3) * 340;
-    const titles = { text: "文本", image: "关键帧", video: "视频", videoShot: "视频镜头", compose: "视频合成", "video-clip": "视频合成", cinematic: "影视总控", director: "导演台", audio: "音频", script: "剧本", material: "素材库", upload: "上传", historyPick: "历史选择", storyboard: "故事板", grid: "宫格", asset: "资产", imageEdit: "图片编辑", compare: "版本对比", world: "3D 世界", shot: "镜头设计", generationUnit: "生成单元", qa: "专业审片" };
+    const titles = { text: textMode === "prompt" ? "Prompt 文本" : "纯文本", image: "关键帧", video: "视频", videoShot: "视频镜头", compose: "视频合成", "video-clip": "视频合成", cinematic: "影视总控", director: "3D导演台（资产）", audio: "音频", script: "分镜脚本", material: "素材库", upload: "上传", historyPick: "历史选择", storyboard: "故事板", grid: "宫格", asset: "资产", imageEdit: "图片编辑", compare: "版本对比", world: "3D 世界", shot: "镜头设计", generationUnit: "生成单元", qa: "专业审片" };
     try {
       const sourceNodes = canvas.nodes.filter((item) => menu?.sourceNodeIds?.includes(item.id));
       const productionSource = sourceNodes.find((item) => item.payload?.productionId || item.payload?.sourceNodeId || item.kind === "cinematic");
@@ -120,8 +127,14 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
         sourceNodeId: productionSource?.payload?.sourceNodeId || productionSource?.id || null,
         projectType: productionSource?.payload?.projectType || null
       } : {};
-      const payload = kind === "text" ? { text: "" } : kind === "cinematic" ? { projectType: "short_film", sourceNodeId: menu?.sourceNodeIds?.[0] || null } : kind === "asset" ? { assetType: "character", assetDescription: "", refs: menu?.sourceNodeIds || [] } : kind === "grid" ? { gridLayout: "2x2", aspectRatio: "1:1" } : { prompt: "", refs: menu?.sourceNodeIds || [], ...domainBinding };
-      const node = await api.createNode(projectId, canvas.id, { kind, title: titles[kind] || LABELS[kind], x, y, payload });
+      const payload = kind === "text"
+        ? textMode === "prompt"
+          ? { textMode: "prompt", text: "", prompt: "" }
+          : { textMode: "plain", text: "" }
+        : kind === "script"
+          ? { scriptDocument: { version: "script_document_v1", title: "分镜脚本", rows: [], source: "manual" }, refs: menu?.sourceNodeIds || [] }
+          : kind === "cinematic" ? { projectType: "short_film", sourceNodeId: menu?.sourceNodeIds?.[0] || null } : kind === "asset" ? { assetType: "character", assetDescription: "", refs: menu?.sourceNodeIds || [] } : kind === "grid" ? { gridLayout: "2x2", aspectRatio: "1:1" } : { prompt: "", refs: menu?.sourceNodeIds || [], ...domainBinding };
+      const node = await api.createNode(projectId, canvas.id, { kind, title: titles[kind] || kind, x, y, payload });
       const createdEdges = [];
       const sourceIdsForEdges = kind === "grid"
         ? sourceNodes.filter((source) => source.payload?.currentMediaId && ["image", "subject", "upload", "material", "historyPick", "imageEdit", "asset"].includes(source.kind)).slice(0, 4).map((source) => source.id)
@@ -147,9 +160,10 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
 
   const setNodeExpanded = useCallback(async (node, expanded) => {
     if (!node || !nodeSupportsInlineWorkspace(node)) return;
+    const usesPortalWorkspace = ["director", "script", "imageEdit"].includes(node.kind);
     const effectiveNode = localNodeViews[node.id] ? { ...node, ...localNodeViews[node.id] } : node;
     if (canvasNodeIsExpanded(effectiveNode) === expanded) {
-      if (expanded && node?.id) fitNode(node.id);
+      if (expanded && node?.id && !usesPortalWorkspace) fitNode(node.id);
       return;
     }
     if (readOnly) {
@@ -163,7 +177,7 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
           [node.id]: planCanvasNodeViewTransition(source, expanded, projectedNodes)
         };
       });
-      window.setTimeout(() => fitNode(node.id), 80);
+      if (!usesPortalWorkspace) window.setTimeout(() => fitNode(node.id), 80);
       return;
     }
     const before = { x: node.x, y: node.y, width: node.width, height: node.height, payload: node.payload };
@@ -172,13 +186,14 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
       await api.updateNode(projectId, node.id, after);
       pushHistory({ type: "nodeView", nodeId: node.id, before, after });
       await refresh();
-      window.setTimeout(() => fitNode(node.id), 120);
+      if (!usesPortalWorkspace) window.setTimeout(() => fitNode(node.id), 120);
     } catch (error) { notify(error); }
   }, [canvas.nodes, fitNode, localNodeViews, notify, projectId, pushHistory, readOnly, refresh]);
 
   const fitMediaNode = useCallback(async (node, naturalWidth, naturalHeight) => {
     if (readOnly) return;
     if (isPanoramaNode(node)) return;
+    if (node?.payload?.storyreelSheet || node?.payload?.storyreelPanel) return;
     const nextHeight = fittedMediaNodeHeight(node, naturalWidth, naturalHeight);
     if (!nextHeight) return;
     if (Math.abs(nextHeight - node.height) < 2 || fittingMediaRef.current.has(node.id)) return;
@@ -258,13 +273,74 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
     try { const saved = await api.saveNodePrompt(projectId, node.id, next); pushHistory({ type: "prompt", nodeId: node.id, before, after: next }); await refresh(); return saved; } catch (error) { notify(error); throw error; }
   }, [notify, projectId, pushHistory, readOnly, refresh]);
 
+  const separateDialogue = useCallback(async (node, mediaId) => {
+    if (readOnly || !node || !mediaId) return null;
+    try {
+      const result = await api.separateMediaAudio(projectId, mediaId, {
+        projection: "dialogue_only",
+        sourceNodeId: node.id,
+        title: node.title
+      });
+      if (!result.reused) {
+        for (const createdNode of result.nodes || []) {
+          pushHistory({ type: "create", node: createdNode, edges: (result.edges || []).filter((edge) => edge.toNodeId === createdNode.id) });
+        }
+      }
+      await refresh();
+      const dialogueNode = (result.nodes || []).find((item) => item.payload?.stemRole === "dialogue_candidate");
+      if (dialogueNode) syncSelection([dialogueNode.id]);
+      notify(result.reused ? "该视频的人声音频节点已存在" : "人声已分离为音频节点；原视频未修改", false);
+      return result;
+    } catch (error) {
+      notify(error);
+      throw error;
+    }
+  }, [notify, projectId, pushHistory, readOnly, refresh, syncSelection]);
+
+  const captureVideoFrame = useCallback(async (node, mediaId, seconds = 0) => {
+    if (readOnly || !node || !mediaId) return null;
+    const frameSeconds = Math.max(0, Number(seconds) || 0);
+    const timestamp = `${String(Math.floor(frameSeconds / 60)).padStart(2, "0")}:${(frameSeconds % 60).toFixed(3).padStart(6, "0")}`;
+    let frameNode = null;
+    try {
+      frameNode = await api.createNode(projectId, canvas.id, {
+        kind: "image",
+        title: `${node.title} · ${timestamp} 当前帧`,
+        x: node.x,
+        y: node.y + node.height + 80,
+        payload: { prompt: "", refs: [node.id] }
+      });
+      const media = await api.extractMediaFrame(projectId, mediaId, {
+        nodeId: frameNode.id,
+        seconds: frameSeconds,
+        title: `${node.title} · ${timestamp} 当前帧.png`
+      });
+      const edge = await api.connect(projectId, { canvasId: canvas.id, fromNodeId: node.id, toNodeId: frameNode.id, role: "frame_capture" });
+      const persistedNode = {
+        ...frameNode,
+        revision: Number(frameNode.revision || 1) + 1,
+        payload: { ...frameNode.payload, currentMediaId: media.id, mediaIds: [media.id] }
+      };
+      pushHistory({ type: "create", node: persistedNode, edges: [edge] });
+      await refresh();
+      syncSelection([persistedNode.id]);
+      notify(`已截取 ${timestamp} 当前帧并创建图片节点`, false);
+      return { edge, media, node: persistedNode };
+    } catch (error) {
+      if (frameNode) {
+        try { await api.deleteNode(projectId, frameNode.id); } catch {}
+      }
+      notify(error);
+      throw error;
+    }
+  }, [canvas.id, notify, projectId, pushHistory, readOnly, refresh, syncSelection]);
+
   const startManualConnection = useCallback((nodeId, x, y) => {
     if (!readOnly) setManualConnection({ sourceNodeId: nodeId, startX: x, startY: y, currentX: x, currentY: y });
   }, [readOnly]);
 
-  const { decorateNode, pollRun, readRun, runNode } = useCanvasGenerationRunner({
+  const { cancelRun, decorateNode, pollRun, readRun, runNode } = useCanvasGenerationRunner({
     canvas,
-    foregroundRunNodeId: selectedIds.length === 1 ? selectedIds[0] : null,
     notify,
     projectId,
     refresh
@@ -301,12 +377,15 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
     editTitle: readOnly ? () => {} : setEditingTitleId,
     cancelTitle: () => setEditingTitleId(null),
     savePrompt,
+    separateDialogue,
+    captureVideoFrame,
     startManualConnection,
     openImport: readOnly ? () => {} : (nodeId, binding = "media") => setImportTargetId({ nodeId, binding }),
     openReferencePicker: readOnly ? () => {} : setReferencePickerNodeId,
     refresh,
     openWorkspace: (nodeId) => { const node = canvas.nodes.find((item) => item.id === nodeId); if (nodeSupportsInlineWorkspace(node)) void setNodeExpanded(node, true); else onExpandNode(nodeId); },
     runNode: readOnly ? async () => null : runNode,
+    cancelRun: readOnly ? async () => null : cancelRun,
     createPromptOutputNode: readOnly ? async () => null : createPromptOutputNode,
     pollRun,
     readRun,
@@ -323,7 +402,7 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
     importNodeFile,
     openMedia,
     deleteOne: (nodeId) => deleteNodes([nodeId])
-  }), [canvas.nodes, clearGrid, composeGrid, configureGrid, connectedInputs, connectedNodes, createPromptOutputNode, deleteConnection, deleteNodes, deriveImage, exportPanorama, exportWorldPanorama, fitMediaNode, fitNode, importNodeFile, isConnecting, notify, onExpandNode, openMedia, pollRun, readOnly, readRun, refresh, resizeNode, runNode, saveImageEdit, savePrompt, saveText, saveTitle, setNodeExpanded, setPrimaryMedia, startManualConnection, updatePayload]);
+  }), [cancelRun, canvas.nodes, captureVideoFrame, clearGrid, composeGrid, configureGrid, connectedInputs, connectedNodes, createPromptOutputNode, deleteConnection, deleteNodes, deriveImage, exportPanorama, exportWorldPanorama, fitMediaNode, fitNode, importNodeFile, isConnecting, notify, onExpandNode, openMedia, pollRun, readOnly, readRun, refresh, resizeNode, runNode, saveImageEdit, savePrompt, saveText, saveTitle, separateDialogue, setNodeExpanded, setPrimaryMedia, startManualConnection, updatePayload]);
 
   const disconnectEdge = useCallback(async (edge) => {
     if (readOnly) return;
@@ -340,7 +419,21 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
       })
     ];
     if (menu?.temporary && typeof menu.flowX === "number" && typeof menu.flowY === "number") projected.push({ id: TEMP_NODE_ID, type: "tempNode", position: { x: menu.flowX - 9, y: menu.flowY - 9 }, width: 18, height: 18, data: {}, draggable: false, selectable: false });
-    setFlowNodes(projected);
+    setFlowNodes((current) => {
+      const currentById = new Map(current.map((node) => [node.id, node]));
+      return projected.map((node) => {
+        const local = currentById.get(node.id);
+        const pendingPosition = pendingNodePositionsRef.current.get(node.id);
+        if (projectedPositionHasPersisted(node.position, pendingPosition)) pendingNodePositionsRef.current.delete(node.id);
+        const position = projectedNodePosition({
+          currentPosition: local?.position,
+          dragging: draggingNodeIdsRef.current.has(node.id),
+          pendingPosition,
+          projectedPosition: node.position
+        });
+        return position === node.position ? node : { ...node, position, dragging: local?.dragging };
+      });
+    });
   }, [actions, canvas.groups, decorateNode, editingTextId, editingTitleId, localNodeViews, menu, presentationCanvas, projectId, readOnly, selectedIds, zoom]);
 
   useEffect(() => {
@@ -405,7 +498,7 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
       const instance = flowRef.current;
       if (!instance) return;
       const nextZoom = Math.max(.02, Math.min(8, Number(percent) / 100));
-      void instance.setViewport({ ...instance.getViewport(), zoom: nextZoom }, { duration: 180 });
+      void instance.setViewport({ ...instance.getViewport(), zoom: nextZoom }, { duration: 0 });
     },
     undo: readOnly ? () => {} : undo,
     redo: readOnly ? () => {} : redo
@@ -432,8 +525,21 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
       nodes={flowNodes}
       nodesConnectable={!readOnly}
       nodesDraggable={!readOnly}
-      onConnect={(connection) => { setIsConnecting(false); void connectNodes(connection); }}
-      onConnectEnd={(event) => { setIsConnecting(false); if (!readOnly) { const target = event.target; if (target instanceof Element && target.classList.contains("react-flow__pane") && connectSourceRef.current) openMenuAt(event.clientX, event.clientY, { sourceNodeId: connectSourceRef.current, temporary: true }); } connectSourceRef.current = null; }}
+      onConnect={(connection) => { connectSourceRef.current = null; setIsConnecting(false); void connectNodes(connection); }}
+      onConnectEnd={(event) => {
+        setIsConnecting(false);
+        const sourceNodeId = connectSourceRef.current;
+        connectSourceRef.current = null;
+        if (readOnly || !sourceNodeId) return;
+        const eventTarget = event.target;
+        const point = "clientX" in event ? { x: event.clientX, y: event.clientY } : event.changedTouches?.[0];
+        const targetElement = point
+          ? document.elementsFromPoint(point.x, point.y).map((element) => element.closest("[data-nodeid]")).find(Boolean)
+          : eventTarget instanceof Element ? eventTarget.closest("[data-nodeid]") : null;
+        const targetNodeId = targetElement?.dataset.nodeid;
+        if (targetNodeId && targetNodeId !== sourceNodeId) { void connectNodes(sourceNodeId, targetNodeId); return; }
+        if (point && eventTarget instanceof Element && eventTarget.classList.contains("react-flow__pane")) openMenuAt(point.x, point.y, { sourceNodeId, temporary: true });
+      }}
       onConnectStart={(_event, params) => { if (!readOnly) { connectSourceRef.current = params.nodeId; setIsConnecting(true); } }}
       onEdgeClick={(event, edge) => { stop(event); if (!readOnly) setEdgeAction({ edge, x: event.clientX, y: event.clientY }); }}
       onEdgeContextMenu={(event, edge) => { stop(event); if (!readOnly) setEdgeAction({ edge, x: event.clientX, y: event.clientY }); }}
@@ -452,8 +558,9 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
       }}
       onNodeClick={(event, node) => { const modified = event.metaKey || event.ctrlKey || event.shiftKey; const ids = modified ? selectedIds.includes(node.id) ? selectedIds.filter((id) => id !== node.id) : [...selectedIds, node.id] : [node.id]; syncSelection(ids); setEdgeAction(null); const source = canvas.nodes.find((item) => item.id === node.id); if (!modified && source?.kind === "cinematic" && !canvasNodeIsExpanded(node.data?.canvasNode)) void setNodeExpanded(source, true); }}
       onNodeContextMenu={(event, node) => { stop(event); syncSelection(selectedIds.includes(node.id) ? selectedIds : [node.id]); if (!readOnly) openMenuAt(event.clientX, event.clientY, { sourceNodeIds: selectedIds.includes(node.id) ? selectedIds : [node.id], variant: "context" }); }}
-      onNodeDoubleClick={(event, node) => { stop(event); const source = canvas.nodes.find((item) => item.id === node.id); if (source?.kind === "text" && !readOnly) setEditingTextId(node.id); else if (nodeSupportsInlineWorkspace(source)) { if (canvasNodeIsExpanded(node.data?.canvasNode)) fitNode(node.id); else void setNodeExpanded(source, true); } else if (source?.kind === "image") void flowRef.current?.setCenter(node.position.x + (node.width || 430) / 2, node.position.y + (node.height || 310) / 2, { duration: 280, zoom: Math.max(1.2, flowRef.current?.getZoom?.() || 1) }); }}
-      onNodeDragStop={async (_event, node) => { if (readOnly) return; const movingIds = selectedIds.includes(node.id) ? selectedIds : [node.id]; const items = movingIds.flatMap((nodeId) => { const beforeNode = canvas.nodes.find((item) => item.id === nodeId); const afterNode = flowNodes.find((item) => item.id === nodeId); if (!beforeNode || !afterNode || (beforeNode.x === afterNode.position.x && beforeNode.y === afterNode.position.y)) return []; return [{ nodeId, before: { x: beforeNode.x, y: beforeNode.y }, after: { x: afterNode.position.x, y: afterNode.position.y } }]; }); if (!items.length) return; try { for (const item of items) await api.updateNode(projectId, item.nodeId, item.after); pushHistory({ type: "batchMove", items }); await refresh(); } catch (error) { notify(error); } }}
+      onNodeDoubleClick={(event, node) => { stop(event); const source = canvas.nodes.find((item) => item.id === node.id); if (source?.kind === "text" && resolveTextNodeMode(source) === "plain" && !readOnly) setEditingTextId(node.id); else if (source?.kind === "script") { if ((resolveScriptDocument(source, canvas.nodes)?.rows || []).length) { if (canvasNodeIsExpanded(node.data?.canvasNode)) fitNode(node.id); else void setNodeExpanded(source, true); } } else if (nodeSupportsInlineWorkspace(source)) { if (canvasNodeIsExpanded(node.data?.canvasNode)) fitNode(node.id); else void setNodeExpanded(source, true); } else if (source?.kind === "image") void flowRef.current?.setCenter(node.position.x + (node.width || 430) / 2, node.position.y + (node.height || 310) / 2, { duration: 280, zoom: Math.max(1.2, flowRef.current?.getZoom?.() || 1) }); }}
+      onNodeDragStart={(_event, node) => { if (readOnly) return; const movingIds = selectedIds.includes(node.id) ? selectedIds : [node.id]; draggingNodeIdsRef.current = new Set(movingIds); }}
+      onNodeDragStop={async (_event, node) => { if (readOnly) return; const movingIds = selectedIds.includes(node.id) ? selectedIds : [node.id]; const items = movingIds.flatMap((nodeId) => { const beforeNode = canvas.nodes.find((item) => item.id === nodeId); const afterNode = nodeId === node.id ? node : flowRef.current?.getNode(nodeId); if (!beforeNode || !afterNode || (beforeNode.x === afterNode.position.x && beforeNode.y === afterNode.position.y)) return []; return [{ nodeId, before: { x: beforeNode.x, y: beforeNode.y }, after: { x: afterNode.position.x, y: afterNode.position.y } }]; }); if (!items.length) { draggingNodeIdsRef.current = new Set(); return; } for (const item of items) pendingNodePositionsRef.current.set(item.nodeId, item.after); try { for (const item of items) await api.updateNode(projectId, item.nodeId, item.after); pushHistory({ type: "batchMove", items }); await refresh(); } catch (error) { for (const item of items) pendingNodePositionsRef.current.delete(item.nodeId); notify(error); await refresh(); } finally { draggingNodeIdsRef.current = new Set(); } }}
       onNodesChange={(changes) => setFlowNodes((items) => applyNodeChanges(changes, items))}
       onSelectionEnd={() => { const ids = (flowRef.current?.getNodes() || []).filter((item) => item.selected && item.id !== TEMP_NODE_ID).map((item) => item.id); if (ids.join("|") !== selectedIds.join("|")) syncSelection(ids); }}
       onPaneClick={() => { syncSelection([]); setEdgeAction(null); setEditingTextId(null); setEditingTitleId(null); }}
@@ -469,7 +576,7 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
     {selectedBounds ? <><div className="multi-selection-frame" style={selectedBounds} />{!readOnly ? <><div className="multi-selection-toolbar" style={{ left: selectedBounds.left + selectedBounds.width / 2, top: Math.max(18, selectedBounds.top - 46) }}><button onClick={() => void groupSelected(false)} type="button"><Boxes size={13} />成组</button><button onClick={() => void groupSelected(true)} type="button"><Boxes size={13} />分镜成组</button><button aria-label="取消框选" onClick={() => syncSelection([])} type="button"><X size={13} /></button></div><button className="multi-selection-create" onClick={() => openMenuAt(selectedBounds.left + selectedBounds.width + 18, selectedBounds.top + selectedBounds.height / 2, { sourceNodeIds: selectedIds, temporary: true })} style={{ left: selectedBounds.left + selectedBounds.width, top: selectedBounds.top + selectedBounds.height / 2 }} title="从框选节点创建下游节点" type="button"><Plus size={16} /></button></> : null}</> : null}
     {!readOnly && edgeAction ? <div className="edge-action-popover" style={{ left: edgeAction.x, top: edgeAction.y }}><button onClick={() => void disconnectEdge(edgeAction.edge)} type="button">断开连线</button><small>Delete / Backspace</small></div> : null}
     {manualConnection ? <svg aria-hidden="true" className="manual-connection-preview"><path d={`M ${manualConnection.startX} ${manualConnection.startY} C ${manualConnection.startX + 120} ${manualConnection.startY}, ${manualConnection.currentX - 120} ${manualConnection.currentY}, ${manualConnection.currentX} ${manualConnection.currentY}`} /></svg> : null}
-    {!readOnly && menu?.variant === "context" ? <ContextMenu menu={menu} canPromote={menu.sourceNodeIds?.length === 1 && Boolean(canvas.nodes.find((node) => node.id === menu.sourceNodeIds[0])?.payload?.currentMediaId)} canUndo={historyRef.current.undo.length > 0} canRedo={historyRef.current.redo.length > 0} deleteLabel={(canvas.groups || []).some((group) => menu.sourceNodeIds?.includes(group.id)) ? "删除组（保留节点）" : "删除节点"} isGroup={(canvas.groups || []).some((group) => menu.sourceNodeIds?.includes(group.id))} onAddMenu={(value) => setMenu({ ...value, variant: "add" })} onClose={() => setMenu(null)} onDelete={() => void deleteNodes(menu.sourceNodeIds)} onPromoteAsset={(scope) => { setAssetRegistration({ nodeId: menu.sourceNodeIds[0], scope }); setMenu(null); }} onRedo={() => void redo()} onUndo={() => void undo()} onUpload={(nodeId) => { setMenu(null); if (nodeId) setImportTargetId({ nodeId, binding: "media" }); else notify("请先创建图片、视频或音频节点，再导入本地素材"); }} /> : !readOnly && menu ? <AddMenu menu={menu} onAdd={(kind) => void createNode(kind)} onClose={() => setMenu(null)} /> : null}
+    {!readOnly && menu?.variant === "context" ? <ContextMenu menu={menu} canPromote={menu.sourceNodeIds?.length === 1 && Boolean(canvas.nodes.find((node) => node.id === menu.sourceNodeIds[0])?.payload?.currentMediaId)} canUndo={historyRef.current.undo.length > 0} canRedo={historyRef.current.redo.length > 0} deleteLabel={(canvas.groups || []).some((group) => menu.sourceNodeIds?.includes(group.id)) ? "删除组（保留节点）" : "删除节点"} isGroup={(canvas.groups || []).some((group) => menu.sourceNodeIds?.includes(group.id))} onAddMenu={(value) => setMenu({ ...value, variant: "add" })} onClose={() => setMenu(null)} onDelete={() => void deleteNodes(menu.sourceNodeIds)} onPromoteAsset={(scope) => { setAssetRegistration({ nodeId: menu.sourceNodeIds[0], scope }); setMenu(null); }} onRedo={() => void redo()} onUndo={() => void undo()} onUpload={(nodeId) => { setMenu(null); if (nodeId) setImportTargetId({ nodeId, binding: "media" }); else notify("请先创建图片、视频或音频节点，再导入本地素材"); }} /> : !readOnly && menu ? <AddMenu menu={menu} onAdd={(definition) => void createNode(definition)} onClose={() => setMenu(null)} /> : null}
     {!readOnly && importTargetId ? <div className="canvas-modal-backdrop" onMouseDown={() => setImportTargetId(null)}><form className="canvas-import-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); try { const targetNode = canvas.nodes.find((node) => node.id === importTargetId.nodeId); if (!targetNode) throw new Error("导入目标节点不存在"); if (importTargetId.binding === "voice") { const media = await api.importMedia(projectId, { filePath: importPath, kind: "audio", title: `${targetNode.title} · 音色参考` }); await api.prepareMedia(projectId, media.id); await api.bindCharacterVoiceProfile(projectId, targetNode.payload?.productionId, targetNode.payload?.authorityId, { assetNodeId: targetNode.id, voiceProfile: { voiceProfileId: `voice-profile-${media.id}`, source: "uploaded_sample", bindingMode: "reference_only", language: "zh-CN", description: "2–5 秒角色音色参考；当前未执行声音克隆，仅供配音设计与人工审阅", status: "candidate", provider: null, speakerId: null, sampleMediaId: media.id, acceptanceCriteria: ["性别、年龄感、音域、气息和情绪基线可辨认", "无背景音乐和明显环境噪声"], prohibitedChanges: ["不得把参考样本误标为已克隆音色", "不得覆盖角色视觉定妆媒体"] } }); notify("音色参考已绑定；当前未执行声音克隆", false); } else { await api.importMedia(projectId, { nodeId: targetNode.id, filePath: importPath }); notify("本地媒体已导入节点", false); } setImportTargetId(null); setImportPath(""); await refresh(); } catch (error) { notify(error); } }}><header><strong>{importTargetId.binding === "voice" ? "绑定角色音色参考" : "导入本地媒体"}</strong><button onClick={() => setImportTargetId(null)} type="button"><X size={15} /></button></header><label>{importTargetId.binding === "voice" ? "2–5 秒干净人声音频绝对路径" : "本机文件绝对路径"}<input autoFocus onChange={(event) => setImportPath(event.target.value)} placeholder={importTargetId.binding === "voice" ? "/Users/.../voice.wav" : "/Users/.../shot.mp4"} value={importPath} /></label>{importTargetId.binding === "voice" ? <small>样本会独立保存为音色参考，不会覆盖角色定妆图；未配置克隆 Provider 时不会假装已克隆。</small> : null}<button className="primary" disabled={!importPath.trim()} type="submit">{importTargetId.binding === "voice" ? "导入并绑定" : "导入到节点"}</button></form></div> : null}
     {!readOnly && referencePickerNodeId ? <NodeReferencePickerModal canvas={canvas} nodeId={referencePickerNodeId} notify={notify} onClose={() => setReferencePickerNodeId(null)} projectId={projectId} refresh={refresh} /> : null}
     {!readOnly ? <AssetRegistrationModal canvas={canvas} notify={notify} onClose={() => setAssetRegistration(null)} opened={assetRegistration} projectId={projectId} refresh={refresh} /> : null}

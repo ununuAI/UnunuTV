@@ -19,6 +19,13 @@ export function primeVideoPreviewFrame(event) {
   video.currentTime = Math.min(0.1, video.duration / 2);
 }
 
+export function resetVideoAfterPlayback(event) {
+  const video = event.currentTarget;
+  video.pause();
+  if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+  video.currentTime = Math.min(0.05, video.duration / 2);
+}
+
 export function groupAsCanvasNode(group, projectId) {
   return { ...group, projectId, kind: "material", payload: { groupRole: "selection-group", memberNodeIds: group.nodeIds || [] } };
 }

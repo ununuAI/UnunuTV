@@ -1,12 +1,29 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpRight, Brush, CircleDot, Eraser, Focus, Grid3X3, ImagePlus, MousePointer2, Redo2, Save, Square, Trash2, Type, Undo2, WandSparkles, X } from "lucide-react";
+import { ArrowUpRight, Brush, CircleDot, Eraser, Grid3X3, ImagePlus, MousePointer2, Redo2, Save, Square, Trash2, Type, Undo2, WandSparkles, X } from "lucide-react";
 import { mediaUrlForNode } from "./media-candidate-policy.js";
 import { createImageEditOperation, imageEditCanvasSize, imageEditPoint, IMAGE_EDIT_TOOL_ITEMS, updateImageEditOperation } from "./image-edit-canvas-policy.js";
 import { renderImageEditCanvas } from "./image-edit-canvas-renderer.js";
 
 const TOOL_ICONS = { select: MousePointer2, brush: Brush, eraser: Eraser, mosaic: WandSparkles, gridMask: Grid3X3, rectangle: Square, arrow: ArrowUpRight, text: Type, number: CircleDot, image: ImagePlus };
+
+export function ImageEditFullscreen({ actions, connectedNodes, node, onClose, readOnly }) {
+  useEffect(() => {
+    const onKeyDown = (event) => { if (event.key === "Escape") onClose?.(); };
+    window.addEventListener("keydown", onKeyDown);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previous;
+    };
+  }, [onClose]);
+
+  return <div aria-label="图片编辑" aria-modal="true" className="image-edit-fullscreen" onPointerDown={(event) => event.stopPropagation()} role="dialog">
+    <ImageEditCanvasWorkspace actions={actions} connectedNodes={connectedNodes} node={node} onClose={onClose} readOnly={readOnly} />
+  </div>;
+}
 
 function sourceOptions(node, connectedNodes) {
   const options = [];
@@ -20,7 +37,7 @@ function sourceOptions(node, connectedNodes) {
   return options;
 }
 
-export function ImageEditCanvasWorkspace({ actions, connectedNodes, node, readOnly }) {
+export function ImageEditCanvasWorkspace({ actions, connectedNodes, node, onClose, readOnly }) {
   const canvasRef = useRef(null);
   const imageRef = useRef(null);
   const activeRef = useRef(null);
@@ -106,7 +123,7 @@ export function ImageEditCanvasWorkspace({ actions, connectedNodes, node, readOn
   };
 
   return <section className="image-edit-workspace nodrag nopan nowheel">
-    <header><strong>图片编辑</strong><span>{source?.label || "未选择源图"}</span><div><button onClick={() => actions.fitNode(node.id)} title="聚焦" type="button"><Focus size={15} /></button><button onClick={() => actions.setNodeExpanded(node, false)} title="收起" type="button"><X size={16} /></button></div></header>
+    <header><strong>图片编辑</strong><span>{source?.label || "未选择源图"}</span><div><button aria-label="关闭图片编辑" onClick={() => onClose?.()} title="关闭" type="button"><X size={16} /></button></div></header>
     <nav aria-label="图片编辑工具">{IMAGE_EDIT_TOOL_ITEMS.map((item) => { const Icon = TOOL_ICONS[item.value]; return <button aria-pressed={tool === item.value} disabled={readOnly} key={item.value} onClick={() => setTool(item.value)} title={`${item.label} (${item.shortcut})`} type="button"><Icon size={16} /><span>{item.label}</span></button>; })}</nav>
     <div className="image-edit-body">
       <aside><strong>连接图片</strong>{options.length ? options.map((item) => <button aria-pressed={item.mediaId === document.sourceMediaId} key={item.mediaId} onClick={() => setDocument((value) => ({ ...value, sourceMediaId: item.mediaId }))} type="button"><img alt="" src={item.url} /><span>{item.label}</span></button>) : <p>连接图片或图片编辑节点后开始</p>}</aside>

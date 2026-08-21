@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseTimelineMediaTransfer, timelineDropStartMs, timelineMediaTransfer } from "../apps/web/src/timeline-drag-policy.js";
+import { parseTimelineMediaTransfer, timelineDropStartMs, timelineMediaTransfer, timelineScrubMs } from "../apps/web/src/timeline-drag-policy.js";
 
 test("timeline media drag carries exact node/media identity and duration", () => {
   const transfer = timelineMediaTransfer({ id: "audio-node", kind: "audio", title: "对白" }, "media-audio", { kind: "audio", durationMs: 2050 });
@@ -15,4 +15,12 @@ test("timeline drop position snaps to 100ms and clamps to the lane", () => {
   assert.equal(timelineDropStartMs(350, bounds, 20_000), 5000);
   assert.equal(timelineDropStartMs(50, bounds, 20_000), 0);
   assert.equal(timelineDropStartMs(1200, bounds, 20_000), 20_000);
+});
+
+test("playhead scrub maps pointer X to frame-snapped timeline time", () => {
+  const bounds = { left: 100, width: 1000 };
+  assert.equal(timelineScrubMs(100, bounds, 10_000, 25), 0);
+  assert.equal(timelineScrubMs(600, bounds, 10_000, 25), 5000);
+  assert.equal(timelineScrubMs(1100, bounds, 10_000, 25), 10_000);
+  assert.equal(timelineScrubMs(-20, bounds, 10_000, 24), 0);
 });

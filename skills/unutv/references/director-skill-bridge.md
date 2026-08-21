@@ -5,7 +5,7 @@ source, not as a second runtime or a complete product definition.
 
 The Director Skill is the blueprint for professional asset, shot and
 Provider-prompt semantics. It is intentionally not the boundary of the Ununu
-product. `ununu-cinematic-production` must preserve everything useful in that
+product. `unutv` must preserve everything useful in that
 blueprint and complete the missing industrial layers: series and episode canon,
 canvas authority, timed low-poly previs, model capability contracts,
 idempotent cost control, actual-take memory, continuity QA, editorial assembly,

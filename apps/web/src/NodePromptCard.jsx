@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useProjectEvents } from "./use-project-events.js";
 import { api } from "./api.js";
 import { PromptCard } from "./PromptCard.tsx";
 import { cinematicPromptFactsForNode } from "./cinematic-prompt-facts-view-model.js";
@@ -93,7 +94,15 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
     return () => { active = false; };
   }, [node.id, node.projectId, node.payload?.prompt, node.payload?.refs, readOnly, templatePrompt]);
 
+  useProjectEvents(node.projectId, () => { void load(); }, (event) => (
+    event.type === "node.prompt_saved" && (event.entityId === node.id || event.payload?.nodeId === node.id)
+  ));
+
   useEffect(() => {
+    if (node.payload?.generationStatus === "canceled") {
+      setRunState({ status: "idle", runId: null });
+      return;
+    }
     const recoveredRunId = node.payload?.generationRunId;
     if (node.payload?.generationStatus !== "running" || !recoveredRunId) return;
     setRunState((current) => {
@@ -104,16 +113,14 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
 
   const applyRunResult = useCallback(async (result) => {
     const status = result?.status || "failed";
-    setRunState({ status: status === "queued" ? "requesting" : status === "running" ? "running" : status === "succeeded" ? "idle" : "failed", runId: result?.id || null });
+    setRunState({ status: status === "queued" ? "requesting" : status === "running" ? "running" : status === "succeeded" || status === "canceled" ? "idle" : "failed", runId: status === "canceled" ? null : result?.id || null });
     if (status === "succeeded") await load();
     return result;
   }, [load]);
 
   const pollPendingRun = useCallback(async () => {
     if (!runState.runId) return;
-    const result = runState.status === "requesting"
-      ? await actions.readRun?.(runState.runId)
-      : await actions.pollRun?.(runState.runId);
+    const result = await actions.readRun?.(runState.runId);
     if (!result) return;
     await applyRunResult(result);
   }, [actions, applyRunResult, runState.runId, runState.status]);
@@ -188,7 +195,7 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
         ...(prompt.parameters || {}),
         ...(prompt.mode && !prompt.parameters?.mode ? { mode: prompt.mode } : {})
       }
-    } : undefined,
+    } : node.payload?.modelSelection,
     previewUrl: mediaUrl(node.projectId, node.payload?.currentMediaId, node.payload?.mediaOwnerProjectId),
     prompt: prompt?.text || node.payload?.prompt || templatePrompt,
     promptDocument: prompt?.document,
@@ -201,12 +208,7 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
     title: node.title
   }), [assetReferences, blockedReason, connectedNodes, locallyRunning, node, orderedReferenceMediaIds, outputMode, prompt, readOnly, runState.status, templatePrompt, worldGenerationUnavailable]);
 
-  const sourceNodes = useMemo(() => [...providerFrameReferenceSources({
-    mode: promptVideoMode,
-    parameters: promptParameters,
-    projectId: node.projectId,
-    promptText: prompt?.text
-  }), ...connectedNodes.map((source) => ({
+  const connectedPromptSources = useMemo(() => connectedNodes.map((source) => ({
     canRun: true,
     cost: source.payload?.cost || "输入",
     id: source.id,
@@ -218,7 +220,14 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
     status: source.payload?.generationStatus || "idle",
     summary: source.payload?.summary || "",
     title: source.title
-  }))], [connectedNodes, node.projectId, prompt?.text, promptParameters, promptVideoMode]);
+  })), [connectedNodes, node.projectId]);
+
+  const sourceNodes = useMemo(() => [...providerFrameReferenceSources({
+    mode: promptVideoMode,
+    parameters: promptParameters,
+    projectId: node.projectId,
+    promptText: prompt?.text
+  }), ...connectedPromptSources], [connectedPromptSources, node.projectId, prompt?.text, promptParameters, promptVideoMode]);
 
   const promptActions = useMemo(() => ({
     bindNodeAssetReference: async (_nodeId, assetId, versionId) => {
@@ -313,7 +322,7 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
           }
           if (actions.createPromptOutputNode) return applyRunResult(await actions.createPromptOutputNode(node, outputMode, next));
         }
-        if (["image", "video", "videoShot", "compose", "audio", "text"].includes(node.kind)) return applyRunResult(await actions.runNode(node, next));
+        if (["image", "video", "videoShot", "compose", "audio", "text", "script"].includes(node.kind)) return applyRunResult(await actions.runNode(node, next));
         await load(); setRunState({ status: "idle", runId: null });
       } catch (error) { setRunState({ status: "failed", runId: null }); throw error; }
     },
@@ -327,5 +336,5 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
     }
   }), [actions, applyRunResult, assets, blockedReason, connectedNodes, load, node, orderedReferenceMediaIds, outputMode, prompt, readOnly, referenceMediaIds, worldGenerationUnavailable]);
 
-  return <PromptCard actions={promptActions} assets={assets} connectedSourceNodes={sourceNodes} node={promptNode} readOnly={readOnly} sourceNodes={sourceNodes} variant="generator" />;
+  return <PromptCard actions={promptActions} assets={assets} connectedSourceNodes={connectedPromptSources} node={promptNode} readOnly={readOnly} sourceNodes={sourceNodes} variant="generator" />;
 }

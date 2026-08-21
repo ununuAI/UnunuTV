@@ -4,7 +4,7 @@
 
 这些来源只提供可吸收的生产语义，不构成并列产品、并列 Skill 或并列状态机。
 UnuTV Core 合同是唯一生产真相，画布是唯一可见工作区，
-`ununu-cinematic-production` 是唯一控制 Skill。
+`unutv` 是唯一控制 Skill。电影工业合同在 `skills/unutv/references/cinematic.md`。
 
 ## 一条合并后的流水线
 

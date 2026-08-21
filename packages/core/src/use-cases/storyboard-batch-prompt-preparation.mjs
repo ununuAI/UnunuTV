@@ -120,7 +120,7 @@ export function createStoryboardBatchPromptPreparation({ dependencies, ports }) 
         quality: job.configuration.quality ?? "auto",
         outputFormat: job.configuration.outputFormat ?? "png"
       } : {
-        resolution: job.configuration.resolution ?? "720p"
+        resolution: job.configuration.resolution ?? "480p"
       }),
       ...(visualInput.referenceMediaIds.length ? { referenceMediaIds: visualInput.referenceMediaIds } : {}),
       ...(job.kind === "video" ? {

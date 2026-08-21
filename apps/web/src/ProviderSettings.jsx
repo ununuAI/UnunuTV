@@ -21,8 +21,14 @@ function SecretField({ label, value, onChange, onSave, onClear, configured, sour
 
 export default function ProviderSettings({ notify }) {
   const [status, setStatus] = useState(null);
+  const [h3Health, setH3Health] = useState(null);
+  const [checkingH3, setCheckingH3] = useState(false);
   const [form, setForm] = useState({ ununuApiKey: "", arkApiKey: "", openrouterApiKey: "", openspeechApiKey: "", openspeechSpeakerId: "" });
-  const load = useCallback(async () => setStatus(await api.providerSettings()), []);
+  const load = useCallback(async () => {
+    const [settings, health] = await Promise.all([api.providerSettings(), api.providerHealth("minimax")]);
+    setStatus(settings);
+    setH3Health(health);
+  }, []);
   useEffect(() => { load().catch(notify); }, [load, notify]);
 
   function field(name) {
@@ -43,6 +49,12 @@ export default function ProviderSettings({ notify }) {
     } catch (error) { notify(error); }
   }
 
+  async function checkH3() {
+    setCheckingH3(true);
+    try { setH3Health(await api.providerHealth("minimax")); }
+    catch (error) { notify(error); }
+    finally { setCheckingH3(false); }
+  }
   if (!status) return <div className="empty-panel"><div className="empty-mark">KEY</div><p>正在读取本地 Provider 配置…</p></div>;
   const openspeech = status.providers.openspeech || { configured: false, source: "none", speakerConfigured: false, speakerSource: "none" };
   return <div className="panel-stack settings-panel">
@@ -56,6 +68,14 @@ export default function ProviderSettings({ notify }) {
     <article className="provider-card">
       <header><div><b>Ark Seedance</b><small>视频生成 · 隧道参考媒体</small></div><Status {...status.providers.ark} /></header>
       <SecretField label="ARK API Key" placeholder="输入新 Key（保存后立即清空）" configured={status.providers.ark.configured} source={status.providers.ark.source} {...field("arkApiKey")} />
+    </article>
+
+    <article className="provider-card">
+      <header><div><b>MiniMax H3 · 本地算力</b><small>ComfyUI · 480P/720P · 加速/原生 · 原声音频</small></div><Status {...(status.providers.minimax || { configured: false, source: "none" })} /></header>
+      <div className={`provider-health-row ${h3Health?.ok ? "ready" : "unavailable"}`}>
+        <div><strong>{checkingH3 ? "正在检测远端…" : h3Health?.message || "尚未检测"}</strong><small>{h3Health?.ok ? `${h3Health.gpu || "GPU"} · 队列 ${h3Health.queueRunning || 0} 运行 / ${h3Health.queuePending || 0} 等待` : "只做连通性、ComfyUI 与队列检测，不会提交生成任务"}</small></div>
+        <button disabled={checkingH3 || !status.providers.minimax?.configured} onClick={() => void checkH3()} type="button">{checkingH3 ? "检测中" : "检测远端"}</button>
+      </div>
     </article>
 
     <article className="provider-card">

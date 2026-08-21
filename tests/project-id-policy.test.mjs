@@ -23,10 +23,11 @@ test("bare route UUID and stored project ID resolve to one canonical project ide
 test("ProjectStore canonicalizes a bare route UUID before selecting or opening SQLite", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-project-id-normalization-"));
   context.after(async () => rm(dataRoot, { recursive: true, force: true }));
-  const store = new ProjectStore(dataRoot);
+  const mediaRoot = path.join(dataRoot, "visible", canonicalId);
+  const store = new ProjectStore(dataRoot, { mediaRootResolver: () => mediaRoot });
   context.after(() => store.close());
   const createdAt = "2026-07-28T00:00:00.000Z";
-  store.create({ id: canonicalId, title: "Canonical project", createdAt, updatedAt: createdAt });
+  store.create({ id: canonicalId, title: "Canonical project", mediaRoot, createdAt, updatedAt: createdAt });
 
   assert.equal(store.database(bareId), store.database(canonicalId));
   assert.equal(store.open(bareId).id, canonicalId);

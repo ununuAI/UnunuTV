@@ -24,8 +24,8 @@ export function MomoAudioNode({ actions, node, readOnly = false, selected = fals
   };
 
   return <div className="momo-audio-node">
+    <input accept="audio/*" aria-label="选择音频文件" className="momo-audio-file-input" disabled={readOnly} onChange={(event) => { const file = event.target.files?.[0]; if (file) void actions.importNodeFile(node, file, "audio"); event.target.value = ""; }} ref={fileRef} type="file" />
     {selected ? <div aria-label="音频节点工具栏" className="momo-audio-toolbar nodrag nopan nowheel">
-      <input accept="audio/*" aria-label="选择音频文件" disabled={readOnly} onChange={(event) => { const file = event.target.files?.[0]; if (file) void actions.importNodeFile(node, file, "audio"); event.target.value = ""; }} ref={fileRef} type="file" />
       <button disabled={readOnly} onClick={() => fileRef.current?.click()} type="button"><Upload size={14} /><span>上传音频</span></button>
       {source ? <button
         aria-label="拖入底部时间线"
@@ -49,7 +49,7 @@ export function MomoAudioNode({ actions, node, readOnly = false, selected = fals
           {(peaks.length ? peaks : Array.from({ length: 48 }, () => .08)).map((peak, index) => <i aria-hidden="true" key={index} style={{ height: `${Math.max(5, peak * 52)}px` }} />)}
         </div>
         <div className="momo-audio-controls"><span>{formatAudioTime(currentTime)} / {formatAudioTime(duration)}</span><button aria-label={playing ? "暂停音频" : "播放音频"} onClick={() => void toggle()} type="button">{playing ? <Pause size={16} /> : <Play size={16} />}</button></div>
-      </div> : <button className="momo-audio-empty" disabled={readOnly || !selected} onClick={() => fileRef.current?.click()} type="button"><Music2 size={30} strokeWidth={1.25} /><span>{selected ? "上传音频" : "选择节点后上传"}</span></button>}
+      </div> : <div aria-label="暂无音频，可拖动节点或使用上方按钮上传" className="momo-audio-empty"><Music2 size={30} strokeWidth={1.25} /><span>暂无音频</span></div>}
     </div>
   </div>;
 }

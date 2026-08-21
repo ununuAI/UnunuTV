@@ -5,18 +5,18 @@ import { fileURLToPath } from "node:url";
 import { CINEMATIC_WORKFLOW_SKILL_VERSION } from "@ununu/unutv-contracts";
 
 const REFERENCE_FILES = Object.freeze([
-  "references/api-cli.md",
-  "references/director-skill-bridge.md",
-  "references/cross-modal-image-video-control.md",
-  "references/sequence-previs-visual-memory-and-trace.md",
-  "references/sequence-state-canon-retake-control.md"
+  "api-cli.md",
+  "director-skill-bridge.md",
+  "cross-modal-image-video-control.md",
+  "sequence-previs-visual-memory-and-trace.md",
+  "sequence-state-canon-retake-control.md"
 ]);
 
 function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 
 export function loadCinematicSkillContext({ loadedBy = "ununu-cinematic-production", loadedAt = new Date().toISOString() } = {}) {
   const sourceDir = dirname(fileURLToPath(import.meta.url));
-  const skillPath = join(sourceDir, "../../../skills/ununu-cinematic-production/SKILL.md");
+  const skillPath = join(sourceDir, "../../../skills/unutv/references/cinematic.md");
   if (!existsSync(skillPath)) throw new Error(`Cinematic Skill not found: ${skillPath}`);
   const skillBytes = readFileSync(skillPath);
   const referenceFiles = REFERENCE_FILES.map((relativePath) => {

@@ -3,6 +3,7 @@
 // 导演台里可复用的小控件:工具坞分组与下拉、三分量向量行、关节角度行。
 // 都是纯受控组件,不碰导演台状态。
 
+import { useEffect, useState } from "react";
 import { DEG } from "./director-stage-units.js";
 
 export function DockGroup({ children }) {

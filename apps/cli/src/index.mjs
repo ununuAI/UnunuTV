@@ -86,6 +86,7 @@ function help() {
   return `UnunuTV local CLI
 
 Usage:
+  ununu-unutv workspace status|init|set-root [--root /absolute/path]
   ununu-unutv project create [--title 标题]
   ununu-unutv project list
   ununu-unutv project open --project ID
@@ -168,12 +169,12 @@ Usage:
 Automation actors use --actor automation --automation-run ID --lease ID --idempotency-key KEY.
 All command results are JSON. Runtime data defaults to ~/.unutv and can be changed with UNUTV_DATA_DIR.`;
 }
-
 async function execute(app, positionals, flags) {
   app = withOperationContext(app, operationContextFromFlags(flags));
   const [area, action] = positionals;
   const projectId = flags.project;
   const cinematicSequence = await executeCinematicSequenceCommand(app, area, action, flags); if (cinematicSequence.handled) return cinematicSequence.value;
+  if (area === "workspace") { if (action === "status") return app.getWorkspace(); if (action === "init") return app.initializeWorkspace({ rootPath: required(flags, "root") }); if (action === "set-root") return app.setWorkspaceRoot({ rootPath: required(flags, "root") }); }
   if (area === "project" && action === "create") return app.createProject({ title: flags.title });
   if (area === "project" && action === "list") return app.listProjects();
   if (area === "project" && action === "open") return app.openProject({ projectId: required(flags, "project") });

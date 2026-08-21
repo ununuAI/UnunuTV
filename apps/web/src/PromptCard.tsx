@@ -13,9 +13,9 @@ import { NodeReferenceControls, NodeReferenceRows } from "./NodeReferenceControl
 import { PromptDocumentEditor, type PromptDocumentV1 } from "./PromptDocumentEditor";
 import { CinematicPromptFacts } from "./CinematicPromptFacts";
 import { hydrateLegacyPromptReferences } from "./prompt-document-hydration.js";
-import { GROK_PROMPT_MAX_BYTES, GROK_VIDEO_MODEL_ID, SEEDANCE_VIDEO_MODEL_ID, clampVideoDuration, utf8ByteLength, videoDurationRange } from "./video-generation-capabilities.js";
+import { GROK_PROMPT_MAX_BYTES, GROK_VIDEO_MODEL_ID, H3_VIDEO_MODEL_ID, SEEDANCE_VIDEO_MODEL_ID, clampVideoDuration, utf8ByteLength, videoDurationRange, videoProviderId } from "./video-generation-capabilities.js";
 import { PROMPT_OUTPUT_MODES, promptOutputModeMeta } from "./prompt-output-mode-policy.js";
-
+import { videoReferenceInputState } from "./video-reference-input-policy.js";
 function modelOptionsFor(node: CanvasNode) {
   if (node.kind === "script") return ["GVLM 3.1", "CVLM 5.5", "GVLM 3.1 Flash"];
   if (node.kind === "image" || node.kind === "subject" || node.kind === "material" || node.kind === "historyPick") return ["Z-image Turbo"];
@@ -51,6 +51,24 @@ function isVideoPromptNode(node: CanvasNode) {
 
 type VideoReferenceMode = "text_to_video" | "image_reference" | "first_frame" | "first_last_frame";
 
+const H3_PROFILE_OPTIONS = [
+  { id: "480p_accelerated", label: "480P 加速", resolution: "480p" },
+  { id: "720p_accelerated", label: "720P 加速", resolution: "720p" },
+  { id: "480p_native", label: "480P 原生", resolution: "480p" },
+  { id: "720p_native", label: "720P 原生", resolution: "720p" }
+] as const;
+
+function isH3Profile(value: unknown) {
+  return H3_PROFILE_OPTIONS.some((profile) => profile.id === value);
+}
+
+function h3ProfileLabel(value: string) {
+  return H3_PROFILE_OPTIONS.find((profile) => profile.id === value)?.label || "480P 加速";
+}
+
+function h3ProfileResolution(value: string) {
+  return H3_PROFILE_OPTIONS.find((profile) => profile.id === value)?.resolution || "480p";
+}
 function normalizeVideoReferenceMode(mode: unknown): VideoReferenceMode {
   if (mode === "text_to_video" || mode === "first_frame" || mode === "first_last_frame") return mode;
   return "image_reference";
@@ -63,8 +81,12 @@ function videoReferenceModeLabel(mode: VideoReferenceMode) {
   return "全能参考";
 }
 
-function normalizedVideoResolution(modelId: string, resolution: unknown) {
+function normalizedVideoResolution(modelId: string, resolution: unknown, h3Profile?: unknown) {
   if (modelId === SEEDANCE_VIDEO_MODEL_ID) return "480p";
+  if (modelId === H3_VIDEO_MODEL_ID) {
+    if (isH3Profile(h3Profile)) return String(h3Profile);
+    return String(resolution).toLowerCase() === "720p" ? "720p_accelerated" : "480p_accelerated";
+  }
   return String(resolution || "720p");
 }
 
@@ -193,7 +215,8 @@ export function PromptCard({
   const [videoRatio, setVideoRatio] = useState(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
   const [videoResolution, setVideoResolution] = useState(normalizedVideoResolution(
     String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID),
-    node.modelSelection?.parameters?.resolution
+    node.modelSelection?.parameters?.resolution,
+    node.modelSelection?.parameters?.h3Profile
   ));
   const [videoDuration, setVideoDuration] = useState(Number(node.modelSelection?.parameters?.duration ?? 4));
   const [videoCount, setVideoCount] = useState(Number(node.modelSelection?.parameters?.n ?? node.modelSelection?.parameters?.count ?? 1));
@@ -256,7 +279,8 @@ export function PromptCard({
     setVideoRatio(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
     setVideoResolution(normalizedVideoResolution(
       String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID),
-      node.modelSelection?.parameters?.resolution
+      node.modelSelection?.parameters?.resolution,
+      node.modelSelection?.parameters?.h3Profile
     ));
     setVideoDuration(Number(node.modelSelection?.parameters?.duration ?? 4));
     setVideoCount(Number(node.modelSelection?.parameters?.n ?? node.modelSelection?.parameters?.count ?? 1));
@@ -432,39 +456,40 @@ export function PromptCard({
   };
 
   const sendValue = (selection?: ModelExecutionSelection) => readOnly ? Promise.resolve(null) : actions.sendPrompt(node.id, value.trim() || node.prompt, selection);
-  const videoReferenceIds = node.referenceMediaIds ?? [];
-  const videoReferenceCount = videoReferenceIds.length;
-  const videoReferenceReady = videoMode === "text_to_video"
-    ? videoReferenceCount === 0
-    : videoMode === "image_reference"
-      ? videoReferenceCount > 0
-      : videoMode === "first_frame"
-        ? videoReferenceCount === 1
-        : videoReferenceCount === 2;
-  const videoReferenceIssue = videoMode === "text_to_video"
-    ? "文生视频不能携带参考图，请先移除当前参考"
-    : videoMode === "image_reference"
-      ? "全能参考至少需要 1 张图片"
-      : videoMode === "first_frame"
-        ? "首帧模式必须且只能使用 1 张图片"
-        : "首尾帧模式必须且只能使用 2 张图片";
-  const videoReferenceCapacity = videoMode === "text_to_video" ? 0 : videoMode === "first_frame" ? 1 : videoMode === "first_last_frame" ? 2 : Infinity;
+  const connectedVideoInputs = connectedSourceNodes.filter((source) => ["image", "subject", "material", "historyPick"].includes(source.kind));
+  const visibleVideoInputCount = connectedVideoInputs.length + (node.assetReferences?.length ?? 0);
+  const visibleVideoReferenceIds = [...new Set([
+    ...connectedVideoInputs.flatMap((source) => source.referenceMediaIds ?? []),
+    ...(node.assetReferences ?? []).map((reference) => reference.mediaId).filter((mediaId): mediaId is string => Boolean(mediaId))
+  ])];
+  const fallbackVideoReferenceIds = node.referenceMediaIds ?? [];
+  const videoReferenceIds = visibleVideoInputCount > 0 ? visibleVideoReferenceIds : fallbackVideoReferenceIds;
+  const videoReferenceCount = visibleVideoInputCount > 0 ? visibleVideoInputCount : fallbackVideoReferenceIds.length;
+  const videoReferenceInput = videoReferenceInputState({
+    inputCount: videoReferenceCount,
+    mode: videoMode,
+    readyMediaCount: videoReferenceIds.length
+  });
+  const videoReferenceReady = videoReferenceInput.canRun;
+  const videoReferenceIssue = videoReferenceInput.issue;
+  const videoReferenceCapacity = videoReferenceInput.maximumCount ?? Infinity;
   const videoAddDisabled = videoReferenceCount >= videoReferenceCapacity;
   const videoDurationCapability = videoDurationRange({ modelId: videoModelId, mode: videoMode, generateAudio: videoGenerateAudio });
   const displayedVideoDuration = clampVideoDuration(videoDuration, videoDurationCapability);
   const videoSelection = (mode: VideoReferenceMode = videoMode, overrides: { duration?: number; generateAudio?: boolean } = {}): ModelExecutionSelection => {
-    const generateAudio = overrides.generateAudio ?? videoGenerateAudio;
+    const generateAudio = videoModelId === H3_VIDEO_MODEL_ID ? true : (overrides.generateAudio ?? videoGenerateAudio);
     const duration = clampVideoDuration(overrides.duration ?? videoDuration, videoDurationRange({ modelId: videoModelId, mode, generateAudio }));
     return {
       modelId: videoModelId,
-      providerId: videoModelId === SEEDANCE_VIDEO_MODEL_ID ? "ark" : "openrouter",
+      providerId: videoProviderId(videoModelId),
       parameters: {
         mode,
         ratio: videoRatio,
-        resolution: videoModelId === SEEDANCE_VIDEO_MODEL_ID ? "480p" : videoResolution,
+        resolution: videoModelId === SEEDANCE_VIDEO_MODEL_ID ? "480p" : videoModelId === H3_VIDEO_MODEL_ID ? h3ProfileResolution(videoResolution) : videoResolution,
         duration,
         n: videoCount,
         generateAudio,
+        ...(videoModelId === H3_VIDEO_MODEL_ID ? { h3Profile: videoResolution } : {}),
         ...(mode === "first_frame" && videoReferenceIds[0] ? { firstFrameMediaId: videoReferenceIds[0] } : {}),
         ...(mode === "first_last_frame" && videoReferenceIds[0] && videoReferenceIds[1]
           ? { firstFrameMediaId: videoReferenceIds[0], lastFrameMediaId: videoReferenceIds[1] }
@@ -473,6 +498,7 @@ export function PromptCard({
     };
   };
   const runVideoGeneration = () => {
+    if (!videoReferenceReady) return Promise.resolve(null);
     const selection = videoSelection();
     setVideoDuration(Number(selection.parameters?.duration));
     return sendValue(selection);
@@ -487,6 +513,28 @@ export function PromptCard({
     latestSelectionRef.current = selection;
     void actions.savePromptDraft(node.id, value, selection);
   };
+  const chooseVideoModel = (modelId: string, resolution: string) => {
+    if (readOnly) return;
+    const duration = clampVideoDuration(videoDuration, videoDurationRange({ modelId, mode: videoMode, generateAudio: videoGenerateAudio }));
+    const current = videoSelection(videoMode, { duration });
+    const { h3Profile: _h3Profile, ...baseParameters } = current.parameters ?? {};
+    const selection: ModelExecutionSelection = {
+      modelId,
+      providerId: videoProviderId(modelId),
+      parameters: {
+        ...baseParameters,
+        resolution: modelId === H3_VIDEO_MODEL_ID ? h3ProfileResolution(resolution) : resolution,
+        duration,
+        ...(modelId === H3_VIDEO_MODEL_ID ? { h3Profile: resolution, generateAudio: true } : {})
+      }
+    };
+    setVideoModelId(modelId);
+    setVideoResolution(resolution);
+    setVideoDuration(duration);
+    setVideoCount(1);
+    latestSelectionRef.current = selection;
+    void actions.savePromptDraft(node.id, value, selection);
+  };
   const saveAudioConfig = () => sendValue({
     modelId: "seed-audio-1.0",
     providerId: "openspeech",
@@ -498,8 +546,8 @@ export function PromptCard({
   const isImageExecutionNode = node.kind === "image";
   const isVideoExecutionNode = isVideoPromptNode(node);
   const isAudioExecutionNode = node.kind === "audio";
-  const isNonDialogueSoundNode = ["cinematic_sfx", "cinematic_ambience"].includes(String(node.payload?.resourceType ?? ""));
-  const audioVoiceRunnable = Boolean(audioSpeakerId) || isNonDialogueSoundNode;
+  const isFormalDialogueNode = String(node.payload?.resourceType ?? "") === "cinematic_dialogue_line";
+  const audioVoiceRunnable = !isFormalDialogueNode || Boolean(audioSpeakerId);
   const isTextExecutionNode = isTextNode || isScriptNode;
   const isMediaNode = isMediaPromptNode(node);
   const usesCompactContext = isTextExecutionNode || isMediaNode || isAudioExecutionNode;
@@ -511,10 +559,11 @@ export function PromptCard({
   const refNodes = sourceNodes.length > 0 ? sourceNodes : node.refs.map((ref) => ({ id: ref, title: ref }) as CanvasNode);
   const promptClassName = `prompt-card prompt-card-${variant} copilotKitInputContainer${readOnly ? " prompt-card-readonly" : ""}${expanded ? " prompt-card-expanded" : ""}${isTextNode ? " prompt-card-text" : ""}${isScriptNode ? " prompt-card-script" : ""}${isMediaNode ? " prompt-card-media" : ""}${isVideoExecutionNode ? " prompt-card-video" : ""}${isAudioExecutionNode ? " prompt-card-audio" : ""}${isTextExecutionNode && !textHasReferences ? " prompt-card-text-no-upstream" : ""}`;
   const isArkSeedanceMini = videoModelId === SEEDANCE_VIDEO_MODEL_ID;
+  const isMiniMaxH3 = videoModelId === H3_VIDEO_MODEL_ID;
   const isOpenRouterGrok = videoModelId === GROK_VIDEO_MODEL_ID;
   const videoPromptBytes = utf8ByteLength(value.trim() || node.prompt);
   const videoPromptTooLong = isOpenRouterGrok && videoPromptBytes > GROK_PROMPT_MAX_BYTES;
-  const videoModelLabel = isArkSeedanceMini ? "Seedance 2.0 Mini" : "Grok Imagine Video";
+  const videoModelLabel = isArkSeedanceMini ? "Seedance 2.0 Mini" : isMiniMaxH3 ? "MiniMax H3" : "Grok Imagine Video";
   const imageTemplateId = node.imageNodeType === "panorama_equirectangular"
     ? "scene_panorama_equirectangular"
     : node.imageNodeType && node.imageNodeType !== "standard"
@@ -553,7 +602,7 @@ export function PromptCard({
   const isNodeGenerating = node.status === "running" || Boolean(node.generationActivity);
   const promptPlaceholder = node.sourceKind === "asset"
     ? promptOutputModeMeta(node.outputMode || node.kind).placeholder
-    : isScriptNode ? "填写镜头数量、节奏、时长等拆镜要求"
+    : isScriptNode ? "可选：额外要求。不填也会按左侧剧本生成分镜脚本"
       : isAudioExecutionNode ? "输入要合成的文本"
         : isVideoExecutionNode ? "描述动作、运镜、节奏与时长"
           : isInput ? "写入这个节点的输入内容" : "告诉这个节点要生成什么";
@@ -578,8 +627,9 @@ export function PromptCard({
           <ChevronDown size={12} />
         </summary>
         <div className="generator-model-menu" role="listbox">
-          <button className={isOpenRouterGrok ? "active" : ""} onClick={(event) => { setVideoModelId(GROK_VIDEO_MODEL_ID); setVideoResolution((current) => current === "480p" ? current : "720p"); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: GROK_VIDEO_MODEL_ID, mode: videoMode, generateAudio: videoGenerateAudio }))); setVideoCount(1); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Grok Imagine Video · OpenRouter</button>
-          <button className={isArkSeedanceMini ? "active" : ""} onClick={(event) => { setVideoModelId(SEEDANCE_VIDEO_MODEL_ID); setVideoResolution("480p"); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: SEEDANCE_VIDEO_MODEL_ID, mode: videoMode, generateAudio: videoGenerateAudio }))); setVideoCount(1); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Seedance 2.0 Mini · Ark</button>
+          <button className={isOpenRouterGrok ? "active" : ""} onClick={(event) => { chooseVideoModel(GROK_VIDEO_MODEL_ID, videoResolution === "480p" ? "480p" : "720p"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Grok Imagine Video · OpenRouter</button>
+          <button className={isArkSeedanceMini ? "active" : ""} onClick={(event) => { chooseVideoModel(SEEDANCE_VIDEO_MODEL_ID, "480p"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Seedance 2.0 Mini · Ark</button>
+          <button className={isMiniMaxH3 ? "active" : ""} onClick={(event) => { chooseVideoModel(H3_VIDEO_MODEL_ID, isH3Profile(videoResolution) ? videoResolution : "480p_accelerated"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">MiniMax H3 · 本地算力</button>
         </div>
       </details>
       <details className="video-mode-select">
@@ -618,15 +668,15 @@ export function PromptCard({
       <details className="video-parameter-select">
         <summary className="generator-spec-pill">
           <Video size={13} />
-          <span>{videoRatio} · {videoResolution} · {displayedVideoDuration}s · {videoGenerateAudio ? "音频" : "静音"} · {videoCount}个</span>
+          <span>{videoRatio} · {isMiniMaxH3 ? h3ProfileLabel(videoResolution) : videoResolution} · {displayedVideoDuration}s · {isMiniMaxH3 || videoGenerateAudio ? "音频" : "静音"} · {videoCount}个</span>
           <ChevronDown size={12} />
         </summary>
         <div className="video-parameter-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}>
-          <section><span>比例</span><div>{["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"].map((ratio) => <button className={videoRatio === ratio ? "active" : ""} key={ratio} onClick={() => setVideoRatio(ratio)} type="button">{ratio}</button>)}</div></section>
-          <section><span>清晰度</span><div>{(isArkSeedanceMini ? ["480p"] : ["480p", "720p"]).map((resolution) => <button className={videoResolution === resolution ? "active" : ""} key={resolution} onClick={() => setVideoResolution(resolution)} type="button">{resolution.toUpperCase()}</button>)}</div></section>
+          <section><span>比例</span><div>{(isMiniMaxH3 ? ["21:9", "16:9", "9:16", "1:1", "4:3", "3:4"] : ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"]).map((ratio) => <button className={videoRatio === ratio ? "active" : ""} key={ratio} onClick={() => setVideoRatio(ratio)} type="button">{ratio}</button>)}</div></section>
+          <section><span>{isMiniMaxH3 ? "生成档位" : "清晰度"}</span><div>{isMiniMaxH3 ? H3_PROFILE_OPTIONS.map((profile) => <button className={videoResolution === profile.id ? "active" : ""} key={profile.id} onClick={() => setVideoResolution(profile.id)} type="button">{profile.label}</button>) : (isArkSeedanceMini ? ["480p"] : ["480p", "720p"]).map((resolution) => <button className={videoResolution === resolution ? "active" : ""} key={resolution} onClick={() => setVideoResolution(resolution)} type="button">{resolution.toUpperCase()}</button>)}</div></section>
           <section><span>生成时长</span><label><input max={videoDurationCapability.max} min={videoDurationCapability.min} onChange={(event) => setVideoDuration(Number(event.target.value))} type="range" value={displayedVideoDuration} /><strong>{displayedVideoDuration}s</strong></label></section>
           <section><span>生成数量</span><div>{[1].map((count) => <button className={videoCount === count ? "active" : ""} key={count} onClick={() => setVideoCount(count)} type="button">{count}个</button>)}</div></section>
-          <section className="video-audio-setting"><span>原声音频</span><label><input checked={videoGenerateAudio} onChange={(event) => { const next = event.target.checked; setVideoGenerateAudio(next); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: videoModelId, mode: videoMode, generateAudio: next }))); }} type="checkbox" /><strong>{videoGenerateAudio ? "生成" : "关闭"}</strong></label></section>
+          <section className={`video-audio-setting${isMiniMaxH3 ? " is-fixed" : ""}`}><span>原声音频</span>{isMiniMaxH3 ? <strong className="video-audio-fixed">固定开启</strong> : <label><input checked={videoGenerateAudio} onChange={(event) => { const next = event.target.checked; setVideoGenerateAudio(next); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: videoModelId, mode: videoMode, generateAudio: next }))); }} type="checkbox" /><strong>{videoGenerateAudio ? "生成" : "关闭"}</strong></label>}</section>
         </div>
       </details>
       <span className="generator-spacer" />
@@ -660,7 +710,7 @@ export function PromptCard({
         <div className="audio-parameter-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}><span>语速</span><label><input max="1.5" min="0.6" onChange={(event) => setAudioSpeed(Number(event.target.value))} step="0.1" type="range" value={audioSpeed} /><strong>{audioSpeed.toFixed(1)}x</strong></label></div>
       </details>
       <span className="generator-spacer" />
-      <button aria-busy={isNodeGenerating} aria-label="生成音频" className="send-dot generator-send" disabled={readOnly || isNodeGenerating || !audioVoiceRunnable} onClick={() => void saveAudioConfig()} title={readOnly ? "全自动运行期间只读" : isNodeGenerating ? "音频正在生成" : !audioVoiceRunnable ? "先选择已验证或明确填写的 speaker ID；空音色仅是 audition_pending 草案" : "使用所选音色生成音频"} type="button">{isNodeGenerating ? <LoaderCircle aria-hidden="true" className="model-execution-spinner" size={14} /> : <ArrowUp size={14} />}</button>
+      <button aria-busy={isNodeGenerating} aria-label="生成音频" className="send-dot generator-send" disabled={readOnly || isNodeGenerating || !audioVoiceRunnable} onClick={() => void saveAudioConfig()} title={readOnly ? "全自动运行期间只读" : isNodeGenerating ? "音频正在生成" : !audioVoiceRunnable ? "正式对白必须先选择音色" : audioSpeakerId ? "使用所选音色生成音频" : "使用默认音色生成音频"} type="button">{isNodeGenerating ? <LoaderCircle aria-hidden="true" className="model-execution-spinner" size={14} /> : <ArrowUp size={14} />}</button>
     </div>
   );
 
@@ -671,7 +721,7 @@ export function PromptCard({
         document={promptDocument}
         onChange={(nextDocument) => { setPromptDocument(nextDocument); void actions.savePromptDocument?.(node.id, nextDocument, latestSelectionRef.current); }}
         onPlainTextChange={updateDraftValue}
-        onSubmit={() => { if (node.canRun) void sendValue(); }}
+        onSubmit={() => { if (!node.canRun) return; if (isVideoExecutionNode) { if (videoReferenceReady) void runVideoGeneration(); } else void sendValue(); }}
         placeholder={promptPlaceholder}
         readOnly={readOnly}
       />
@@ -723,8 +773,12 @@ export function PromptCard({
               addDisabled={isVideoExecutionNode && videoAddDisabled}
               addDisabledReason={isVideoExecutionNode && videoAddDisabled ? (videoMode === "text_to_video" ? "文生视频不使用图片" : `${videoReferenceModeLabel(videoMode)}已达到图片数量上限`) : undefined}
               assets={assets}
+              maximumReferenceCount={isVideoExecutionNode ? videoReferenceInput.maximumCount : undefined}
               node={node}
+              referenceIssue={isVideoExecutionNode ? videoReferenceIssue : undefined}
               referenceMode={isVideoExecutionNode ? videoMode : undefined}
+              referenceState={isVideoExecutionNode ? videoReferenceInput.state : undefined}
+              requiredReferenceCount={isVideoExecutionNode ? videoReferenceInput.requiredCount : undefined}
               sourceNodes={connectedSourceNodes}
             />
           </div>
@@ -777,7 +831,7 @@ export function PromptCard({
               <ModelExecutionControls.Submit disabled={readOnly || !node.canRun} title={readOnly ? "全自动运行期间只读" : isImageExecutionNode ? "生成图片" : isScriptNode ? "生成脚本表" : "发布文本生成"} />
             </ModelExecutionControls.Frame>
             {(isTextExecutionNode || isImageExecutionNode) && expanded && typeof document !== "undefined" ? createPortal(
-              <div className="text-prompt-dialog-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) closeExpandedPrompt(); }} role="presentation">
+              <div className="text-prompt-dialog-layer" role="presentation">
                 <section aria-label={isScriptNode ? "展开脚本提示词" : isTextNode ? "展开文本提示词" : "展开图片提示词"} aria-modal="true" className="text-prompt-dialog" role="dialog">
                   <button
                     aria-label={isScriptNode ? "收起脚本提示词" : isTextNode ? "收起文本提示词" : "收起图片提示词"}
@@ -837,11 +891,7 @@ export function PromptCard({
               {option}
             </span>
           ))}
-          {node.kind === "script" ? (
-            <button className="mini-action" onClick={() => actions.openPanel("scriptv2")} type="button">
-              分镜流程
-            </button>
-          ) : null}
+
           <span className="generator-spacer" />
           <div className="generator-submit-group">
             <PromptMiniTools blocked={blocked} />
@@ -852,7 +902,7 @@ export function PromptCard({
         </div>
         )}</>}
         {(isVideoExecutionNode || isAudioExecutionNode) && expanded && typeof document !== "undefined" ? createPortal(
-          <div className="text-prompt-dialog-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) closeExpandedPrompt(); }} role="presentation">
+          <div className="text-prompt-dialog-layer" role="presentation">
             <section
               aria-label={isVideoExecutionNode ? "展开视频提示词" : "展开音频文本"}
               aria-modal="true"

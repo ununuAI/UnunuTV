@@ -20,6 +20,17 @@ test("flow node extraction preserves geometry, selection and read-only behavior"
 test("flow node extraction preserves group and expanded workspace drag handles", () => {
   const group = toFlowNode({ id: "group-1", kind: "group", x: 0, y: 0, width: 200, height: 100, payload: { groupRole: "selection-group" } }, canvas, [], actions, null, null, false, 100);
   const director = toFlowNode({ id: "director-1", kind: "director", x: 0, y: 0, width: 860, height: 640, payload: { canvasExpanded: true } }, canvas, [], actions, null, null, false, 100);
+  const script = toFlowNode({
+    id: "script-1",
+    kind: "script",
+    x: 0,
+    y: 0,
+    width: 468,
+    height: 396,
+    payload: { canvasExpanded: true, scriptDocument: { version: "script_document_v1", title: "分镜脚本", rows: [] } }
+  }, canvas, [], actions, null, null, false, 100);
   assert.equal(group.zIndex, 0);
   assert.equal(director.dragHandle, ".director-console-header");
+  assert.equal(script.draggable, true);
+  assert.equal(script.dragHandle, undefined);
 });

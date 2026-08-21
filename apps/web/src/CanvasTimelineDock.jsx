@@ -1,9 +1,11 @@
 "use client";
 
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clapperboard, Diamond, Download, Eye, EyeOff, GitMerge, LoaderCircle, Lock, Magnet, Pause, Play, Plus, Redo2, Scissors, Sparkles, Square, Trash2, Undo2, Unlock, Volume1, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { api } from "./api.js";
-import { TIMELINE_MEDIA_TRANSFER_TYPE, parseTimelineMediaTransfer, timelineDropStartMs } from "./timeline-drag-policy.js";
+import { TIMELINE_MEDIA_TRANSFER_TYPE, parseTimelineMediaTransfer, timelineDropStartMs, timelineScrubMs } from "./timeline-drag-policy.js";
+import { appendStartMs, preparedMediaDurationMs } from "./timeline-media-policy.js";
+import { shouldAcceptExternalPlayhead } from "./player-workspace-policy.js";
 import { eventPrefix, useDebouncedRefresh, useProjectEvents } from "./use-project-events.js";
 
 const MIN_HEIGHT = 190;
@@ -17,7 +19,7 @@ function trackCode(track, tracks) {
   return `${prefix}${tracks.filter((entry) => entry.kind === track.kind && entry.order <= track.order).length}`;
 }
 
-export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClose, onHeightChange, onPlaybackChange, onPreviewMedia, onSeek, projectId, readOnly, refreshCanvas, selected }) {
+export const CanvasTimelineDock = forwardRef(function CanvasTimelineDock({ canvas, externalClock = false, initialHeight = 280, notify, onClose, onHeightChange, onPlaybackChange, onPreviewMedia, onSeek, projectId, readOnly, refreshCanvas, selected }, ref) {
   const [height, setHeight] = useState(initialHeight);
   const [timeline, setTimeline] = useState(null);
   const [scale, setScale] = useState(1);
@@ -31,7 +33,23 @@ export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClos
   const [playheadMs, setPlayheadMs] = useState(0);
   const [playing, setPlaying] = useState(false);
   const dragRef = useRef(null);
+  const dockRef = useRef(null);
+  const playheadMsRef = useRef(0);
+  const durationMsRef = useRef(15000);
+  const lastPlayheadStateRef = useRef(0);
+  const scrubbingRef = useRef(false);
   const timelineId = timeline?.id;
+
+  function writePlayhead(ms) {
+    const next = Math.max(0, Number(ms) || 0);
+    playheadMsRef.current = next;
+    const pct = (next / Math.max(1, durationMsRef.current)) * 100;
+    const root = dockRef.current;
+    if (!root) return;
+    root.querySelectorAll(".timeline-playhead").forEach((node) => {
+      node.style.left = `${pct}%`;
+    });
+  }
 
   const load = useCallback(async () => {
     const result = await api.timelines(projectId);
@@ -54,35 +72,44 @@ export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClos
   }, [projectId]);
 
   useEffect(() => { load().catch(notify); }, [load, notify]);
+  const sequenceKey = (timeline?.clips || []).filter((clip) => clip.mediaId).map((clip) => `${clip.id}:${clip.mediaId}:${clip.startMs}:${clip.durationMs}`).join("|");
+  useEffect(() => {
+    if (!timeline?.id || !sequenceKey) return;
+    onPreviewMedia?.({
+      projectId,
+      timelineId: timeline.id,
+      mode: "timeline",
+      title: timeline.title || "主时间线",
+      frameRate: timeline.frameRate || 24,
+      revision: sequenceKey,
+      open: false
+    });
+  }, [onPreviewMedia, projectId, sequenceKey, timeline?.frameRate, timeline?.id, timeline?.title]);
   // 渲染进度与时间线变更走 SSE 推送,不再每 900ms 轮询。
   // render.job_changed 带 {status, progress},timeline.* 覆盖剪辑改动。
   const refreshTimeline = useDebouncedRefresh(() => load().catch(notify), 120);
   useProjectEvents(projectId, refreshTimeline, eventPrefix("render.", "timeline.", "media."));
   useEffect(() => { onHeightChange(height); }, [height, onHeightChange]);
-  useEffect(() => {
-    if (!playing) return undefined;
-    let frame;
-    let previous = performance.now();
-    const tick = (time) => {
-      const delta = time - previous;
-      previous = time;
-      setPlayheadMs((current) => {
-        const next = current + delta;
-        const limit = Math.max(1, Math.max(15000, ...(timeline?.clips || []).map((clip) => clip.startMs + clip.durationMs)));
-        if (next >= limit) { setPlaying(false); onPlaybackChange?.(false); onSeek(limit); return limit; }
-        onSeek(next);
-        return next;
-      });
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [onPlaybackChange, onSeek, playing, timeline]);
-
-  function seek(timeMs) {
+  useImperativeHandle(ref, () => ({
+    syncPlayhead(ms) {
+      if (!shouldAcceptExternalPlayhead({ scrubbing: scrubbingRef.current })) return;
+      writePlayhead(ms);
+      const rounded = Math.round(Number(ms) || 0);
+      if (Math.abs(rounded - lastPlayheadStateRef.current) >= 80) {
+        lastPlayheadStateRef.current = rounded;
+        setPlayheadMs(rounded);
+      }
+    },
+    syncPlaying(next) {
+      setPlaying(Boolean(next));
+    }
+  }), []);
+  function seek(timeMs, options = {}) {
     const next = Math.max(0, Number(timeMs) || 0);
+    lastPlayheadStateRef.current = next;
     setPlayheadMs(next);
-    onSeek(next);
+    writePlayhead(next);
+    onSeek(next, options);
   }
 
   async function create() {
@@ -97,9 +124,25 @@ export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClos
     try {
       const kind = isSubtitle ? "subtitle" : selected.kind === "audio" ? "audio" : "video";
       const track = timeline.tracks.find((entry) => entry.kind === kind && !entry.locked)?.order;
-      if (track === undefined) throw new Error(`没有可写入的${kind === "audio" ? "音频" : kind === "subtitle" ? "字幕" : "视频"}轨`);
-      const end = Math.max(0, ...(timeline?.clips || []).filter((clip) => clip.track === track).map((clip) => clip.startMs + clip.durationMs));
-      await api.addClip(projectId, timelineId, { nodeId: selected.id, mediaId: selected.payload.currentMediaId || null, track, startMs: end, durationMs: 3000, payload: isSubtitle ? { text: String(text).trim() } : {} });
+      if (track === undefined) throw new Error("没有可写入的" + (kind === "audio" ? "音频" : kind === "subtitle" ? "字幕" : "视频") + "轨");
+      const end = appendStartMs(timeline, track);
+      const mediaId = selected.payload.currentMediaId || null;
+      let preparation = null;
+      if (mediaId) {
+        try { preparation = await api.prepareMedia(projectId, mediaId); }
+        catch { /* 媒体仍可按默认时长入轨，稍后可从工具栏重新准备代理。 */ }
+      }
+      const durationMs = isSubtitle ? 3000 : preparedMediaDurationMs(preparation);
+      await api.addClip(projectId, timelineId, {
+        nodeId: selected.id,
+        mediaId,
+        track,
+        startMs: end,
+        durationMs,
+        payload: isSubtitle
+          ? { text: String(text).trim() }
+          : { source: "canvas_selection", sourceDurationMs: durationMs, title: selected.title || "画布媒体" }
+      });
       await load();
       notify("所选媒体已加入主轨", false);
     } catch (error) { notify(error); }
@@ -242,7 +285,7 @@ export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClos
     event.preventDefault();
     event.stopPropagation();
     setSelectedClipId(clip.id);
-    seek(clip.startMs);
+    seek(clip.startMs, { force: true });
     if (readOnly) return;
     const lane = event.currentTarget.parentElement;
     const bounds = lane.getBoundingClientRect();
@@ -280,21 +323,102 @@ export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClos
   const audioClips = clips.filter((clip) => audioTrackOrders.has(clip.track));
   const selectedText = selected?.payload?.textDocument?.plainText || selected?.payload?.plainText || selected?.payload?.text || selected?.payload?.summary || "";
   const canAddSelected = Boolean(selected?.payload?.currentMediaId) || (["text", "script", "story"].includes(selected?.kind) && Boolean(String(selectedText).trim()));
+  const selectedTimelineKind = ["text", "script", "story"].includes(selected?.kind) ? "subtitle" : selected?.kind === "audio" ? "audio" : "video";
   const selectedClip = clips.find((clip) => clip.id === selectedClipId);
   const selectedTrack = orderedTracks.find((track) => track.order === selectedClip?.track);
   const latestRender = renderJobs[0];
   const durationMs = Math.max(15000, ...clips.map((clip) => clip.startMs + clip.durationMs));
+  durationMsRef.current = durationMs;
   const trackWidth = Math.max(100, scale * 100);
 
-  return <section className="canvas-timeline-dock" style={{ height }} aria-label="底部专业时间线">
+  function beginPlayheadScrub(event, lane) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!lane) return;
+    scrubbingRef.current = true;
+    if (playing) {
+      setPlaying(false);
+      onPlaybackChange?.(false);
+    }
+    const apply = (clientX) => {
+      const next = timelineScrubMs(clientX, lane.getBoundingClientRect(), durationMs, timeline?.frameRate || 24);
+      lastPlayheadStateRef.current = next;
+      setPlayheadMs(next);
+      writePlayhead(next);
+    };
+    apply(event.clientX);
+    const move = (nextEvent) => apply(nextEvent.clientX);
+    const end = () => {
+      scrubbingRef.current = false;
+      onSeek(playheadMsRef.current, { force: true });
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end, { once: true });
+  }
+
+  function playheadHandle(laneSelector) {
+    return <button aria-label="拖动播放头" className="timeline-playhead" onPointerDown={(event) => beginPlayheadScrub(event, event.currentTarget.closest(laneSelector))} style={{ left: `${playheadMsRef.current / durationMs * 100}%` }} title="拖动播放头" type="button" />;
+  }
+
+  function renderTrack(track) {
+    const trackClips = clips.filter((clip) => clip.track === track.order);
+    const tone = track.kind === "audio" ? " is-audio" : ["subtitle", "text"].includes(track.kind) ? " is-subtitle" : track.kind === "effect" ? " is-effect" : "";
+    const canPlaceSelected = !trackClips.length && canAddSelected && track.kind === selectedTimelineKind && !readOnly;
+    return <div className={"timeline-track-row" + tone} key={track.id}>
+      <aside>
+        <div className="timeline-track-title"><strong>{trackCode(track, orderedTracks)}</strong><small>{track.name}</small></div>
+        <div className="timeline-track-controls">
+          <button aria-pressed={track.locked} disabled={readOnly} onClick={() => void patchTrack(track, { locked: !track.locked }, track.locked ? "轨道已解锁" : "轨道已锁定")} title={track.locked ? "解锁轨道" : "锁定轨道"} type="button">{track.locked ? <Lock size={10} /> : <Unlock size={10} />}</button>
+          <button aria-pressed={!track.visible} disabled={readOnly} onClick={() => void patchTrack(track, { visible: !track.visible }, track.visible ? "轨道已隐藏" : "轨道已显示")} title="显示/隐藏" type="button">{track.visible ? <Eye size={10} /> : <EyeOff size={10} />}</button>
+          <button aria-pressed={track.muted} disabled={readOnly} onClick={() => void patchTrack(track, { muted: !track.muted }, track.muted ? "轨道已取消静音" : "轨道已静音")} title="静音" type="button"><VolumeX size={10} /></button>
+          <button aria-pressed={track.solo} disabled={readOnly} onClick={() => void patchTrack(track, { solo: !track.solo }, track.solo ? "轨道已取消独听" : "轨道已独听")} title="独听" type="button">S</button>
+          <button disabled={readOnly || track.order === 0} onClick={() => void moveTrack(track, -1)} title="轨道上移" type="button"><ChevronUp size={10} /></button>
+          <button disabled={readOnly || track.order === orderedTracks.length - 1} onClick={() => void moveTrack(track, 1)} title="轨道下移" type="button"><ChevronDown size={10} /></button>
+          <button disabled={readOnly || trackClips.length > 0} onClick={() => void edit(() => api.removeTimelineTrack(projectId, timelineId, track.id), "空轨道已删除")} title="删除空轨道" type="button"><Trash2 size={10} /></button>
+        </div>
+      </aside>
+      <div className={"timeline-track-lane" + (dropTrack === track.order ? " is-drop-target" : "")} {...dropHandlers(track)} onPointerDown={(event) => { if (event.target.closest(".timeline-dock-clip, .timeline-empty-add")) return; beginPlayheadScrub(event, event.currentTarget); }} style={{ width: trackWidth + "%" }}>
+        {playheadHandle(".timeline-track-lane")}
+        {canPlaceSelected ? <button className="timeline-empty-add" onClick={(event) => { event.stopPropagation(); void add(); }} type="button"><Plus size={13} />将当前{selectedTimelineKind === "audio" ? "音频" : selectedTimelineKind === "subtitle" ? "字幕" : "视频"}加入此轨</button> : null}
+        {trackClips.map((clip) => {
+          const startMs = dragPreview?.clipId === clip.id ? dragPreview.startMs : clip.startMs;
+          const clipEffects = (timeline.effects || []).filter((entry) => entry.clipId === clip.id).length;
+          const clipKeyframeItems = (timeline.keyframes || []).filter((entry) => entry.clipId === clip.id);
+          const preparation = preparations[clip.mediaId];
+          const waveform = preparation?.waveform?.length ? preparation.waveform : Array.from({ length: 24 }, (_, index) => (28 + (index * 37 % 66)) / 100);
+          return <button aria-pressed={selectedClipId === clip.id} className={"timeline-dock-clip" + tone + (selectedClipId === clip.id ? " is-selected" : "")} key={clip.id} onClick={() => {
+            setSelectedClipId(clip.id);
+            seek(clip.startMs, { force: true });
+            onPreviewMedia?.({
+              projectId,
+              timelineId,
+              clipId: clip.id,
+              mode: "timeline",
+              title: timeline.title || "主时间线",
+              frameRate: timeline.frameRate || 24
+            });
+          }} onPointerDown={(event) => beginClipDrag(event, clip, durationMs)} style={{ left: startMs / durationMs * 100 + "%", width: Math.max(4, clip.durationMs / durationMs * 100) + "%" }} type="button">
+            {preparation?.thumbnailRelativePath && track.kind === "video" ? <img alt="" className="timeline-clip-thumbnail" src={"/api/projects/" + projectId + "/media/" + clip.mediaId + "/thumbnail"} /> : null}
+            {track.kind === "audio" ? <span className="timeline-waveform" aria-hidden="true">{waveform.slice(0, 96).map((peak, index) => <i key={index} style={{ height: Math.max(5, peak * 100) + "%" }} />)}</span> : null}
+            {clipKeyframeItems.length ? <span aria-label={clipKeyframeItems.length + " 个关键帧"} className="timeline-clip-keyframes">{clipKeyframeItems.map((keyframe) => <i key={keyframe.id} style={{ left: clamp(keyframe.timeMs / Math.max(1, clip.durationMs) * 100, 2, 98) + "%" }} title={keyframe.propertyPath + " · " + (keyframe.timeMs / 1000).toFixed(2) + "s"} />)}</span> : null}
+            <strong>{clip.payload?.text || clip.payload?.title || clip.payload?.storyboardShotId?.slice(0, 12) || clip.nodeId?.slice(0, 10) || "media"}</strong>
+            <small>{(clip.durationMs / 1000).toFixed(1)}s · {(startMs / 1000).toFixed(1)}s{preparation?.status === "succeeded" ? " · 代理✓" : ""}{clipEffects ? " · FX" + clipEffects : ""}{clipKeyframeItems.length ? " · ◆" + clipKeyframeItems.length : ""}</small>
+          </button>;
+        })}
+      </div>
+    </div>;
+  }
+  return <section className="canvas-timeline-dock" ref={dockRef} style={{ height }} aria-label="底部专业时间线">
     <button aria-label="调整时间线高度" className="timeline-resize-handle" onPointerDown={beginResize} type="button"><span /></button>
     <header className="timeline-command-bar">
       <div><Clapperboard size={15} /><strong>{timeline?.title || "主时间线"}</strong><small>{clips.length} 个片段</small></div>
       <div className="timeline-command-actions">
-        <button onClick={() => { if (playheadMs >= durationMs) seek(0); const next = !playing; setPlaying(next); onPlaybackChange?.(next); }} title={playing ? "暂停统一时间线时钟" : "播放统一时间线时钟"} type="button">{playing ? <Pause size={14} /> : <Play size={14} />}</button>
-        <button onClick={() => seek(playheadMs - 1000 / (timeline?.frameRate || 30))} title="后退一帧" type="button"><ChevronLeft size={13} /></button>
+        <button onClick={() => { if (!playing && playheadMs >= durationMs - 80) seek(0, { force: true }); const next = !playing; setPlaying(next); onPlaybackChange?.(next); }} title={playing ? "暂停统一时间线时钟" : "播放统一时间线时钟"} type="button">{playing ? <Pause size={14} /> : <Play size={14} />}</button>
+        <button onClick={() => seek(playheadMs - 1000 / (timeline?.frameRate || 30), { force: true })} title="后退一帧" type="button"><ChevronLeft size={13} /></button>
         <span>{(playheadMs / 1000).toFixed(2)}s</span>
-        <button onClick={() => seek(playheadMs + 1000 / (timeline?.frameRate || 30))} title="前进一帧" type="button"><ChevronRight size={13} /></button>
+        <button onClick={() => seek(playheadMs + 1000 / (timeline?.frameRate || 30), { force: true })} title="前进一帧" type="button"><ChevronRight size={13} /></button>
         <button disabled={readOnly || !timeline || !canAddSelected} onClick={() => void add()} type="button"><Plus size={14} />{["text", "script", "story"].includes(selected?.kind) ? "加入所选字幕" : "加入所选媒体"}</button>
         <details className="timeline-add-track-menu"><summary title="添加持久化轨道"><Plus size={13} />轨</summary><div><button disabled={readOnly} onClick={() => void addTrack("video")} type="button">视频轨</button><button disabled={readOnly} onClick={() => void addTrack("audio")} type="button">音频轨</button><button disabled={readOnly} onClick={() => void addTrack("subtitle")} type="button">字幕轨</button><button disabled={readOnly} onClick={() => void addTrack("effect")} type="button">效果轨</button></div></details>
         <i />
@@ -326,7 +450,7 @@ export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClos
         {qcReport ? <details className={`timeline-qc-summary is-${qcReport.status}`}><summary>QC {qcReport.status === "pass" ? "通过" : qcReport.status === "warning" ? "警告" : "失败"}</summary><div>{qcReport.checks.map((check) => <span className={`is-${check.status}`} key={check.id}><strong>{check.label}</strong><small>{String(check.actual)}</small></span>)}</div></details> : null}
         {latestRender?.status === "succeeded" && qcReport?.status !== "fail" && !deliveryPackages.length ? <button disabled={readOnly} onClick={() => void packageDelivery()} title="创建含校验和、QC 与字幕附件的交付清单" type="button"><Clapperboard size={14} />锁定交付清单</button> : null}
         {deliveryPackages[0] ? <details className="timeline-delivery-files"><summary>{deliveryPackages[0].status} · {deliveryPackages[0].deliverables.length} 文件</summary><div>{deliveryPackages[0].deliverables.map((item) => <a href={`/api/projects/${projectId}/delivery-packages/${deliveryPackages[0].id}/files/${encodeURIComponent(item.role)}`} key={item.role}>{item.role}</a>)}</div></details> : null}
-        {latestRender?.status === "succeeded" && latestRender.outputMediaId ? <button onClick={() => onPreviewMedia({ projectId, mediaId: latestRender.outputMediaId, title: `${timeline?.title || "主时间线"} · ${latestRender.preset}`, frameRate: timeline?.frameRate || 30 })} title="在共享播放器查看候选母版" type="button"><Eye size={14} />查看母版</button> : null}
+        {latestRender?.status === "succeeded" && latestRender.outputMediaId ? <button onClick={() => onPreviewMedia({ projectId, mediaId: latestRender.outputMediaId, mode: "master", title: `${timeline?.title || "主时间线"} · ${latestRender.preset}`, frameRate: timeline?.frameRate || 30 })} title="在共享播放器查看候选母版" type="button"><Eye size={14} />查看母版</button> : null}
         <i />
         <button onClick={() => setScale((value) => clamp(value - .2, .6, 3))} title="缩小时间线" type="button"><ZoomOut size={14} /></button>
         <span>{Math.round(scale * 100)}%</span>
@@ -335,8 +459,8 @@ export function CanvasTimelineDock({ canvas, initialHeight = 280, notify, onClos
       </div>
     </header>
     {!timeline ? <div className="timeline-create-state"><p>{readOnly ? "当前没有可查看的时间线。" : "建立主时间线后，可从故事板或任意已生成媒体节点直接入轨。"}</p>{!readOnly ? <button onClick={() => void create()} type="button">创建主时间线</button> : null}</div> : <div className="timeline-scroll nowheel">
-      <div className="timeline-ruler-row"><span>时间码</span><div style={{ width: `${trackWidth}%` }}>{[0, .25, .5, .75, 1].map((ratio) => <button key={ratio} onClick={() => seek(durationMs * ratio)} style={{ left: `${ratio * 100}%` }} type="button">{Math.round(durationMs * ratio / 1000)}s</button>)}{(timeline.markers || []).map((marker) => <button className="timeline-marker" key={marker.id} onClick={() => seek(marker.timeMs)} style={{ left: `${marker.timeMs / durationMs * 100}%` }} title={marker.title} type="button"><Diamond size={9} /></button>)}<span className="timeline-playhead" style={{ left: `${playheadMs / durationMs * 100}%` }} /></div></div>
-      {orderedTracks.map((track) => { const trackClips = clips.filter((clip) => clip.track === track.order); const tone = track.kind === "audio" ? " is-audio" : ["subtitle", "text"].includes(track.kind) ? " is-subtitle" : track.kind === "effect" ? " is-effect" : ""; return <div className={`timeline-track-row${tone}`} key={track.id}><aside><div className="timeline-track-title"><strong>{trackCode(track, orderedTracks)}</strong><small>{track.name}</small></div><div className="timeline-track-controls"><button aria-pressed={track.locked} disabled={readOnly} onClick={() => void patchTrack(track, { locked: !track.locked }, track.locked ? "轨道已解锁" : "轨道已锁定")} title={track.locked ? "解锁轨道" : "锁定轨道"} type="button">{track.locked ? <Lock size={10} /> : <Unlock size={10} />}</button><button aria-pressed={!track.visible} disabled={readOnly} onClick={() => void patchTrack(track, { visible: !track.visible }, track.visible ? "轨道已隐藏" : "轨道已显示")} title="显示/隐藏" type="button">{track.visible ? <Eye size={10} /> : <EyeOff size={10} />}</button><button aria-pressed={track.muted} disabled={readOnly} onClick={() => void patchTrack(track, { muted: !track.muted }, track.muted ? "轨道已取消静音" : "轨道已静音")} title="静音" type="button"><VolumeX size={10} /></button><button aria-pressed={track.solo} disabled={readOnly} onClick={() => void patchTrack(track, { solo: !track.solo }, track.solo ? "轨道已取消独听" : "轨道已独听")} title="独听" type="button">S</button><button disabled={readOnly || track.order === 0} onClick={() => void moveTrack(track, -1)} title="轨道上移" type="button"><ChevronUp size={10} /></button><button disabled={readOnly || track.order === orderedTracks.length - 1} onClick={() => void moveTrack(track, 1)} title="轨道下移" type="button"><ChevronDown size={10} /></button><button disabled={readOnly || trackClips.length > 0} onClick={() => void edit(() => api.removeTimelineTrack(projectId, timelineId, track.id), "空轨道已删除")} title="删除空轨道" type="button"><Trash2 size={10} /></button></div></aside><div className={`timeline-track-lane${dropTrack === track.order ? " is-drop-target" : ""}`} {...dropHandlers(track)} style={{ width: `${trackWidth}%` }}><span className="timeline-playhead" style={{ left: `${playheadMs / durationMs * 100}%` }} />{trackClips.map((clip) => { const startMs = dragPreview?.clipId === clip.id ? dragPreview.startMs : clip.startMs; const clipEffects = (timeline.effects || []).filter((entry) => entry.clipId === clip.id).length; const clipKeyframes = (timeline.keyframes || []).filter((entry) => entry.clipId === clip.id).length; const preparation = preparations[clip.mediaId]; const waveform = preparation?.waveform?.length ? preparation.waveform : Array.from({ length: 24 }, (_, index) => (28 + (index * 37 % 66)) / 100); return <button aria-pressed={selectedClipId === clip.id} className={`timeline-dock-clip${tone}${selectedClipId === clip.id ? " is-selected" : ""}`} key={clip.id} onDoubleClick={() => clip.mediaId && onPreviewMedia({ projectId, mediaId: clip.mediaId, proxy: Boolean(preparation?.proxyRelativePath), title: clip.payload?.title || clip.nodeId || "时间线媒体", frameRate: timeline.frameRate })} onPointerDown={(event) => beginClipDrag(event, clip, durationMs)} style={{ left: `${startMs / durationMs * 100}%`, width: `${Math.max(4, clip.durationMs / durationMs * 100)}%` }} type="button">{preparation?.thumbnailRelativePath && track.kind === "video" ? <img alt="" className="timeline-clip-thumbnail" src={`/api/projects/${projectId}/media/${clip.mediaId}/thumbnail`} /> : null}{track.kind === "audio" ? <span className="timeline-waveform" aria-hidden="true">{waveform.slice(0, 96).map((peak, index) => <i key={index} style={{ height: `${Math.max(5, peak * 100)}%` }} />)}</span> : null}<strong>{clip.payload?.text || clip.payload?.storyboardShotId?.slice(0, 12) || clip.nodeId?.slice(0, 10) || "media"}</strong><small>{(clip.durationMs / 1000).toFixed(1)}s · {(startMs / 1000).toFixed(1)}s{preparation?.status === "succeeded" ? " · 代理✓" : ""}{clipEffects ? ` · FX${clipEffects}` : ""}{clipKeyframes ? ` · ◆${clipKeyframes}` : ""}</small></button>; })}</div></div>; })}
+      <div className="timeline-ruler-row"><span>时间码</span><div className="timeline-ruler-lane" onPointerDown={(event) => { if (event.target.closest(".timeline-marker, .timeline-ruler-tick")) return; beginPlayheadScrub(event, event.currentTarget); }} style={{ width: `${trackWidth}%` }}>{[0, .25, .5, .75, 1].map((ratio) => <button className="timeline-ruler-tick" key={ratio} onClick={() => seek(durationMs * ratio, { force: true })} style={{ left: `${ratio * 100}%` }} type="button">{Math.round(durationMs * ratio / 1000)}s</button>)}{(timeline.markers || []).map((marker) => <button className="timeline-marker" key={marker.id} onClick={() => seek(marker.timeMs, { force: true })} style={{ left: `${marker.timeMs / durationMs * 100}%` }} title={marker.title} type="button"><Diamond size={9} /></button>)}{playheadHandle(".timeline-ruler-lane")}</div></div>
+      {orderedTracks.map((track) => renderTrack(track))}
     </div>}
   </section>;
-}
+});

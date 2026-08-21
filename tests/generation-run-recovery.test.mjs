@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activeRunActivities, reconcileRunActivities } from "../apps/web/src/generation-run-recovery.js";
+import { activeRunActivities, pollableRunActivities, reconcileRunActivities } from "../apps/web/src/generation-run-recovery.js";
 
 test("activeRunActivities restores only the latest queued or running run for each node", () => {
   const now = Date.parse("2026-07-19T09:00:00.000Z");
@@ -40,6 +40,30 @@ test("activeRunActivities retries a failed provider poll when the paid task stil
   });
 });
 
+test("activeRunActivities keeps H3 tasks recoverable across transient remote outages", () => {
+  assert.deepEqual(activeRunActivities([{
+    id: "run-h3",
+    nodeId: "node-video",
+    status: "failed",
+    result: { code: "h3_remote_unavailable", task: { provider: "h3-local", taskId: "prompt-1" } }
+  }]), {
+    "node-video": { phase: "running", runId: "run-h3" }
+  });
+});
+
+test("global polling includes the selected node instead of relying on its prompt card", () => {
+  assert.deepEqual(pollableRunActivities({
+    "node-selected": { phase: "running", runId: "run-selected" },
+    "node-background": { phase: "running", runId: "run-background" },
+    "node-local": { phase: "requesting" },
+    "node-canceling": { phase: "canceling", runId: "run-canceling" },
+    "node-canceled": { phase: "canceled", runId: "run-canceled" }
+  }), [
+    ["node-selected", { phase: "running", runId: "run-selected" }],
+    ["node-background", { phase: "running", runId: "run-background" }]
+  ]);
+});
+
 test("reconcileRunActivities clears an externally completed run and preserves only local pre-dispatch state", () => {
   const result = reconcileRunActivities({
     "node-image": { phase: "running", runId: "run-image" },
@@ -54,5 +78,15 @@ test("reconcileRunActivities clears an externally completed run and preserves on
       "node-local": { phase: "requesting" }
     },
     completedNodeIds: ["node-image"]
+  });
+});
+
+test("reconcileRunActivities does not overwrite an in-flight cancellation with running", () => {
+  assert.deepEqual(reconcileRunActivities({
+    "node-video": { phase: "canceling", runId: "run-video" }
+  }, [
+    { id: "run-video", nodeId: "node-video", status: "running", createdAt: "2026-07-19T08:51:00.000Z" }
+  ]).activities, {
+    "node-video": { phase: "canceling", runId: "run-video" }
   });
 });

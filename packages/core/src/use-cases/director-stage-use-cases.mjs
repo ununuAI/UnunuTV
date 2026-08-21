@@ -23,6 +23,29 @@ function assertValidCommand(command) {
 }
 
 export function createDirectorStageUseCases(ports, assets = {}) {
+  async function assertPersistentAssetBinding(projectId, stageObject) {
+    const binding = stageObject?.assetBinding;
+    if (!binding) return;
+    if (typeof assets.listAssets !== "function") {
+      throw new UnuTvError("director_asset_binding_unavailable", "3D asset binding is unavailable", 500);
+    }
+    const projectAssets = await assets.listAssets({ projectId, scope: "project" });
+    const asset = projectAssets.find((entry) => entry.id === binding.assetId);
+    if (!asset) {
+      throw new UnuTvError("director_asset_not_found", `Asset not found in project: ${binding.assetId}`, 409);
+    }
+    const version = asset.versions?.find((entry) => entry.id === binding.assetVersionId);
+    if (!version) {
+      throw new UnuTvError("director_asset_version_not_found", `Asset version not found: ${binding.assetVersionId}`, 409);
+    }
+    if (version.mediaId !== binding.mediaId) {
+      throw new UnuTvError("director_asset_media_mismatch", "3D object media does not match the bound asset version", 409);
+    }
+    if (!ports.media.open(projectId, binding.mediaId)) {
+      throw new UnuTvError("director_asset_media_not_found", `Asset media not found: ${binding.mediaId}`, 409);
+    }
+  }
+
   async function applyDirectorStageCommandUseCase(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const nodeId = requireText(input.nodeId, "nodeId");
@@ -36,6 +59,14 @@ export function createDirectorStageUseCases(ports, assets = {}) {
     const existing = await ports.projects.getDirectorStageCommandReceipt(projectId, nodeId, command.idempotencyKey);
     if (existing) return existing;
 
+    const stageObjects = command.type === "upsert_object"
+      ? [command.payload.object]
+      : command.type === "replace_document"
+        ? command.payload.stage.objects
+        : [];
+    for (const stageObject of stageObjects) {
+      await assertPersistentAssetBinding(projectId, stageObject);
+    }
     if (command.type === "set_environment") {
       const reviews = await ports.projects.listReviews(projectId);
       const reviewGate = reviewDirectorWorldEnvironment(command.payload.environment, reviews);

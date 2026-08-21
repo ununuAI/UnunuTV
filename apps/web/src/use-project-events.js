@@ -1,45 +1,74 @@
 "use client";
 
-// 一个项目只开一条 SSE,多个组件共享订阅。
+// 一个项目只开一条有限时增量轮询,多个组件共享订阅。
 //
-// 浏览器对同一域名的 HTTP/1.1 并发连接约 6 条,画布、时间线、权威投影
-// 各开一条会吃掉一半额度,所以这里做连接复用:按 projectId 维护单例,
-// 订阅者归零时才真正断开。
+// 不使用永久 SSE：部分 Chrome 版本会把本地 EventSource 长连接持续显示为
+// 标签页 loading。每次增量请求都会正常结束，同时仍保留跨页面实时同步。
 //
 // 事件源是项目库的 events 表,CLI 与网页写的是同一份库,
 // 因此终端里 agent 的改动同样从这条连接推过来。
 
 import { useEffect, useRef } from "react";
 
-/** projectId -> { source, listeners:Set<fn>, lastSequence:number } */
+const EVENT_POLL_INTERVAL_MS = 1000;
+
+/** projectId -> { listeners:Set<fn>, lastSequence:number|null, timer, controller } */
 const channels = new Map();
 
 function openChannel(projectId) {
   let channel = channels.get(projectId);
   if (channel) return channel;
 
-  channel = { source: null, listeners: new Set(), lastSequence: 0 };
+  channel = { controller: null, listeners: new Set(), lastSequence: null, loadListener: null, timer: null };
   channels.set(projectId, channel);
 
-  const source = new EventSource(`/api/projects/${encodeURIComponent(projectId)}/events`);
-  source.onmessage = (message) => {
-    let event;
-    try { event = JSON.parse(message.data); } catch { return; }
-    if (event.type === "stream.open") return;
-    if (Number.isFinite(event.sequence)) channel.lastSequence = event.sequence;
-    for (const listener of [...channel.listeners]) {
-      try { listener(event); } catch { /* 单个订阅者出错不影响其他订阅者 */ }
+  const poll = async () => {
+    channel.timer = null;
+    if (channels.get(projectId) !== channel) return;
+    const controller = new AbortController();
+    channel.controller = controller;
+    try {
+      const suffix = channel.lastSequence == null ? "" : `?since=${encodeURIComponent(channel.lastSequence)}`;
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/events/snapshot${suffix}`, {
+        cache: "no-store",
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`Event snapshot failed: ${response.status}`);
+      const result = await response.json();
+      if (Number.isFinite(result.latestSequence)) channel.lastSequence = result.latestSequence;
+      for (const event of result.events || []) {
+        for (const listener of [...channel.listeners]) {
+          try { listener(event); } catch { /* 单个订阅者出错不影响其他订阅者 */ }
+        }
+      }
+    } catch {
+      // 本地服务重启或短暂不可达时下一轮自动恢复。
+    } finally {
+      if (channel.controller === controller) channel.controller = null;
+      if (channel.listeners.size && channels.get(projectId) === channel) {
+        channel.timer = window.setTimeout(() => { void poll(); }, EVENT_POLL_INTERVAL_MS);
+      }
     }
   };
-  // 断线由 EventSource 自动重连,服务端读 Last-Event-ID 补齐缺口
-  channel.source = source;
+  const connect = () => {
+    channel.loadListener = null;
+    if (channel.timer || channel.controller || channels.get(projectId) !== channel) return;
+    void poll();
+  };
+  if (document.readyState === "complete") connect();
+  else {
+    channel.loadListener = connect;
+    window.addEventListener("load", connect, { once: true });
+  }
   return channel;
 }
 
 function closeChannelIfIdle(projectId) {
   const channel = channels.get(projectId);
   if (!channel || channel.listeners.size) return;
-  channel.source?.close();
+  if (channel.loadListener) window.removeEventListener("load", channel.loadListener);
+  if (channel.timer) window.clearTimeout(channel.timer);
+  channel.controller?.abort();
   channels.delete(projectId);
 }
 

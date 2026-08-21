@@ -22,6 +22,7 @@ export class LocalSecretStore {
     this.baseEnvironment = baseEnvironment;
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     chmodSync(this.directory, 0o700);
+    this.h3ConfigPath = path.join(this.directory, "h3-config.json");
   }
 
   filePath(field) {
@@ -57,7 +58,9 @@ export class LocalSecretStore {
 
   effectiveValue(field) {
     const definition = FIELDS[field];
-    return clean(this.baseEnvironment?.[definition.env]) || this.read(field);
+    const direct = clean(this.baseEnvironment?.[definition.env]) || this.read(field);
+    if (direct || field !== "openspeechApiKey") return direct;
+    return clean(this.baseEnvironment?.ARK_API_KEY) || this.read("arkApiKey");
   }
 
   environment() {
@@ -72,7 +75,40 @@ export class LocalSecretStore {
   source(field) {
     const definition = FIELDS[field];
     if (clean(this.baseEnvironment?.[definition.env])) return "environment";
-    return this.read(field) ? "local-file" : "none";
+    if (this.read(field)) return "local-file";
+    if (field === "openspeechApiKey") {
+      if (clean(this.baseEnvironment?.ARK_API_KEY)) return "shared-ark-environment";
+      if (this.read("arkApiKey")) return "shared-ark-local-file";
+    }
+    return "none";
+  }
+
+  h3Config() {
+    const inline = clean(this.baseEnvironment?.UNUTV_H3_CONFIG_JSON);
+    try {
+      if (inline) return JSON.parse(inline);
+      if (!existsSync(this.h3ConfigPath)) return null;
+      return JSON.parse(readFileSync(this.h3ConfigPath, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  h3ConfigSource() {
+    if (clean(this.baseEnvironment?.UNUTV_H3_CONFIG_JSON)) return "environment";
+    return existsSync(this.h3ConfigPath) ? "local-file" : "none";
+  }
+
+  importH3Config(sourcePath) {
+    const resolved = path.resolve(clean(sourcePath));
+    const parsed = JSON.parse(readFileSync(resolved, "utf8"));
+    if (!clean(parsed?.comfy_url)) throw new Error("H3 config requires comfy_url");
+    const temporaryPath = path.join(this.directory, `.h3-config.${randomUUID()}.partial`);
+    writeFileSync(temporaryPath, `${JSON.stringify(parsed, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    chmodSync(temporaryPath, 0o600);
+    renameSync(temporaryPath, this.h3ConfigPath);
+    chmodSync(this.h3ConfigPath, 0o600);
+    return this.status();
   }
 
   status() {
@@ -81,6 +117,7 @@ export class LocalSecretStore {
       providers: {
         ununu: { configured: Boolean(this.effectiveValue("ununuApiKey")), source: this.source("ununuApiKey") },
         ark: { configured: Boolean(this.effectiveValue("arkApiKey")), source: this.source("arkApiKey") },
+        minimax: { configured: Boolean(this.h3Config()), source: this.h3ConfigSource(), kind: "local-comfyui" },
         openrouter: { configured: Boolean(this.effectiveValue("openrouterApiKey")), source: this.source("openrouterApiKey") },
         arkTts: {
           configured: Boolean(this.effectiveValue("arkTtsApiKey")),
@@ -101,7 +138,10 @@ export class LocalSecretStore {
   permissions() {
     return {
       directory: statSync(this.directory).mode & 0o777,
-      files: Object.fromEntries(Object.keys(FIELDS).filter((field) => existsSync(this.filePath(field))).map((field) => [field, statSync(this.filePath(field)).mode & 0o777]))
+      files: {
+        ...Object.fromEntries(Object.keys(FIELDS).filter((field) => existsSync(this.filePath(field))).map((field) => [field, statSync(this.filePath(field)).mode & 0o777])),
+        ...(existsSync(this.h3ConfigPath) ? { h3Config: statSync(this.h3ConfigPath).mode & 0o777 } : {})
+      }
     };
   }
 }

@@ -1,21 +1,6 @@
----
-name: ununu-cinematic-production
-description: >
-  Operate UnuTV as the single end-to-end film-production Skill for films,
-  series, multi-episode short drama, commercials, MV, animation, trailers, and
-  social video. Use it for story and series canon, reusable asset authority,
-  AI-video shot design, low-poly spatial previs, camera and actor trajectories,
-  compiled image/video prompts, Provider submission, actual-take review,
-  continuity, editing, sound, render, QC, and delivery. Every durable action and
-  artifact must use the official UnuTV CLI/API and appear on a visible canvas
-  node; the browser is read-only UI verification except while fixing UI bugs.
----
+# UnunuTV 电影工业流程
 
-# Ununu 电影工业 Skill
-
-Use this as the only Ununu film-production Skill. Do not route to another
-Ununu video or operator Skill. UnuTV is the single durable runtime; this Skill
-is its agent contract.
+本文件是 `unutv` Skill 的电影工业合同。HTTP/CLI 只读 [api.md](api.md)。
 
 ## Product definition
 
@@ -61,8 +46,9 @@ generate, approve, reject, edit, or run production state in the browser.
 Browser interaction is allowed only to reproduce or verify a UI bug after the
 source fix.
 
-Before the first mutation in a task, read
-[api-cli.md](references/api-cli.md). For each mutation:
+Before the first mutation in a task, read the single UnuTV operator manual
+[api.md](api.md) for HTTP/CLI. Cinematic nextAction and
+review gates stay in [api-cli.md](api-cli.md). For each mutation:
 
 1. Resolve exact project, canvas, node and revision IDs.
 2. State the bounded persisted delta.
@@ -140,11 +126,11 @@ evidence.
 
 ## Director Skill compatibility floor
 
-Read [director-skill-bridge.md](references/director-skill-bridge.md) whenever
+Read [director-skill-bridge.md](director-skill-bridge.md) whenever
 building assets, shots, previews or Seedance inputs.
 
 Read
-[director-toonflow-openmontage-absorption.md](references/director-toonflow-openmontage-absorption.md)
+[director-toonflow-openmontage-absorption.md](director-toonflow-openmontage-absorption.md)
 when starting a new film/episode, repairing a workflow, deciding stage
 ownership, or building editing/delivery state. It defines the one merged
 workflow; never expose Director Skill, Toonflow, OpenMontage and UnuTV as four
@@ -520,7 +506,7 @@ a restriction on useful image exploration.
 
 Keep appearance, spatial, temporal and control responsibilities separate.
 Read
-[cross-modal-image-video-control.md](references/cross-modal-image-video-control.md)
+[cross-modal-image-video-control.md](cross-modal-image-video-control.md)
 before any image/video transition.
 
 A semantic reference is not automatically `t0`. A first frame owns literal
@@ -634,8 +620,8 @@ verification.
 
 Read:
 
-- [sequence-previs-visual-memory-and-trace.md](references/sequence-previs-visual-memory-and-trace.md)
-- [sequence-state-canon-retake-control.md](references/sequence-state-canon-retake-control.md)
+- [sequence-previs-visual-memory-and-trace.md](sequence-previs-visual-memory-and-trace.md)
+- [sequence-state-canon-retake-control.md](sequence-state-canon-retake-control.md)
 
 Use `VisualTakeMemory` and `CinematicEvaluationRecord` for real observed
 screen state. Only the latest ACCEPT may update canon, supply a continuation

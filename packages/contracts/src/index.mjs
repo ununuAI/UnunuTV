@@ -72,6 +72,7 @@ export * from "./video-model-capability-policy.mjs";
 export * from "./generation-parameter-contracts.mjs";
 export * from "./workbench-contracts.mjs";
 export * from "./storyboard-contracts.mjs";
+export * from "./script-row-contract.mjs";
 export * from "./node-presentation-contracts.mjs";
 export * from "./node-prompt-capability-policy.mjs";
 export * from "./gateway-model-catalog-policy.mjs";

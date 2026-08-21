@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ARK_SEEDANCE_2_MINI_MODEL_ID,
+  MINIMAX_H3_MODEL_ID,
   OPENROUTER_GROK_VIDEO_MODEL_ID,
   getVideoModelCapability,
   preflightVideoModelCapability,
@@ -217,4 +218,14 @@ test("the exact registry never reports unsupported first-last-frame capability f
   assert.equal(preflight.ok, false);
   assert.equal(preflight.errors.some((entry) => entry.code === "unsupported_mode"), true);
   assert.equal(preflight.errors.some((entry) => entry.code === "unsupported_visual_anchor"), true);
+});
+
+test("MiniMax H3 exposes the local ComfyUI frame, reference, duration, and four-profile contract", () => {
+  const profile = getVideoModelCapability({ provider: "minimax", model: MINIMAX_H3_MODEL_ID });
+  assert.deepEqual(profile.supportedModes, ["text_to_video", "image_reference", "first_frame", "first_last_frame"]);
+  assert.deepEqual(profile.duration, { min: 4, max: 15 });
+  assert.deepEqual(profile.supportedResolutions, ["480p", "720p"]);
+  assert.deepEqual(profile.supportedProfiles, ["480p_accelerated", "720p_accelerated", "480p_native", "720p_native"]);
+  assert.equal(profile.maxReferenceImages, 9);
+  assert.equal(profile.supportedAspectRatios.includes("21:9"), true);
 });

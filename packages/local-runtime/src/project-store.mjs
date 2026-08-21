@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -22,12 +22,20 @@ import {
 import { updateProjectNodeWithCas } from "./project-node-cas.mjs";
 import { runDatabaseTransaction } from "./project-transaction.mjs";
 import { configureSqliteConnection } from "./sqlite-connection-policy.mjs";
+import { ensureProjectLayout } from "./project-layout.mjs";
 
 export class ProjectStore {
   constructor(dataRoot, options = {}) {
     this.dataRoot = dataRoot;
     this.databases = new Map();
+    this.mediaRootResolver = options.mediaRootResolver ?? (() => null);
     this.transactionObserver = options.transactionObserver ?? null;
+  }
+
+  mediaRoot(projectId) {
+    const mediaRoot = this.mediaRootResolver(canonicalProjectId(projectId));
+    if (!mediaRoot) throw new UnuTvError("project_media_root_missing", "项目没有可用的媒体目录", 409, { projectId: canonicalProjectId(projectId) });
+    return mediaRoot;
   }
 
   database(projectId, options = {}) {
@@ -81,26 +89,12 @@ export class ProjectStore {
   }
 
   create(project) {
-    const directory = projectDirectory(this.dataRoot, project.id);
-    for (const relative of [
-      ".unutv",
-      "media/source/images",
-      "media/source/videos",
-      "media/source/audio",
-      "media/generated/images",
-      "media/generated/videos",
-      "media/generated/audio",
-      "media/thumbnails",
-      "media/proxies",
-      "temp",
-      "exports",
-      "backups"
-    ]) mkdirSync(path.join(directory, relative), { recursive: true });
-    writeFileSync(path.join(directory, ".unutv", "project.json"), `${JSON.stringify({ projectId: project.id }, null, 2)}\n`, "utf8");
+    const stateDirectory = projectDirectory(this.dataRoot, project.id);
+    ensureProjectLayout(stateDirectory, project.mediaRoot);
     const database = this.database(project.id, { createIfMissing: true });
     database.prepare("INSERT INTO project_meta (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)")
       .run(project.id, project.title, project.createdAt, project.updatedAt);
-    event(database, "project.created", project.id, { title: project.title });
+    event(database, "project.created", project.id, { title: project.title, mediaRoot: project.mediaRoot });
   }
 
   open(projectId) {
@@ -118,6 +112,7 @@ export class ProjectStore {
       title: project.title,
       createdAt: project.created_at,
       updatedAt: project.updated_at,
+      mediaRoot: this.mediaRootResolver(project.id),
       rootCanvasId: canvases[0]?.id,
       canvases: canvases.map((canvas) => ({
         id: canvas.id,
@@ -256,7 +251,7 @@ export class ProjectStore {
       ...(input.mode ? { mode: input.mode } : {})
     };
     this.updateNode(projectId, input.nodeId, { payload: nextPayload });
-    event(database, "node.prompt_saved", input.nodeId, { version: saved.version });
+    event(database, "node.prompt_saved", input.nodeId, { version: saved.version, canvasId: node.canvasId, nodeId: input.nodeId });
     return saved;
   }
 

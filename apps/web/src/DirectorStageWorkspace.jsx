@@ -40,8 +40,8 @@ export function DirectorFullscreen({ node, canvas, notify, refresh, onClose }) {
     <div className="director-fullscreen" onPointerDown={(event) => event.stopPropagation()} role="dialog">
       <header className="director-fullscreen-bar">
         <span className="director-fullscreen-title">
-          <b>3D 导演台</b>
-          <small>{node.title || "导演节点"}</small>
+          <b>3D导演台 · 资产工作台</b>
+          <small>{node.title || "资产工作台"}</small>
         </span>
         <span className="director-fullscreen-hint">Esc 退出</span>
         <button aria-label="关闭导演台" className="director-fullscreen-close" onClick={onClose} type="button">✕</button>

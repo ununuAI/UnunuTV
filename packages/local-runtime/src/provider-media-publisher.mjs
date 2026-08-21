@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { UnuTvError, createId, nowIso } from "@ununu/unutv-contracts";
 
@@ -22,7 +22,16 @@ function publicBaseUrlFile(dataRoot) {
 
 function storedPublicBaseUrl(dataRoot) {
   const filePath = publicBaseUrlFile(dataRoot);
-  return existsSync(filePath) ? readFileSync(filePath, "utf8").trim() : "";
+  if (!existsSync(filePath)) return "";
+  try {
+    const stored = JSON.parse(readFileSync(filePath, "utf8"));
+    if (!stored?.url || !Number.isInteger(stored.ownerPid) || stored.ownerPid <= 0) throw new Error("invalid tunnel lease");
+    process.kill(stored.ownerPid, 0);
+    return stored.url;
+  } catch {
+    try { unlinkSync(filePath); } catch {}
+    return "";
+  }
 }
 
 function signature(secret, pathname, expires) {
@@ -39,7 +48,9 @@ export class ProviderMediaPublisher {
     this.projects = projects;
     this.media = media;
     this.dataRoot = dataRoot;
-    this.publicBaseUrl = options.publicBaseUrl || process.env.UNUTV_PUBLIC_MEDIA_BASE_URL || storedPublicBaseUrl(dataRoot);
+    this.publicBaseUrl = Object.hasOwn(options, "publicBaseUrl")
+      ? (options.publicBaseUrl || "")
+      : (process.env.UNUTV_PUBLIC_MEDIA_BASE_URL || storedPublicBaseUrl(dataRoot));
     this.secret = signingSecret(dataRoot, options.signingSecret || process.env.UNUTV_PUBLIC_MEDIA_SIGNING_SECRET);
   }
 
@@ -55,10 +66,16 @@ export class ProviderMediaPublisher {
 
   setPublicBaseUrl(value) {
     this.publicBaseUrl = value || "";
+    const filePath = publicBaseUrlFile(this.dataRoot);
     if (this.publicBaseUrl) {
-      const filePath = publicBaseUrlFile(this.dataRoot);
       mkdirSync(path.dirname(filePath), { recursive: true });
-      writeFileSync(filePath, `${this.publicBaseUrl}\n`, { encoding: "utf8", mode: 0o600 });
+      writeFileSync(filePath, `${JSON.stringify({
+        url: this.publicBaseUrl,
+        ownerPid: process.pid,
+        updatedAt: new Date().toISOString()
+      })}\n`, { encoding: "utf8", mode: 0o600 });
+    } else if (existsSync(filePath)) {
+      unlinkSync(filePath);
     }
     return this.publicBaseUrl;
   }

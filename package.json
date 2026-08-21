@@ -10,11 +10,11 @@
   "scripts": {
     "dev": "npm run dev:tunnel",
     "dev:tunnel": "node scripts/dev-with-tunnel.mjs",
-    "dev:local-only": "npm --workspace @ununu/unutv-web run dev",
+    "dev:local-only": "UNUTV_DISABLE_PUBLIC_TUNNEL=1 npm --workspace @ununu/unutv-web run dev",
     "dev:api": "npm --workspace @ununu/unutv-api run dev",
     "dev:web": "npm --workspace @ununu/unutv-web run dev",
     "start": "npm run dev:tunnel",
-    "start:local-only": "npm --workspace @ununu/unutv-web run start",
+    "start:local-only": "UNUTV_DISABLE_PUBLIC_TUNNEL=1 npm --workspace @ununu/unutv-web run start",
     "build": "npm --workspace @ununu/unutv-web run build",
     "test": "node --test tests/*.test.mjs",
     "verify:arch": "node scripts/check-architecture.mjs",

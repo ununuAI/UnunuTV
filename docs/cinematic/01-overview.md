@@ -22,7 +22,7 @@ StoryProductionPacket
 → evidence-backed knowledge feedback
 ```
 
-唯一 `ununu-cinematic-production` Skill 负责创作、低模预演、专家路由、镜头、
+唯一 `unutv` Skill 负责创作、低模预演、专家路由、镜头、
 Prompt 和官方 API/CLI 执行。所有持久化阶段与产物必须绑定可见画布节点；浏览器只做
 UI Bug 的复现与只读验收。
 

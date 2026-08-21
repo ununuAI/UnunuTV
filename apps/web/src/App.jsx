@@ -149,7 +149,12 @@ export default function App({ initialProjectId = null }) {
   const router = useRouter();
   const canvasRef = useRef(null);
   const playerRef = useRef(null);
+  const timelineRef = useRef(null);
   const [health, setHealth] = useState(null);
+  const [workspace, setWorkspace] = useState(null);
+  const [workspaceRootDraft, setWorkspaceRootDraft] = useState("");
+  const [workspaceSaving, setWorkspaceSaving] = useState(false);
+  const [workspaceChoosing, setWorkspaceChoosing] = useState(false);
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState(null);
@@ -175,9 +180,10 @@ export default function App({ initialProjectId = null }) {
   const selected = canvas?.nodes.find((node) => node.id === selectedId);
   const activeSideToolbarSurface = tab;
 
-  useEffect(() => {
-    if (selected && ["video", "videoShot", "compose", "video-clip"].includes(selected.kind)) setPlayerPreview(null);
-  }, [selected?.id]);
+  const handlePreviewMedia = useCallback((preview) => {
+    setPlayerPreview(preview);
+    if (preview && preview.open !== false) setPlayerOpen(true);
+  }, []);
 
   const notify = useCallback((value, error = true) => {
     const isError = value instanceof Error ? true : error;
@@ -214,9 +220,9 @@ export default function App({ initialProjectId = null }) {
   }, [notify, openCanvas]);
 
   useEffect(() => {
-    Promise.all([api.health(), api.projects()]).then(([status, result]) => {
-      setHealth(status); setProjects(result.projects); setLoading(false);
-      if (initialProjectId) return openProject(initialProjectId);
+    Promise.all([api.health(), api.workspace(), api.projects()]).then(([status, workspaceStatus, result]) => {
+      setHealth(status); setWorkspace(workspaceStatus); setWorkspaceRootDraft(workspaceStatus.rootPath || ""); setProjects(result.projects); setLoading(false);
+      if (workspaceStatus.initialized && initialProjectId) return openProject(initialProjectId);
     }).catch((error) => { setLoading(false); notify(error); });
   }, [initialProjectId, notify, openProject]);
 
@@ -232,11 +238,14 @@ export default function App({ initialProjectId = null }) {
 
     let stopped = false;
     let requestInFlight = false;
+    let syncRequested = false;
     let mergeTimer = null;
 
     const syncCanvas = async () => {
-      if (stopped || requestInFlight) return;
+      if (stopped) return;
+      if (requestInFlight) { syncRequested = true; return; }
       requestInFlight = true;
+      syncRequested = false;
       try {
         const nextCanvas = await api.canvas(projectId, canvasId);
         if (stopped) return;
@@ -250,10 +259,12 @@ export default function App({ initialProjectId = null }) {
         // 常规错误面仍然是用户的显式刷新/操作
       } finally {
         requestInFlight = false;
+        if (syncRequested && !stopped) scheduleSync();
       }
     };
 
     const scheduleSync = () => {
+      if (requestInFlight) { syncRequested = true; return; }
       if (mergeTimer) return;
       mergeTimer = window.setTimeout(() => { mergeTimer = null; void syncCanvas(); }, CANVAS_MERGE_DEBOUNCE_MS);
     };
@@ -277,6 +288,31 @@ export default function App({ initialProjectId = null }) {
       document.removeEventListener("visibilitychange", resume);
     };
   }, [canvas?.id, project?.id]);
+
+  async function chooseWorkspaceRoot() {
+    if (workspaceChoosing || workspaceSaving) return;
+    setWorkspaceChoosing(true);
+    try {
+      const result = await api.selectWorkspaceRoot();
+      if (!result.cancelled && result.rootPath) setWorkspaceRootDraft(result.rootPath);
+    } catch (error) { notify(error); }
+    finally { setWorkspaceChoosing(false); }
+  }
+
+  async function initializeWorkspace(event) {
+    event.preventDefault();
+    const rootPath = workspaceRootDraft.trim();
+    if (!rootPath || workspaceSaving) return;
+    setWorkspaceSaving(true);
+    try {
+      const nextWorkspace = await api.initializeWorkspace(rootPath);
+      setWorkspace(nextWorkspace);
+      setWorkspaceRootDraft(nextWorkspace.rootPath);
+      notify("项目根目录已初始化", false);
+      await loadProjects();
+    } catch (error) { notify(error); }
+    finally { setWorkspaceSaving(false); }
+  }
 
   async function createProject() {
     try {
@@ -314,9 +350,24 @@ export default function App({ initialProjectId = null }) {
     setSideToolbarSurface(nextSideToolbarSurface(activeSideToolbarSurface, surface));
   }
 
+  if (!loading && workspace && !workspace.initialized) return <main className="ununu-home momo-home-shell">
+    <div className="modal-backdrop workspace-setup-backdrop">
+      <form aria-label="初始化 UnunuTV 项目目录" className="settings-modal rename-project-modal" onSubmit={initializeWorkspace}>
+        <header><div><span className="surface-eyebrow">UNUTV WORKSPACE</span><h2>选择所有项目的根目录</h2></div></header>
+        <div className="rename-project-form">
+          <p>以后新建的每个项目都会在这里生成一个可直接浏览的文件夹，图片、视频和音频都放在项目文件夹内；数据库仍由 UnunuTV 单独管理。</p>
+          <label>项目根目录</label>
+          <div className="workspace-root-selection"><span>{workspaceRootDraft || "尚未选择目录"}</span><button disabled={workspaceChoosing || workspaceSaving} onClick={chooseWorkspaceRoot} type="button">{workspaceChoosing ? "正在选择…" : workspaceRootDraft ? "重新选择" : "选择目录"}</button></div>
+          <div className="rename-project-actions"><button className="primary" disabled={!workspaceRootDraft || workspaceSaving || workspaceChoosing} type="submit">{workspaceSaving ? "初始化中…" : "使用这个目录"}</button></div>
+        </div>
+      </form>
+    </div>
+    {message ? <div className={`toast ${message.error ? "error" : "success"}`} role={message.error ? "alert" : "status"}><span>{message.text}</span></div> : null}
+  </main>;
+
   if (showHome) return <>
     <ProjectHome health={health} projects={projects} loading={loading} onCreate={createProject} onOpen={(projectId) => router.push(`/projects/${encodeURIComponent(projectSlug(projectId))}`)} onSettings={() => setHomeSettings(true)} />
-    {homeSettings ? <div className="modal-backdrop" onMouseDown={() => setHomeSettings(false)}><div className="settings-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><span className="surface-eyebrow">LOCAL CONFIGURATION</span><h2>Provider 设置</h2></div><button onClick={() => setHomeSettings(false)} type="button"><X size={16} /></button></header><ProviderSettings notify={notify} /></div></div> : null}
+    {homeSettings ? <div className="modal-backdrop"><div className="settings-modal"><header><div><span className="surface-eyebrow">LOCAL CONFIGURATION</span><h2>Provider 设置</h2></div><button onClick={() => setHomeSettings(false)} type="button"><X size={16} /></button></header><ProviderSettings notify={notify} /></div></div> : null}
     {message ? <div className={`toast ${message.error ? "error" : "success"}`} role={message.error ? "alert" : "status"}><span>{message.text}</span>{message.error ? <button aria-label="关闭错误提示" onClick={() => setMessage(null)} type="button"><X size={14} /></button> : null}</div> : null}
   </>;
 
@@ -341,12 +392,12 @@ export default function App({ initialProjectId = null }) {
       zoom={zoom}
     />
 
-    {renameOpen ? <div className="modal-backdrop" onMouseDown={() => !renamingProject && setRenameOpen(false)}><form aria-label="修改项目名称" className="settings-modal rename-project-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={renameProject}><header><div><span className="surface-eyebrow">PROJECT SETTINGS</span><h2>修改项目名称</h2></div><button aria-label="关闭" disabled={renamingProject} onClick={() => setRenameOpen(false)} type="button"><X size={16} /></button></header><div className="rename-project-form"><label htmlFor="project-title-input">项目名称</label><input autoFocus id="project-title-input" maxLength={120} onChange={(event) => setProjectTitleDraft(event.target.value)} value={projectTitleDraft} /><div className="rename-project-actions"><button disabled={renamingProject} onClick={() => setRenameOpen(false)} type="button">取消</button><button className="primary" disabled={!projectTitleDraft.trim() || renamingProject} type="submit">{renamingProject ? "保存中…" : "保存名称"}</button></div></div></form></div> : null}
+    {renameOpen ? <div className="modal-backdrop"><form aria-label="修改项目名称" className="settings-modal rename-project-modal" onSubmit={renameProject}><header><div><span className="surface-eyebrow">PROJECT SETTINGS</span><h2>修改项目名称</h2></div><button aria-label="关闭" disabled={renamingProject} onClick={() => setRenameOpen(false)} type="button"><X size={16} /></button></header><div className="rename-project-form"><label htmlFor="project-title-input">项目名称</label><input autoFocus id="project-title-input" maxLength={120} onChange={(event) => setProjectTitleDraft(event.target.value)} value={projectTitleDraft} /><div className="rename-project-actions"><button disabled={renamingProject} onClick={() => setRenameOpen(false)} type="button">取消</button><button className="primary" disabled={!projectTitleDraft.trim() || renamingProject} type="submit">{renamingProject ? "保存中…" : "保存名称"}</button></div></div></form></div> : null}
 
     <FloatingPanel active={tab} caption={tab === "assetManager" ? "可复用生产流程" : undefined} onClose={() => setTab(null)}>{tab === "assetManager" && <CanvasWorkflowPanel />}{tab === "history" && <CanvasMaterialHistoryPanel nodes={canvas.nodes} onFocus={(nodeId) => { setSelectedId(nodeId); canvasRef.current?.focusNode(nodeId); }} />}{tab === "assets" && <AssetsPanel canvas={canvas} projectId={project.id} refresh={refresh} notify={notify} selected={selected} onSelect={setSelectedId} />}{tab === "toolbox" && <div className="momo-toolbox-panel"><button onClick={() => canvasRef.current?.fitCanvas()} type="button"><Maximize2 size={17} /><span><strong>适应全部节点</strong><small>将当前画布内容收进可视区域</small></span></button><button disabled={!selectedId} onClick={() => selectedId && canvasRef.current?.focusNode(selectedId)} type="button"><Focus size={17} /><span><strong>聚焦已选节点</strong><small>{selectedId ? "居中并放大当前节点" : "请先选择节点"}</small></span></button><button onClick={() => setShowMiniMap((value) => !value)} type="button"><Map size={17} /><span><strong>{showMiniMap ? "关闭画布小地图" : "打开画布小地图"}</strong><small>查看节点分布与当前视口</small></span></button><button onClick={() => setShowConnections((value) => !value)} type="button"><EyeOff size={17} /><span><strong>{showConnections ? "隐藏节点连线" : "显示节点连线"}</strong><small>仅改变个人画布视图</small></span></button><button onClick={() => setTab("settings")} type="button"><SlidersHorizontal size={17} /><span><strong>画布与 Provider 设置</strong><small>在右侧检查器中打开</small></span></button><div className="canvas-shortcut-hint"><strong>快捷键</strong><span><kbd>Space</kbd> 平移画布</span><span><kbd>⌘ Z</kbd> 撤销</span><span><kbd>⇧ ⌘ Z</kbd> 重做</span></div></div>}{tab === "zoom" && <div className="panel-stack zoom-panel"><button onClick={() => canvasRef.current?.fitCanvas()} type="button"><Maximize2 size={14} />显示全部节点</button>{[10,20,25,50,100,150,200].map((value) => <button className={zoom === value ? "active" : ""} key={value} onClick={() => canvasRef.current?.setZoom(value)} type="button">缩放至 {value}%</button>)}</div>}{tab === "settings" && <ProviderSettings notify={notify} />}</FloatingPanel>
 
-    {playerOpen ? <CanvasPlayerWorkspace onClose={() => setPlayerOpen(false)} preview={playerPreview} ref={playerRef} selected={selected} /> : null}
-    {timelineOpen ? <CanvasTimelineDock canvas={canvas} initialHeight={timelineHeight} notify={notify} onClose={() => setTimelineOpen(false)} onHeightChange={setTimelineHeight} onPlaybackChange={(playing) => { if (playing) void playerRef.current?.play()?.catch?.(() => {}); else playerRef.current?.pause(); }} onPreviewMedia={(preview) => { setPlayerPreview(preview); setPlayerOpen(true); }} onSeek={(milliseconds) => playerRef.current?.seek(milliseconds / 1000)} projectId={project.id} refreshCanvas={refresh} selected={selected} /> : null}
+    {playerOpen ? <CanvasPlayerWorkspace notify={notify} onClock={(ms) => timelineRef.current?.syncPlayhead(ms)} onClose={() => { playerRef.current?.pause(); timelineRef.current?.syncPlaying(false); setPlayerOpen(false); }} onTransport={(playing) => timelineRef.current?.syncPlaying(playing)} preview={playerPreview} ref={playerRef} /> : null}
+    {timelineOpen ? <CanvasTimelineDock canvas={canvas} externalClock={playerOpen} initialHeight={timelineHeight} notify={notify} onClose={() => setTimelineOpen(false)} onHeightChange={setTimelineHeight} onPlaybackChange={(playing) => { if (playing) void playerRef.current?.play()?.catch?.(() => {}); else playerRef.current?.pause(); }} onPreviewMedia={handlePreviewMedia} onSeek={(milliseconds, options) => playerRef.current?.seek(milliseconds / 1000, options)} projectId={project.id} ref={timelineRef} refreshCanvas={refresh} selected={selected} /> : null}
 
 
     <MomoCanvasChrome

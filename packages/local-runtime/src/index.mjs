@@ -1,3 +1,4 @@
+import path from "node:path";
 import { createApplication } from "@ununu/unutv-core";
 import { createProviderRouter } from "@ununu/unutv-providers";
 import { CatalogStore } from "./catalog-store.mjs";
@@ -11,17 +12,27 @@ import { LocalFfmpegGridAdapter } from "./ffmpeg-grid-adapter.mjs";
 import { loadCinematicSkillContext } from "./cinematic-skill-context.mjs";
 import { createKnowledgeFileAdapter } from "./knowledge-file-adapter.mjs";
 import { createSeriesStore } from "./series-store.mjs";
+import { LocalH3RemoteRuntime } from "./h3-remote-runtime.mjs";
 
 export function createLocalRuntime(options = {}) {
   const dataRoot = resolveDataRoot(options.dataRoot);
   const catalog = new CatalogStore(dataRoot);
+  const explicitDataRoot = options.dataRoot || process.env.UNUTV_DATA_DIR;
+  const defaultWorkspaceRoot = options.workspaceRoot
+    ?? process.env.UNUTV_WORKSPACE_DIR
+    ?? (explicitDataRoot && options.autoInitializeWorkspace !== false ? path.join(dataRoot, "workspace") : null);
+  if (!catalog.getWorkspace().initialized && defaultWorkspaceRoot) {
+    catalog.initializeWorkspace(defaultWorkspaceRoot, new Date().toISOString());
+  }
   const projects = new ProjectStore(dataRoot, {
+    mediaRootResolver: (projectId) => catalog.getProjectMediaRoot(projectId),
     transactionObserver: options.transactionObserver
   });
   const media = new LocalMediaStore(dataRoot, projects, options.ffmpeg);
   const publisher = new ProviderMediaPublisher(dataRoot, projects, media, options.publisher);
   const credentials = new LocalSecretStore(dataRoot, options.env ?? process.env);
-  const provider = options.provider ?? createProviderRouter({ media, publisher, credentials, fetchImpl: options.fetchImpl });
+  const h3Remote = options.h3Remote ?? new LocalH3RemoteRuntime(credentials, { fetchImpl: options.fetchImpl });
+  const provider = options.provider ?? createProviderRouter({ media, publisher, credentials, h3Remote, fetchImpl: options.fetchImpl });
   const render = options.render ?? new LocalFfmpegRenderAdapter(dataRoot, media, options.ffmpeg);
   const grid = options.grid ?? new LocalFfmpegGridAdapter(media, options.ffmpeg);
   const knowledge = options.knowledge === null
@@ -31,11 +42,12 @@ export function createLocalRuntime(options = {}) {
     ? null
     : (options.seriesStore ?? createSeriesStore(dataRoot));
   const app = createApplication({
-    catalog, projects, media, publisher, provider, credentials, render, grid,
+    catalog, projects, media, publisher, provider, credentials, h3Remote, render, grid,
     skillContext: loadCinematicSkillContext(),
     knowledge,
     seriesStore
   });
+  if (options.connectH3Remote !== false) queueMicrotask(() => { h3Remote.checkHealth().catch(() => {}); });
   if (options.recoverRenders !== false) queueMicrotask(() => {
     Promise.all(catalog.list().map((project) => app.recoverRenderJobs({ projectId: project.id }))).catch(() => {});
   });
@@ -77,6 +89,7 @@ export function createLocalRuntime(options = {}) {
     app,
     dataRoot,
     credentials,
+    h3Remote,
     media,
     publisher,
     projects,
@@ -87,6 +100,7 @@ export function createLocalRuntime(options = {}) {
       projects.close();
       catalog.close();
       render.close?.();
+      h3Remote.close?.();
     }
   };
 }

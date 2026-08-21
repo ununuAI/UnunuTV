@@ -32,6 +32,7 @@ import { guardProjectMutations } from "../guard-project-mutations.mjs";
 import { ensureGenerationUnitsForProduction } from "../workers/unit-design-worker.mjs";
 import { autoSignoffGenerationUnit } from "../workers/expert-signoff-worker.mjs";
 import { createApplicationFoundationUseCases } from "./application-foundation-use-cases.mjs";
+import { createAiFilmUseCases } from "./ai-film-use-cases.mjs";
 function requirePorts(ports) { for (const name of ["catalog", "projects", "media", "publisher", "provider", "credentials", "render", "grid"]) {
     if (!ports?.[name]) throw new TypeError(`Missing application port: ${name}`);
   }
@@ -41,10 +42,10 @@ export function createApplication(ports) {
   const { getNodePrompt, saveNodePrompt } = createNodePromptUseCases(ports);
   const foundation = createApplicationFoundationUseCases({ ports, saveNodePrompt });
   const {
-    addGroupMember, cancelRun, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
-    disconnectEdge, getDirectorStage, getPanorama, getProviderSettings, getWorkflow, listProjects, listProviderModels, listReviews, listRuns,
-    openCanvas, openProject, pollRun, restoreNode, runNode, saveDirectorStage, setPanorama, setWorkflowLayer,
-    updateNode, updateProject, updateProviderSettings
+    addGroupMember, cancelRun, compileH3Prompt, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
+    disconnectEdge, exportH3MotionContextWorkflows, getDirectorStage, getH3MotionContextCapabilities, getPanorama, getProviderHealth, getProviderSettings, getWorkspace, getWorkflow, importH3ProviderConfig, initializeWorkspace, installH3MotionContext,
+    listProjects, listProviderModels, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode,
+    saveDirectorStage, setPanorama, setWorkspaceRoot, setWorkflowLayer, updateNode, updateProject, updateProviderSettings
   } = foundation;
   const {
     createScriptRow,
@@ -101,7 +102,7 @@ export function createApplication(ports) {
   const renderJobs = createRenderUseCases(ports);
   const grid = createGridUseCases(ports, { connectEdge, createNode, updateNode });
   const imageEdit = createImageEditUseCases(ports, { updateNode });
-  const directorStage = createDirectorStageUseCases(ports, { addAssetVersion, createAsset });
+  const directorStage = createDirectorStageUseCases(ports, { addAssetVersion, createAsset, listAssets });
   const directorCinematic = createDirectorCinematicUseCases(ports, cinematicProduction, storyboard);
   const scriptPlanning = createScriptPlanningUseCases(ports, { cinematic: cinematicProduction, getScriptDocument, storyboards: storyboard });
   const series = ports.seriesStore
@@ -149,6 +150,27 @@ export function createApplication(ports) {
     createNode: (input) => createNode(input),
     createCinematicProduction: (input) => cinematicProduction.createCinematicProduction(input),
     startCinematicWorkflow: (input) => cinematicWorkflow.startCinematicWorkflow(input)
+  });
+  const aiFilm = createAiFilmUseCases({
+    listProjects: () => listProjects(),
+    createProject: (input) => createProject(input),
+    openProject: (input) => openProject(input),
+    openCanvas: (input) => openCanvas(input),
+    createNode: (input) => createNode(input),
+    updateNode: (input) => updateNode(input),
+    connectEdge: (input) => connectEdge(input),
+    getScriptDocument: (input) => getScriptDocument(input),
+    saveScreenplayDocument: (input) => saveScreenplayDocument(input),
+    createScriptRow: (input) => createScriptRow(input),
+    updateScriptRow: (input) => updateScriptRow(input),
+    deleteScriptRow: (input) => deleteScriptRow(input),
+    listAssets: (input) => listAssets(input),
+    listCinematicProductions: (input) => cinematicProduction.listCinematicProductions(input),
+    listTimelines: (input) => timeline.listTimelines(input),
+    getDirectorStage: (input) => getDirectorStage(input),
+    runProjectTransaction: typeof ports.projects.runInTransaction === "function"
+      ? (input) => ports.projects.runInTransaction(input.projectId, input.work, { operation: input.operation })
+      : null
   });
   async function designGenerationUnits(input = {}) {
     return ensureGenerationUnitsForProduction({
@@ -286,6 +308,7 @@ export function createApplication(ports) {
     ...automationExecutor,
     ...cinematicWorkflow,
     ...cinematicWorkflowEntry,
+    ...aiFilm,
     ...(series || {}),
     ...oneShot,
     ...shortDramaCanvas,
@@ -297,6 +320,7 @@ export function createApplication(ports) {
     addAssetVersion,
     addGroupMember,
     cancelRun,
+    compileH3Prompt,
     connectEdge,
     createCanvas,
     createAsset,
@@ -312,13 +336,20 @@ export function createApplication(ports) {
     deleteScriptRow,
     disconnectEdge,
     extractMediaFrame,
+    exportH3MotionContextWorkflows,
     getDirectorStage,
+    getH3MotionContextCapabilities,
     getMediaPreparation,
     getNodePrompt,
     getPanorama,
+    getProviderHealth,
     getProviderSettings,
     getScriptDocument,
+    getWorkspace,
     getWorkflow,
+    importH3ProviderConfig,
+    initializeWorkspace,
+    installH3MotionContext,
     importDataMedia,
     importMedia,
     listAssets,
@@ -337,6 +368,7 @@ export function createApplication(ports) {
     saveNodePrompt,
     saveScreenplayDocument,
     setPanorama,
+    setWorkspaceRoot,
     setWorkflowLayer,
     updateNode,
     updateProject,

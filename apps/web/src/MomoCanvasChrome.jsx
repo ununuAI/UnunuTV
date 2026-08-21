@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Boxes,
@@ -24,6 +25,30 @@ import {
 
 function ChromeButton({ active = false, className = "", disabled = false, icon: Icon, label, onClick }) {
   return <button aria-label={label} aria-pressed={active} className={`${className}${active ? " is-active" : ""}`} disabled={disabled} onClick={onClick} title={disabled ? "全自动运行期间只读" : label} type="button"><Icon size={18} strokeWidth={1.8} /></button>;
+}
+
+function ZoomSlider({ onZoom, zoom }) {
+  const draggingRef = useRef(false);
+  const [localZoom, setLocalZoom] = useState(zoom);
+  useEffect(() => { if (!draggingRef.current) setLocalZoom(zoom); }, [zoom]);
+  const update = (event) => {
+    const nextZoom = Number(event.currentTarget.value);
+    setLocalZoom(nextZoom);
+    onZoom(nextZoom);
+  };
+  const finish = () => { draggingRef.current = false; };
+  return <input
+    aria-label={`画布缩放 ${localZoom}%`}
+    max="200"
+    min="10"
+    onInput={update}
+    onPointerCancel={finish}
+    onPointerDown={() => { draggingRef.current = true; }}
+    onPointerUp={finish}
+    step="1"
+    type="range"
+    value={Math.max(10, Math.min(200, localZoom))}
+  />;
 }
 
 export function MomoCanvasChrome({
@@ -77,7 +102,7 @@ export function MomoCanvasChrome({
       <span className="momo-control-divider" />
       <div className="momo-control-group momo-zoom-group">
         <ChromeButton icon={Scan} label="适应窗口" onClick={onFit} />
-        <input aria-label={`画布缩放 ${zoom}%`} max="200" min="10" onChange={(event) => onZoom(Number(event.target.value))} step="1" type="range" value={Math.max(10, Math.min(200, zoom))} />
+        <ZoomSlider onZoom={onZoom} zoom={zoom} />
       </div>
       <span className="momo-control-divider" />
       <div className="momo-control-group">

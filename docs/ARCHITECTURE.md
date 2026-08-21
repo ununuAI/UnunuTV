@@ -21,7 +21,7 @@ The canonical domain is documented in [cinematic/01-overview.md](cinematic/01-ov
 not store an entire production in one document JSON. Existing L01-L08 workflow
 layers remain optional evidence records, not the active production contract.
 
-The single `ununu-cinematic-production` Skill owns creative orchestration,
+The single `unutv` Skill owns creative orchestration,
 low-poly previs, deterministic Prompt compilation and the official CLI/API
 execution protocol. Storyboards are optional, and one GenerationUnit may
 contain one or multiple artistic shots. Every durable production object and

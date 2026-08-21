@@ -68,6 +68,27 @@ function Provider({
   const [error, setError] = useState<string>();
 
   useEffect(() => {
+    setSelected((current) => {
+      if (
+        current.modelId === initialSelection.modelId
+        && current.providerId === initialSelection.providerId
+        && sameParameters(current.parameters, initialSelection.parameters)
+      ) {
+        return current;
+      }
+      const currentSize = current.parameters?.size;
+      const currentCount = current.parameters?.n;
+      const currentLooksDefault = (currentSize == null || currentSize === "auto") && (currentCount == null || currentCount === 1);
+      const incomingHasExplicit = (
+        (initialSelection.parameters?.size && initialSelection.parameters.size !== "auto")
+        || initialSelection.parameters?.n === 4
+      );
+      if (currentLooksDefault && incomingHasExplicit) return initialSelection;
+      return current;
+    });
+  }, [initialSelection.modelId, initialSelection.providerId, initialSelection.parameters?.n, initialSelection.parameters?.size, initialSelection.parameters?.quality, initialSelection.parameters?.background]);
+
+  useEffect(() => {
     let active = true;
     void listWorkbenchModels(capability)
       .then((nextCatalog) => {

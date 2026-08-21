@@ -1,13 +1,19 @@
-import { validateVideoGenerationSelection } from "./video-generation-capabilities.js";
+import { H3_VIDEO_MODEL_ID, validateVideoGenerationSelection } from "./video-generation-capabilities.js";
 import { providerReferenceMediaIds } from "./node-provider-reference-policy.js";
 
 export function generationRunPayload(node, input, edges, nodes) {
   const incomingNodes = edges
     .filter((edge) => edge.toNodeId === node.id)
     .flatMap((edge) => nodes.find((item) => item.id === edge.fromNodeId) || []);
-  const incomingReferenceMediaIds = incomingNodes.map((item) => item.payload?.currentMediaId).filter(Boolean);
+  const incomingImageNodes = incomingNodes.filter((item) => ["image", "subject", "material", "historyPick"].includes(item.kind));
+  const incomingReferenceMediaIds = incomingImageNodes.map((item) => item.payload?.currentMediaId).filter(Boolean);
+  const incomingAudioReferenceMediaIds = incomingNodes
+    .filter((item) => item.kind === "audio")
+    .map((item) => item.payload?.currentMediaId)
+    .filter(Boolean);
   const parameters = input.parameters || {};
   const isVideoNode = ["video", "videoShot", "video-clip", "compose"].includes(node.kind);
+  const submissionPrompt = input.text;
   const videoMode = parameters.mode === "text_to_video"
     || parameters.mode === "first_frame"
     || parameters.mode === "first_last_frame"
@@ -29,7 +35,7 @@ export function generationRunPayload(node, input, edges, nodes) {
       mode: videoMode,
       duration: parameters.duration,
       generateAudio: parameters.generateAudio,
-      prompt: input.text
+      prompt: submissionPrompt
     });
     if (videoMode === "text_to_video") {
       if (referenceMediaIds.length !== 0) throw new Error("文生视频不能携带参考图，请先移除当前参考");
@@ -50,19 +56,24 @@ export function generationRunPayload(node, input, edges, nodes) {
       }
       videoReferences = [];
     }
+    if (input.modelId === H3_VIDEO_MODEL_ID && incomingAudioReferenceMediaIds.length) {
+      if (videoMode !== "image_reference") throw new Error("H3 声音参考只能在全能参考模式中使用");
+      if (incomingAudioReferenceMediaIds.length > 3) throw new Error("H3 最多支持 3 个声音参考，请删除多余音频连线");
+    }
   }
   const mediaParameters = node.kind === "image"
     ? { background: parameters.background, n: parameters.n, outputFormat: parameters.outputFormat, quality: parameters.quality, responseFormat: parameters.responseFormat, size: parameters.size }
-    : { duration: parameters.duration, resolution: parameters.resolution, aspectRatio: parameters.ratio, mode: isVideoNode ? videoMode : input.mode, generateAudio: parameters.generateAudio };
+    : { duration: parameters.duration, resolution: parameters.resolution, aspectRatio: parameters.ratio, mode: isVideoNode ? videoMode : input.mode, generateAudio: parameters.generateAudio, ...(input.modelId === H3_VIDEO_MODEL_ID ? { h3Profile: parameters.h3Profile, seed: parameters.seed } : {}) };
   return {
     provider: input.provider,
     request: {
-      prompt: input.text,
+      prompt: submissionPrompt,
       model: input.modelId,
       modelId: input.modelId,
       ...(node.kind === "audio" ? { text: input.text, speakerId: parameters.speakerId, speed: parameters.speed, responseFormat: parameters.responseFormat } : mediaParameters),
       referenceNodeIds: input.referenceNodeIds,
       ...((isVideoNode ? videoReferences : referenceMediaIds).length ? { referenceMediaIds: isVideoNode ? videoReferences : referenceMediaIds } : {}),
+      ...(input.modelId === H3_VIDEO_MODEL_ID && incomingAudioReferenceMediaIds.length ? { audioReferenceMediaIds: incomingAudioReferenceMediaIds } : {}),
       ...(firstFrameMediaId ? { firstFrameMediaId } : {}),
       ...(lastFrameMediaId ? { lastFrameMediaId } : {}),
       ...(Array.isArray(parameters.virtualPersonAssetIds) && parameters.virtualPersonAssetIds.length

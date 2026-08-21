@@ -7,6 +7,15 @@ test("media candidates keep generation order, remove duplicates, and include the
   assert.deepEqual(mediaCandidatesForNode(node), ["media-a", "media-b", "media-c"]);
 });
 
+test("video candidates show the newest generated version first", () => {
+  const node = {
+    kind: "video",
+    projectId: "project-local",
+    payload: { mediaIds: ["media-old", "media-middle", "media-new"], currentMediaId: "media-middle" }
+  };
+  assert.deepEqual(mediaCandidatesForNode(node), ["media-new", "media-middle", "media-old"]);
+});
+
 test("media candidate urls honor an explicit owner project", () => {
   const node = { projectId: "project-local", payload: { mediaOwnerProjectId: "project-owner", currentMediaId: "media-a" } };
   assert.equal(mediaUrlForNode(node, "media-b"), "/api/projects/project-owner/media/media-b");

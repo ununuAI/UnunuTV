@@ -17,8 +17,43 @@ test("node presentation density follows canvas zoom", () => {
   assert.equal(nodePresentationDensity(100), "detail");
 });
 
-test("script and cinematic domain workspaces expand inside the canvas and remember compact size", () => {
-  for (const kind of ["script", "batch", "storyboard", "shot", "generationUnit", "qa", "imageEdit"]) {
+test("script opens as a fullscreen overlay, so its node keeps geometry across open and close", () => {
+  const node = { id: "s1", kind: "script", x: 1200, y: 800, width: 468, height: 396, payload: {} };
+  const neighbour = { id: "n2", kind: "text", x: 1500, y: 820, width: 624, height: 420 };
+
+  const opened = planCanvasNodeViewTransition(node, true, [node, neighbour]);
+  assert.equal(opened.payload.canvasExpanded, true);
+  assert.equal(opened.width, undefined, "打开分镜脚本不得改变节点宽度");
+  assert.equal(opened.height, undefined, "打开分镜脚本不得改变节点高度");
+  assert.equal(opened.x, undefined, "打开分镜脚本不得触发避让重排");
+  assert.equal(opened.y, undefined);
+
+  const merged = { ...node, ...opened };
+  const closed = planCanvasNodeViewTransition(merged, false, [merged, neighbour]);
+  const final = { ...merged, ...closed };
+  assert.equal(closed.payload.canvasExpanded, false);
+  assert.deepEqual(
+    { x: final.x, y: final.y, width: final.width, height: final.height },
+    { x: 1200, y: 800, width: 468, height: 396 }
+  );
+});
+
+test("image editor opens as a fullscreen overlay without resizing or moving its node", () => {
+  const node = { id: "edit-1", kind: "imageEdit", x: 480, y: 320, width: 520, height: 340, payload: {} };
+  const neighbour = { id: "n2", kind: "image", x: 820, y: 340, width: 430, height: 310 };
+  const opened = planCanvasNodeViewTransition(node, true, [node, neighbour]);
+  assert.equal(opened.payload.canvasExpanded, true);
+  assert.equal(opened.width, undefined);
+  assert.equal(opened.height, undefined);
+  assert.equal(opened.x, undefined);
+  assert.equal(opened.y, undefined);
+  const closed = canvasNodeViewTransition({ ...node, payload: opened.payload }, false);
+  assert.equal(closed.payload.canvasExpanded, false);
+  assert.equal(closed.width, undefined);
+  assert.equal(closed.height, undefined);
+});
+test("cinematic domain workspaces expand inside the canvas and remember compact size", () => {
+  for (const kind of ["batch", "storyboard", "shot", "generationUnit", "qa"]) {
     const node = { kind, width: 520, height: 340, payload: {} };
     const expanded = canvasNodeViewTransition(node, true);
     assert.equal(nodeSupportsInlineWorkspace(kind), true);
@@ -60,7 +95,7 @@ test("read-only view projection can expand without persisting the source node", 
 });
 
 test("expanded canvas workspaces move to the nearest gutter-safe position", () => {
-  const node = { id: "script", kind: "script", x: 80, y: 80, width: 468, height: 396, payload: {} };
+  const node = { id: "batch", kind: "batch", x: 80, y: 80, width: 468, height: 396, payload: {} };
   const neighbors = [
     node,
     { id: "story", kind: "story", x: 620, y: 80, width: 624, height: 420, payload: {} },
@@ -85,7 +120,7 @@ test("read-only local expansion uses the same collision-safe projection without 
 });
 
 test("collapse restores the compact position when it remains gutter-safe", () => {
-  const compact = { id: "script", kind: "script", x: 80, y: 80, width: 468, height: 396, payload: {} };
+  const compact = { id: "batch", kind: "batch", x: 80, y: 80, width: 468, height: 396, payload: {} };
   const expanded = planCanvasNodeViewTransition(compact, true, [
     compact,
     { id: "story", kind: "story", x: 620, y: 80, width: 624, height: 420, payload: {} }
@@ -101,15 +136,15 @@ test("collapse restores the compact position when it remains gutter-safe", () =>
 
 test("read-only projection can locally collapse a persistently expanded node", () => {
   const persisted = {
-    id: "script",
-    kind: "script",
+    id: "storyboard",
+    kind: "storyboard",
     x: 80,
     y: 600,
-    width: 1260,
+    width: 1360,
     height: 900,
     payload: {
       canvasExpanded: true,
-      canvasCompactSize: { width: 468, height: 396 },
+      canvasCompactSize: { width: 572, height: 360 },
       canvasCompactPosition: { x: 80, y: 80 }
     }
   };
@@ -117,7 +152,7 @@ test("read-only projection can locally collapse a persistently expanded node", (
   const projected = projectCanvasNodeView(persisted, localCollapse);
   assert.equal(canvasNodeIsExpanded(projected), false);
   assert.deepEqual({ x: projected.x, y: projected.y, width: projected.width, height: projected.height }, {
-    x: 80, y: 80, width: 468, height: 396
+    x: 80, y: 80, width: 572, height: 360
   });
   assert.equal(canvasNodeIsExpanded(persisted), true);
 });

@@ -689,3 +689,103 @@ final result: passed as an honest planning and review surface；the UI exposes t
 ## 最终收口验证（2026-07-23）
 
 手动 Unit Design 与 canonical workflow 的参考图/首帧/首尾帧互斥和 manifest 校验一致；代码已完成原子拆分。当前基线：`npm test` **367/367**，`npm run build` 通过，`npm run verify:arch` 输出 `Architecture boundaries verified.`。无 Provider 调用、无浏览器写入、无 SQLite 直写。
+
+---
+
+# 空视频节点视觉一致性 QA（2026-08-15）
+
+- 源视觉真值：`/var/folders/4m/sj8zhsjs4l3cbcrsqjsk3dmc0000gn/T/codex-clipboard-69d3425f-26f0-4515-a36a-054091c142a2.png`
+- 实现截图：`/Users/zhangxiaohao/ununu/ununuAI/ununu-unutv/design-qa-video-empty-after.png`
+- 路由：`http://127.0.0.1:4318/projects/272ad972-c81e-4b78-b7db-640012950514`
+- 视口：790 × 775 CSS px；deviceScaleFactor 1。
+- 像素：源图 742 × 456；实现截图 790 × 775。比较限定在源图的空关键帧面板与实现截图中 447.2 × 297.6 CSS px 的空视频面板。
+- 状态：深色画布、空视频节点单选、80% 画布缩放。
+- 主要交互：适应窗口、节点单选、画布缩放和平移均正常；未触发 Provider。
+- 控制台错误：0。
+
+**Findings**
+
+- 无剩余 P0/P1/P2。
+- 字体与排版：标题、空态图标、主副文层级沿用既有节点系统，未发生漂移。
+- 间距与布局：视频面板尺寸未变；内外层现在统一继承 12px 圆角，选中边框完整闭合。
+- 颜色与视觉令牌：空视频外层、内部舞台均为 `var(--node)`（实测 `rgb(23, 24, 27)`），与空关键帧一致。
+- 图片与资产：本次为空态容器，不涉及新增或替换图片资产；已有媒体节点未改动。
+- 文案：视频空态文案保持原样，仅统一容器视觉。
+
+**Comparison History**
+
+- 早期 P2：空视频内部舞台为 `rgb(5, 6, 7)` 且圆角为 0，覆盖外层背景，顶部和四角呈直角纯黑。
+- 修复：仅为空视频节点增加 `empty-video-node` 状态，舞台背景改用 `var(--node)`，并让 `.momo-video-node` 与 `.momo-video-stage` 继承外层圆角；已有视频播放器继续使用原黑色底。
+- 修复后证据：外层、内部舞台背景均为 `rgb(23, 24, 27)`，三层圆角均为 12px，选中 outline 为 `rgba(143, 146, 154, 0.76) solid 1px`。
+
+**Focused Comparison Evidence**
+
+- 源视觉本身仅包含单个空关键帧面板；实现截图中的空视频面板已达到约 447 × 298 px，可直接判断背景、边框闭合与四角，不需要另做低清裁切。
+
+**Implementation Checklist**
+
+- [x] 空视频使用空关键帧背景令牌。
+- [x] 内部舞台继承 12px 圆角。
+- [x] 有媒体的视频播放器视觉保持不变。
+- [x] 13 个相关测试通过。
+- [x] Next.js 正式构建通过。
+
+final result: passed
+
+## 视频 Prompt 左上角回归修正（2026-08-15）
+
+- 用户反馈图：`/var/folders/4m/sj8zhsjs4l3cbcrsqjsk3dmc0000gn/T/codex-clipboard-70302577-9e7a-4f22-9bd3-3b3bf37b8c35.png`
+- 修复后截图：`/Users/zhangxiaohao/ununu/ununuAI/ununu-unutv/design-qa-video-prompt-corner-after.png`
+- 回归原因：空视频节点把 12px 圆角同时赋给 `.momo-video-node`；Prompt 面板绝对定位在该容器下方，父层圆角背景从 Prompt 左上角后方露出，形成额外直角缺口。
+- 修复：12px 圆角仅保留在上方 `.momo-video-stage`，中间 `.momo-video-node` 恢复 0px；Prompt 保持 `0 0 14px 14px`，不再叠加父层圆角。
+- 实测样式：外层 12px、内部节点 0px、视频舞台 12px、Prompt `0px 0px 14px 14px`。
+- 控制台错误：0；相关测试 13/13；Next.js 正式构建通过。
+
+final result: passed
+
+## 视频参考图数量规则与 Prompt 阴影回归修正（2026-08-15）
+
+- 源视觉真值：
+  - `/var/folders/4m/sj8zhsjs4l3cbcrsqjsk3dmc0000gn/T/codex-clipboard-3f4f28a2-292a-4dc6-9d4d-9529c22f2d93.png`
+  - `/var/folders/4m/sj8zhsjs4l3cbcrsqjsk3dmc0000gn/T/codex-clipboard-43323ec8-08f6-4760-8088-9418b9c08e63.png`
+  - `/var/folders/4m/sj8zhsjs4l3cbcrsqjsk3dmc0000gn/T/codex-clipboard-c4a4ffca-21f9-40d2-b7df-f7f8ea9d05cd.png`
+  - `/var/folders/4m/sj8zhsjs4l3cbcrsqjsk3dmc0000gn/T/codex-clipboard-2fdabb0e-6b4d-4f54-b5d7-0d08e452c1cf.png`
+- 实现截图：
+  - `/Users/zhangxiaohao/ununu/ununuAI/ununu-unutv/design-qa-video-reference-rules-after.png`
+  - `/Users/zhangxiaohao/ununu/ununuAI/ununu-unutv/design-qa-video-first-last-missing-after.png`
+- 视口：790 × 770 CSS px；deviceScaleFactor 1；深色画布；适应窗口约 29%。
+- 比较证据：文生视频＋1 张连线的源图与修复后浏览器截图已在同一次视觉输入中打开；首尾帧缺尾帧状态另做浏览器状态验证。
+- [P2 已修复] Prompt 左上角残留弧形来自外层 12px 节点的下投影，不是内层圆角；选中视频显示 Prompt 时已取消外层阴影，Prompt 自身阴影保留。
+- [P1 已修复] Provider 帧来源与真实画布连线被合并后重复传给参考图控件，导致同一张图片显示两次；现已拆分为真实连线输入与权威 Provider 展示来源。
+- [P1 已修复] 视频模式改为严格计数：文生视频 0 张、首帧 1 张、首尾帧 2 张、全能参考至少 1 张。
+- [P1 已修复] 缺图显示带“＋”的角色槽位并禁用提交；首尾帧 1 张时实测显示“首帧＋尾帧待连接”，提交按钮 disabled。
+- [P1 已修复] 多图或禁图模式出现图片时，多余/非法图片爆红、删除按钮常显，并展示必须删除连线的错误文案；提交按钮 disabled。
+- 字体、间距、颜色、图片质量与文案：沿用现有节点令牌；新增红色错误态使用 `--danger`，缺图态使用 `--amber`，缩略图保持原图裁切与清晰度。
+- 控制台错误：0；规则与相关回归测试 21/21；Next.js 正式构建通过。
+
+final result: passed
+
+## 视频生成遮罩与真人拒绝提示回归（2026-08-15）
+
+- 源视觉真值：`/var/folders/4m/sj8zhsjs4l3cbcrsqjsk3dmc0000gn/T/codex-clipboard-7b6bc330-6bd8-4cd1-968f-ff1aef28a75f.png`、`/var/folders/4m/sj8zhsjs4l3cbcrsqjsk3dmc0000gn/T/codex-clipboard-6c9f6e93-a4ef-4b2b-b2e7-5ebc7926892b.png`
+- 实现截图：`/Users/zhangxiaohao/ununu/ununuAI/ununu-unutv/design-qa-video-generation-border-after.png`
+- [P1 已修复] 生成遮罩原为 `inset: 0`，遮到节点边框与圆角；现改为 `inset: 1px`、继承圆角，并禁用指针事件，生成态的四周边线和连接入口保持可见。
+- 浏览器 CSSOM 实测：`.node-generation-progress` 已加载 `inset: 1px; border-radius: inherit; pointer-events: none`。
+- [P1 已修复] Ark 真人拒绝错误中的 `input image 'content[1]' may contain real person` 已纳入中文错误映射，后续只显示原因与可执行处理建议，不再直接铺满英文原文。
+- 视觉规则沿用现有暗色节点、1px 边线和圆角，不改变画布结构、节点尺寸或连线逻辑。
+- 浏览器控制台错误：0；相关回归测试 25/25；Next.js 正式构建通过。
+
+final result: passed
+
+## 时间线拼接、播放器检查器与添加菜单回归（2026-08-16）
+
+- 源视觉真值：`/var/folders/4m/sj8zhsjs4l3cbcrsqjsk3dmc0000gn/T/codex-clipboard-97eefc56-2a16-4918-b55f-a6ca40d6fc41.png`，并结合用户对“多视频入轨即拼接、播放器只服务时间线”的明确交互要求。
+- [P1 已修复] 添加节点菜单移除“视频合成、素材库、上传、从生成历史选择”，浏览器 DOM 复测无残留分组或空标题。
+- [P1 已修复] 多个视频节点加入主视频轨时按当前轨道末尾连续追加，形成可剪辑的顺序拼接。
+- [P1 已修复] 点击画布视频不再直接占用播放器；时间线片段点击时携带 timelineId/clipId，播放器只绑定时间线片段或渲染母版。
+- [P1 已修复] 播放器属性检查器读取真实 TimelineDocument；动画、特效、转场标签可持久化写入关键帧、片段效果和相邻片段交叉叠化。
+- [P2 已修复] 播放器底栏维持单行 5 列；浏览器实测高度 50px，三个控制按钮 top 均为 341px，不再换行。
+- 浏览器实测：空时间线显示 V1/A1/S1，播放器保持“选择时间线视频片段”空态；Next.js 正式构建通过。
+- 全量测试仍有 3 个与本次改动无关的既有失败：cinematic screenplay revision invalidation、Director proxy reference slot、首尾帧错误文案断言。
+
+final result: passed

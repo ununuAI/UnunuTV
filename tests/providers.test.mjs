@@ -1,11 +1,132 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createLocalRuntime } from "@ununu/unutv-local-runtime";
+import {
+  H3_MOTION_CONTEXT_NODE_TYPES,
+  H3_MOTION_CONTEXT_SUPPORT_NODE_TYPES,
+  buildLocalH3MotionContextWorkflow,
+  buildLocalH3Workflow,
+  inspectH3MotionContextCapabilities
+} from "@ununu/unutv-providers";
 
+test("H3 Motion Context capability inspection is sanitized and blocks incomplete runtimes", async () => {
+  const nodeTypes = [...H3_MOTION_CONTEXT_NODE_TYPES, ...H3_MOTION_CONTEXT_SUPPORT_NODE_TYPES];
+  const remote = {
+    ensureReady: async () => ({ ok: true }),
+    baseUrl: () => "http://h3.test"
+  };
+  const complete = await inspectH3MotionContextCapabilities(remote, async (url) => {
+    const nodeType = decodeURIComponent(url.split("/").at(-1));
+    return Response.json({
+      [nodeType]: {
+        input: { required: { value: ["INT", { default: 1, secret: "must-not-leak" }] } },
+        output: ["INT"],
+        output_name: ["value"]
+      }
+    });
+  });
+  assert.equal(complete.ready, true);
+  assert.deepEqual(complete.missing, []);
+  assert.deepEqual(complete.missingSupport, []);
+  assert.equal(Object.keys(complete.schemas).length, nodeTypes.length);
+  assert.equal(complete.schemas.MiniMaxH3MotionContext.required.value.options.secret, undefined);
+
+  const incomplete = await inspectH3MotionContextCapabilities(remote, async (url) => {
+    const nodeType = decodeURIComponent(url.split("/").at(-1));
+    if (nodeType === "MiniMaxH3MotionContextTrim") return new Response("missing", { status: 404 });
+    return Response.json({ [nodeType]: { input: { required: {} }, output: [] } });
+  });
+  assert.equal(incomplete.ready, false);
+  assert.deepEqual(incomplete.missing, ["MiniMaxH3MotionContextTrim"]);
+});
+
+test("H3 Motion Context installation crosses the application/provider boundary with a pinned hash", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-h3-motion-install-"));
+  let received;
+  const provider = {
+    installH3MotionContext: async (input) => {
+      received = input;
+      return { installed: true, packageName: "ComfyUI-H3-Motion-Context", sourceHash: input.expectedSourceHash };
+    }
+  };
+  const runtime = createLocalRuntime({ dataRoot, provider, connectH3Remote: false });
+  context.after(() => runtime.close());
+  const result = await runtime.app.installH3MotionContext({ sourcePath: "/reviewed/ComfyUI-H3-Motion-Context", expectedSourceHash: "abc123" });
+  assert.equal(result.installed, true);
+  assert.deepEqual(received, { sourcePath: "/reviewed/ComfyUI-H3-Motion-Context", expectedSourceHash: "abc123" });
+});
+
+test("H3 Motion Context composes isolated initial and continuation graphs over the existing dual-shift profile", () => {
+  const base = buildLocalH3Workflow({
+    prompt: "shot",
+    profileId: "480p_accelerated",
+    mode: "image_reference",
+    ratio: "16:9",
+    duration: 10,
+    seed: 7,
+    references: ["lin.png", "zhou.png", "chen.png", "pool.png", "bag.png"]
+  });
+  const initial = buildLocalH3MotionContextWorkflow({
+    baseWorkflow: base,
+    phase: "initial",
+    sessionId: "last-group-sc01",
+    clipIndex: 1
+  });
+  assert.equal(initial["9"].inputs.steps, 8);
+  assert.equal(initial["307"].inputs.shift_video, 12);
+  assert.equal(initial["307"].inputs.shift_audio, 3);
+  assert.equal(initial["400"].class_type, "MiniMaxH3MotionContextSaveLatent");
+  assert.equal(initial["400"].inputs.clip_index, 1);
+  assert.match(initial["400"].inputs.filename_prefix, /last-group-sc01/);
+  assert.equal(initial["401"], undefined);
+
+  const continuation = buildLocalH3MotionContextWorkflow({
+    baseWorkflow: base,
+    phase: "continue",
+    sessionId: "last-group-sc01",
+    clipIndex: 2,
+    contextFrames: 22,
+    audioContextFrames: 24
+  });
+  assert.equal(continuation["401"].class_type, "MiniMaxH3MotionContextLoadLatent");
+  assert.equal(continuation["401"].inputs.clip_index, 1);
+  assert.equal(continuation["402"].inputs.context_length, "22");
+  assert.equal(continuation["402"].inputs.audio_context_length, 24);
+  assert.deepEqual(continuation["16"].inputs.conditioning, ["402", 0]);
+  assert.deepEqual(continuation["403"].inputs.images, ["10", 0]);
+  assert.deepEqual(continuation["403"].inputs.audio, ["23", 0]);
+  assert.deepEqual(continuation["91"].inputs.images, ["403", 0]);
+  assert.deepEqual(continuation["91"].inputs.audio, ["403", 1]);
+  assert.equal(continuation["400"].inputs.clip_index, 2);
+  assert.equal(base["400"], undefined, "the original workflow object stays untouched");
+});
+
+test("Local H3 compiles all four production profiles into the verified ComfyUI chains", () => {
+  const base = { prompt: "shot", mode: "text_to_video", ratio: "9:16", duration: 5, seed: 7 };
+  for (const [profileId, expected] of [
+    ["480p_accelerated", { width: 480, height: 864, steps: 8, turbo: true }],
+    ["720p_accelerated", { width: 704, height: 1280, steps: 8, turbo: true }],
+    ["480p_native", { width: 480, height: 864, steps: 20, turbo: false }],
+    ["720p_native", { width: 704, height: 1280, steps: 20, turbo: false }]
+  ]) {
+    const graph = buildLocalH3Workflow({ ...base, profileId });
+    assert.equal(graph["104"].inputs.width, expected.width);
+    assert.equal(graph["104"].inputs.height, expected.height);
+    assert.equal(graph["9"].inputs.steps, expected.steps);
+    assert.equal(Boolean(graph["307"]), expected.turbo);
+  }
+  const reference = buildLocalH3Workflow({ ...base, profileId: "480p_accelerated", mode: "image_reference", references: ["actor.png"], audioReferences: ["voice.wav"] });
+  assert.equal(reference["104"].class_type, "MiniMaxH3ReferenceToVideo");
+  assert.equal(reference["6"].inputs.unet_name, "minimax_h3_ref2va_pruned_fp8_scaled.safetensors");
+  assert.equal(reference["306"].inputs.lora_name, "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors");
+  assert.equal(reference["201"].class_type, "LoadAudio");
+  assert.equal(reference["201"].inputs.audio, "voice.wav");
+  assert.deepEqual(reference["104"].inputs["ref_audios.ref_audio_0"], ["201", 0]);
+});
 test("Ununu Image adapter generates an image and materializes it locally", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-image-"));
   let submitted;
@@ -25,7 +146,28 @@ test("Ununu Image adapter generates an image and materializes it locally", async
   assert.equal(submitted.payload.model, "openai/gpt-image-2");
   assert.equal(submitted.payload.size, "1536x1024");
   assert.equal(completed.result.artifacts[0].kind, "image");
-  assert.ok(existsSync(path.join(dataRoot, "projects", project.id, completed.result.artifacts[0].relativePath)));
+  assert.ok(existsSync(path.join(project.mediaRoot, completed.result.artifacts[0].relativePath)));
+});
+
+test("an image node falls back to connected text when its own prompt is empty", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-connected-image-prompt-"));
+  let submitted;
+  const fetchImpl = async (url, options = {}) => {
+    submitted = { url, payload: JSON.parse(options.body) };
+    return Response.json({ model: "openai/gpt-image-2", data: [{ b64_json: Buffer.from("connected-prompt-image").toString("base64") }] });
+  };
+  const runtime = createLocalRuntime({ dataRoot, env: { UNUNU_GATE_API_KEY: "image-test-key" }, fetchImpl });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const source = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "text", title: "上游文本", payload: { textMode: "plain", text: "雨中的父亲撑着一把旧伞。" } });
+  const image = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "image", payload: { provider: "ununu", prompt: "" } });
+  await runtime.app.connectEdge({ projectId: project.id, canvasId: canvas.id, fromNodeId: source.id, toNodeId: image.id, role: "input" });
+
+  const completed = await runtime.app.runNode({ projectId: project.id, nodeId: image.id, request: { model: "openai/gpt-image-2", prompt: "" } });
+
+  assert.equal(completed.status, "succeeded");
+  assert.equal(submitted.url, "https://api.ununu.ai/v1/images/generations");
+  assert.equal(submitted.payload.prompt, "【上游文本】\n雨中的父亲撑着一把旧伞。");
 });
 
 test("Ununu Image adapter sends local references as multipart image edits", async (context) => {
@@ -191,7 +333,7 @@ test("OpenRouter Nano Banana 2 adapter sends image references and materializes o
   assert.equal(submitted.payload.model, "google/gemini-3.1-flash-image-preview");
   assert.equal(submitted.payload.size, "1024x1536");
   assert.ok(submitted.payload.input_references[0].image_url.url.startsWith("data:image/png;base64,"));
-  assert.ok(existsSync(path.join(dataRoot, "projects", project.id, completed.result.artifacts[0].relativePath)));
+  assert.ok(existsSync(path.join(project.mediaRoot, completed.result.artifacts[0].relativePath)));
 });
 
 test("Ark video adapter publishes tunnel references, polls, and materializes output", async (context) => {
@@ -228,7 +370,274 @@ test("Ark video adapter publishes tunnel references, polls, and materializes out
   const completed = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
   assert.equal(completed.status, "succeeded");
   assert.equal(completed.result.artifacts[0].source, "generated");
-  assert.ok(existsSync(path.join(dataRoot, "projects", project.id, completed.result.artifacts[0].relativePath)));
+  assert.ok(existsSync(path.join(project.mediaRoot, completed.result.artifacts[0].relativePath)));
+});
+
+test("Local H3 submits a ComfyUI workflow, polls history, and materializes video", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-h3-"));
+  let submittedPayload;
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "http://h3.test/prompt" && options.method === "POST") {
+      submittedPayload = JSON.parse(options.body);
+      return Response.json({ prompt_id: "h3-task-1" });
+    }
+    if (url === "http://h3.test/history/h3-task-1") {
+      return Response.json({ "h3-task-1": { status: { status_str: "success" }, outputs: { "92": { images: [{ filename: "h3.mp4", subfolder: "video", type: "output" }] } } } });
+    }
+    if (url.startsWith("http://h3.test/api/view?")) {
+      return new Response(Buffer.from("generated-h3-video"), { headers: { "content-type": "video/mp4" } });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const h3Remote = {
+    baseUrl: () => "http://h3.test",
+    ensureReady: async () => ({ configured: true, ok: true, state: "ready" }),
+    checkHealth: async () => ({ configured: true, ok: true, state: "ready" }),
+    close() {}
+  };
+  const runtime = createLocalRuntime({ dataRoot, h3Remote, fetchImpl, connectH3Remote: false });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "video",
+    payload: { provider: "minimax", prompt: "source prompt" }
+  });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "minimax",
+    request: {
+      prompt: "integrated_multimodal_description: camera pushes through rain",
+      model: "MiniMax-H3",
+      mode: "text_to_video",
+      duration: 4,
+      h3Profile: "720p_accelerated",
+      resolution: "720p",
+      aspectRatio: "16:9"
+    }
+  });
+  assert.equal(started.status, "running");
+  assert.equal(Number.isSafeInteger(started.request.seed), true);
+  assert.equal(submittedPayload.prompt["15"].inputs.noise_seed, started.request.seed);
+  assert.equal(started.result.requestSummary.seed, started.request.seed);
+  assert.equal(submittedPayload.prompt["104"].inputs.width, 1280);
+  assert.equal(submittedPayload.prompt["104"].inputs.height, 704);
+  assert.equal(submittedPayload.prompt["9"].inputs.steps, 8);
+  assert.equal(submittedPayload.prompt["17"].inputs.sampler_name, "euler");
+  assert.equal(submittedPayload.prompt["307"].inputs.shift_video, 12);
+  assert.match(submittedPayload.prompt["104"].inputs.prompt, /integrated_multimodal_description/);
+  const completed = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
+  assert.equal(completed.status, "succeeded");
+  assert.ok(existsSync(path.join(project.mediaRoot, completed.result.artifacts[0].relativePath)));
+  const firstMediaId = completed.result.artifacts[0].id;
+  const secondStarted = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "minimax",
+    request: {
+      prompt: "integrated_multimodal_description: a second candidate",
+      model: "MiniMax-H3",
+      mode: "text_to_video",
+      duration: 4,
+      h3Profile: "720p_accelerated",
+      resolution: "720p",
+      aspectRatio: "16:9"
+    }
+  });
+  assert.equal(Number.isSafeInteger(secondStarted.request.seed), true);
+  assert.notEqual(secondStarted.request.seed, started.request.seed);
+  assert.equal(submittedPayload.prompt["15"].inputs.noise_seed, secondStarted.request.seed);
+  const secondCompleted = await runtime.app.pollRun({ projectId: project.id, runId: secondStarted.id });
+  assert.equal(secondCompleted.status, "succeeded");
+  const secondMediaId = secondCompleted.result.artifacts[0].id;
+  const persisted = await runtime.app.openCanvas({ projectId: project.id, canvasId: canvas.id });
+  const persistedVideo = persisted.nodes.find((node) => node.id === video.id);
+  assert.equal(persistedVideo.payload.currentMediaId, firstMediaId);
+  assert.deepEqual(persistedVideo.payload.mediaIds, [firstMediaId, secondMediaId]);
+
+  const explicitlySeeded = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "minimax",
+    request: {
+      prompt: "integrated_multimodal_description: an explicitly seeded candidate",
+      model: "MiniMax-H3",
+      mode: "text_to_video",
+      duration: 4,
+      h3Profile: "720p_accelerated",
+      resolution: "720p",
+      aspectRatio: "16:9",
+      seed: 20260821
+    }
+  });
+  assert.equal(explicitlySeeded.request.seed, 20260821);
+  assert.equal(submittedPayload.prompt["15"].inputs.noise_seed, 20260821);
+});
+
+test("Local H3 uploads connected audio and binds it to the exact Ref2VA audio slot", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-h3-audio-reference-"));
+  const uploads = [];
+  let submittedPayload;
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "http://h3.test/upload/image" && options.method === "POST") {
+      const file = options.body.get("image");
+      uploads.push({ name: file.name, type: file.type });
+      return Response.json({ name: file.name, subfolder: "", type: "input" });
+    }
+    if (url === "http://h3.test/prompt" && options.method === "POST") {
+      submittedPayload = JSON.parse(options.body);
+      return Response.json({ prompt_id: "h3-audio-reference-1" });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const h3Remote = {
+    baseUrl: () => "http://h3.test",
+    ensureReady: async () => ({ configured: true, ok: true, state: "ready" }),
+    close() {}
+  };
+  const runtime = createLocalRuntime({ dataRoot, h3Remote, fetchImpl, connectH3Remote: false });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const imagePath = path.join(dataRoot, "actor.png");
+  const audioPath = path.join(dataRoot, "voice.wav");
+  await writeFile(imagePath, Buffer.from("reference-image"));
+  await writeFile(audioPath, Buffer.from("reference-audio"));
+  const image = await runtime.app.importMedia({ projectId: project.id, filePath: imagePath });
+  const audio = await runtime.app.importMedia({ projectId: project.id, filePath: audioPath });
+  const video = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "video",
+    payload: { provider: "minimax", modelId: "MiniMax-H3", prompt: "source prompt" }
+  });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "minimax",
+    request: {
+      prompt: "subject_definitions: <Subject 1> uses <Picture 1> and <Audio 1>",
+      model: "MiniMax-H3",
+      mode: "image_reference",
+      duration: 4,
+      h3Profile: "480p_accelerated",
+      aspectRatio: "16:9",
+      referenceMediaIds: [image.id],
+      audioReferenceMediaIds: [audio.id]
+    }
+  });
+  assert.equal(started.status, "running");
+  assert.deepEqual(uploads.map((upload) => upload.type), ["image/png", "audio/wav"]);
+  assert.equal(submittedPayload.prompt["200"].class_type, "LoadImage");
+  assert.equal(submittedPayload.prompt["201"].class_type, "LoadAudio");
+  assert.match(submittedPayload.prompt["201"].inputs.audio, /\.wav$/);
+  assert.deepEqual(submittedPayload.prompt["104"].inputs["ref_audios.ref_audio_0"], ["201", 0]);
+  assert.deepEqual(started.request.audioReferenceMediaIds, [audio.id]);
+  assert.deepEqual(started.result.requestSummary.audioReferenceMediaIds, [audio.id]);
+});
+
+test("Local H3 poll reconnects after a dropped tunnel and does not kill a known task", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-h3-reconnect-"));
+  let historyCalls = 0;
+  let reconnects = 0;
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "http://h3.test/prompt" && options.method === "POST") {
+      return Response.json({ prompt_id: "h3-task-drop-1" });
+    }
+    if (url === "http://h3.test/history/h3-task-drop-1") {
+      historyCalls += 1;
+      if (historyCalls === 1) throw new TypeError("fetch failed");
+      return Response.json({
+        "h3-task-drop-1": {
+          status: { status_str: "success" },
+          outputs: { "92": { images: [{ filename: "h3-recovered.mp4", subfolder: "video", type: "output" }] } }
+        }
+      });
+    }
+    if (url.startsWith("http://h3.test/api/view?")) {
+      return new Response(Buffer.from("recovered-h3-video"), { headers: { "content-type": "video/mp4" } });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const h3Remote = {
+    baseUrl: () => "http://h3.test",
+    ensureReady: async () => ({ configured: true, ok: true, state: "ready" }),
+    checkHealth: async () => {
+      reconnects += 1;
+      return { configured: true, ok: true, state: "ready" };
+    },
+    close() {}
+  };
+  const runtime = createLocalRuntime({ dataRoot, h3Remote, fetchImpl, connectH3Remote: false });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "video",
+    payload: { provider: "minimax", prompt: "source prompt" }
+  });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "minimax",
+    request: {
+      prompt: "integrated_multimodal_description: hold",
+      model: "MiniMax-H3",
+      mode: "text_to_video",
+      duration: 4,
+      h3Profile: "480p_accelerated",
+      resolution: "480p",
+      aspectRatio: "9:16"
+    }
+  });
+  assert.equal(started.status, "running");
+  const completed = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
+  assert.equal(completed.status, "succeeded");
+  assert.ok(reconnects >= 1);
+  assert.ok(existsSync(path.join(project.mediaRoot, completed.result.artifacts[0].relativePath)));
+});
+
+test("Local H3 cancels only its exact running ComfyUI prompt", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-h3-cancel-"));
+  let interrupted = 0;
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "http://h3.test/prompt" && options.method === "POST") return Response.json({ prompt_id: "h3-cancel-1" });
+    if (url === "http://h3.test/queue" && (!options.method || options.method === "GET")) {
+      return Response.json({ queue_running: [[1, "h3-cancel-1", {}, {}]], queue_pending: [[2, "another-task", {}, {}]] });
+    }
+    if (url === "http://h3.test/interrupt" && options.method === "POST") {
+      interrupted += 1;
+      return Response.json({});
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const h3Remote = {
+    baseUrl: () => "http://h3.test",
+    ensureReady: async () => ({ configured: true, ok: true, state: "ready" }),
+    close() {}
+  };
+  const runtime = createLocalRuntime({ dataRoot, h3Remote, fetchImpl, connectH3Remote: false });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "video",
+    payload: { provider: "minimax", modelId: "MiniMax-H3", prompt: "source prompt" }
+  });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "minimax",
+    request: { prompt: "integrated_multimodal_description: hold", model: "MiniMax-H3", mode: "text_to_video", duration: 4, h3Profile: "480p_accelerated", aspectRatio: "16:9" }
+  });
+  const canceled = await runtime.app.cancelRun({ projectId: project.id, runId: started.id, reason: "owner_canceled_from_canvas" });
+  assert.equal(interrupted, 1);
+  assert.equal(canceled.status, "canceled");
+  assert.equal(canceled.result.providerTaskState, "interrupted");
+  assert.equal(canceled.result.cancelReason, "owner_canceled_from_canvas");
 });
 
 test("Ark video adapter cancels a queued Provider task through the persisted Run boundary", async (context) => {
@@ -374,6 +783,18 @@ test("the active dev tunnel is persisted for CLI runtimes that share the same da
   const publication = await cliRuntime.app.publishMedia({ projectId: project.id, mediaId: media.id, provider: "ark", expiresInSeconds: 3600 });
   assert.equal(new URL(publication.remoteUrl).hostname, "current-tunnel.example.test");
 });
+test("a stale legacy tunnel URL is discarded instead of being sent to a provider", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-stale-tunnel-"));
+  const runtimeDirectory = path.join(dataRoot, "runtime");
+  const leasePath = path.join(runtimeDirectory, "provider-media-base-url");
+  await mkdir(runtimeDirectory, { recursive: true });
+  await writeFile(leasePath, "https://stale-tunnel.example.test\n");
+
+  const runtime = createLocalRuntime({ dataRoot, recoverRenders: false, recoverAutomation: false, runAutomationExecutor: false });
+  context.after(() => runtime.close());
+  assert.equal(runtime.publisher.publicBaseUrl, "");
+  assert.equal(existsSync(leasePath), false);
+});
 
 test("OpenRouter video adapter builds explicit first-and-last-frame payload and downloads completed video", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-openrouter-"));
@@ -464,7 +885,7 @@ test("text node prompt generates body copy through chat/completions and writes i
   const runtime = createLocalRuntime({ dataRoot, env: { UNUNU_GATE_API_KEY: "text-test-key" }, fetchImpl });
   context.after(() => runtime.close());
   const { project, canvas } = await runtime.app.createProject();
-  const node = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "text", payload: {} });
+  const node = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "text", payload: { textMode: "prompt" } });
 
   const completed = await runtime.app.runNode({
     projectId: project.id,
@@ -495,7 +916,7 @@ test("text generation carries the node's existing body as context so rewrite ins
   context.after(() => runtime.close());
   const { project, canvas } = await runtime.app.createProject();
   const node = await runtime.app.createNode({
-    projectId: project.id, canvasId: canvas.id, kind: "text", payload: { text: "原始的第一段。" }
+    projectId: project.id, canvasId: canvas.id, kind: "text", payload: { textMode: "prompt", text: "原始的第一段。" }
   });
 
   await runtime.app.runNode({ projectId: project.id, nodeId: node.id, request: { prompt: "把它改得更冷峻" } });
@@ -516,11 +937,98 @@ test("a text node with an empty prompt fails before any paid provider call", asy
   const runtime = createLocalRuntime({ dataRoot, env: { UNUNU_GATE_API_KEY: "text-test-key" }, fetchImpl });
   context.after(() => runtime.close());
   const { project, canvas } = await runtime.app.createProject();
-  const node = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "text", payload: {} });
+  const node = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "text", payload: { textMode: "prompt" } });
 
   const completed = await runtime.app.runNode({ projectId: project.id, nodeId: node.id, request: { prompt: "   " } });
 
   assert.equal(called, false, "空 Prompt 不该发出付费请求");
   assert.equal(completed.status, "blocked");
   assert.equal(completed.result.code, "text_prompt_required");
+});
+
+test("script generation parses a shot table onto the node and uses the connected play as source", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-script-gen-"));
+  let submitted;
+  const fetchImpl = async (url, options = {}) => {
+    submitted = { url, payload: JSON.parse(options.body) };
+    return Response.json({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            title: "凌晨拍爆款",
+            rows: [{ shotNumber: 1, duration: "4s", sceneDescription: "小明推开楼道门。", character1: "小明", dialogue: "就现在。" }]
+          })
+        }
+      }]
+    });
+  };
+  const runtime = createLocalRuntime({ dataRoot, env: { UNUNU_GATE_API_KEY: "text-test-key" }, fetchImpl });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const play = await runtime.app.createNode({
+    projectId: project.id, canvasId: canvas.id, kind: "text", title: "E002 凌晨拍爆款", payload: { text: "INT. 楼道 夜\n小明推开铁门。" }
+  });
+  const node = await runtime.app.createNode({
+    projectId: project.id, canvasId: canvas.id, kind: "script", title: "分镜脚本", x: 800, y: 100, payload: { scriptDocument: { version: "script_document_v1", title: "分镜脚本", rows: [], source: "manual" } }
+  });
+  await runtime.app.connectEdge({ projectId: project.id, canvasId: canvas.id, fromNodeId: play.id, toNodeId: node.id, role: "input" });
+
+  const completed = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: node.id,
+    request: { prompt: "拆成可拍短镜头" }
+  });
+
+  assert.equal(completed.status, "succeeded");
+  assert.equal(submitted.payload.messages[0].role, "system");
+  assert.match(submitted.payload.messages[1].content, /输入剧本/);
+  assert.match(submitted.payload.messages[1].content, /小明推开铁门/);
+  const saved = (await runtime.app.openCanvas({ projectId: project.id, canvasId: canvas.id }))
+    .nodes.find((candidate) => candidate.id === node.id);
+  assert.equal(saved.payload.scriptDocument.title, "凌晨拍爆款");
+  assert.equal(saved.payload.scriptDocument.rows.length, 1);
+  assert.equal(saved.payload.scriptDocument.rows[0].character1, "小明");
+  assert.equal(saved.width, 760);
+});
+
+test("script generation with an empty user prompt still builds the table from the connected play", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-script-empty-"));
+  let submitted;
+  const fetchImpl = async (_url, options = {}) => {
+    submitted = { payload: JSON.parse(options.body) };
+    return Response.json({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            title: "凌晨拍爆款",
+            rows: [{ shotNumber: 1, duration: "3s", sceneDescription: "小明停在门边。", character1: "小明" }]
+          })
+        }
+      }]
+    });
+  };
+  const runtime = createLocalRuntime({ dataRoot, env: { UNUNU_GATE_API_KEY: "text-test-key" }, fetchImpl });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const play = await runtime.app.createNode({
+    projectId: project.id, canvasId: canvas.id, kind: "text", title: "E002", payload: { text: "小明把手机塞回室友手里。" }
+  });
+  const node = await runtime.app.createNode({
+    projectId: project.id, canvasId: canvas.id, kind: "script", title: "分镜脚本", payload: { scriptDocument: { version: "script_document_v1", title: "分镜脚本", rows: [] } }
+  });
+  await runtime.app.connectEdge({ projectId: project.id, canvasId: canvas.id, fromNodeId: play.id, toNodeId: node.id, role: "input" });
+
+  const completed = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: node.id,
+    request: { prompt: "" }
+  });
+
+  assert.equal(completed.status, "succeeded");
+  assert.match(submitted.payload.messages[0].content, /用户提示词可以为空/);
+  assert.match(submitted.payload.messages[1].content, /小明把手机塞回室友手里/);
+  assert.doesNotMatch(submitted.payload.messages[1].content, /额外要求/);
+  const saved = (await runtime.app.openCanvas({ projectId: project.id, canvasId: canvas.id }))
+    .nodes.find((candidate) => candidate.id === node.id);
+  assert.equal(saved.payload.scriptDocument.rows.length, 1);
 });

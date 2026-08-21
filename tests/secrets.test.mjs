@@ -44,6 +44,11 @@ test("local secrets are redacted, permissioned, and used without restart", async
   assert.equal(databaseBytes.includes(Buffer.from("tts-secret-value")), false);
 
   await runtime.app.updateProviderSettings({ openspeechApiKey: null, openspeechSpeakerId: null });
+  const sharedArk = await runtime.app.runNode({ projectId: project.id, nodeId: audio.id, request: { } });
+  assert.equal(sharedArk.status, "succeeded");
+  assert.equal(authorization, "ark-secret-value");
+  assert.equal((await runtime.app.getProviderSettings()).providers.openspeech.source, "shared-ark-local-file");
+  await runtime.app.updateProviderSettings({ arkApiKey: null });
   const blocked = await runtime.app.runNode({ projectId: project.id, nodeId: audio.id, request: { } });
   assert.equal(blocked.status, "blocked");
   runtime.close();

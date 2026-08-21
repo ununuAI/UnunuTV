@@ -1,10 +1,28 @@
+import { randomInt } from "node:crypto";
 import {
-  NODE_KINDS, REVIEW_STATES, UnuTvError, WORKFLOW_LAYERS, createId, defaultNodeSize, isPromptCapableNode,
-  nowIso, optionalText, projectGatewayModels, requireEnum, requireNumber, requireObject, requireText
+  MINIMAX_H3_MODEL_ID, NODE_KINDS, REVIEW_STATES, TEXT_NODE_MODES, UnuTvError, WORKFLOW_LAYERS, createId, defaultNodeSize, isPromptCapableNode,
+  nowIso, optionalText, projectGatewayModels, requireEnum, requireNumber, requireObject, requireText, resolveTextNodeMode
 } from "@ununu/unutv-contracts";
 import { compileNodeGenerationRequest } from "../image-generation-request-policy.mjs";
 import { assessCinematicDialogueAudioRun } from "../cinematic-dialogue-voice-policy.mjs";
 import { assertProductionNodeRunAllowed } from "../cinematic-workflow-policy.mjs";
+import { parseScriptModelOutput } from "../script-output-policy.mjs";
+import { H3_PROMPT_COMPILER_VERSION, h3PromptCompilerSystemPrompt } from "../h3-prompt-compiler-policy.mjs";
+
+const H3_RANDOM_SEED_LIMIT = 2_147_483_647;
+let previousAutomaticH3Seed = null;
+
+function nextAutomaticH3Seed() {
+  let seed = randomInt(0, H3_RANDOM_SEED_LIMIT);
+  if (seed === previousAutomaticH3Seed) seed = (seed + 1) % H3_RANDOM_SEED_LIMIT;
+  previousAutomaticH3Seed = seed;
+  return seed;
+}
+
+function isH3VideoRun(node, provider, request) {
+  if (!["video", "videoShot", "video-clip", "compose"].includes(node.kind) || provider !== "minimax") return false;
+  return [request.model, request.modelId, node.payload?.modelId].some((modelId) => modelId === MINIMAX_H3_MODEL_ID);
+}
 
 /**
  * Core project/runtime ports shared by every UnunuTV surface.
@@ -12,6 +30,26 @@ import { assertProductionNodeRunAllowed } from "../cinematic-workflow-policy.mjs
  * mutation path while keeping the facade an atomic composition module.
  */
 export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = {}) {
+  function normalizeCreatedNodePayload(kind, inputPayload) {
+    const payload = requireObject(inputPayload, "payload", {});
+    if (kind !== "text") return payload;
+    const textMode = payload.textMode === undefined
+      ? resolveTextNodeMode({ kind, payload })
+      : requireEnum(payload.textMode, TEXT_NODE_MODES, "payload.textMode");
+    return { ...payload, textMode };
+  }
+  async function getWorkspace() {
+    return ports.catalog.getWorkspace();
+  }
+
+  async function initializeWorkspace(input = {}) {
+    return ports.catalog.initializeWorkspace(requireText(input.rootPath, "rootPath"), nowIso());
+  }
+
+  async function setWorkspaceRoot(input = {}) {
+    return ports.catalog.setWorkspaceRoot(requireText(input.rootPath, "rootPath"), nowIso());
+  }
+
   async function createProject(input = {}) {
     const timestamp = nowIso();
     const project = {
@@ -20,6 +58,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
       createdAt: timestamp,
       updatedAt: timestamp
     };
+    project.mediaRoot = await ports.catalog.projectMediaRoot(project);
     await ports.projects.create(project);
     await ports.catalog.add(project);
     const canvas = await createCanvas({ projectId: project.id, title: "主画布" });
@@ -89,7 +128,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
       id: createId("node"), canvasId, kind, title: optionalText(input.title, kind),
       x: requireNumber(input.x, "x", 0), y: requireNumber(input.y, "y", 0),
       width: requireNumber(size.width, "size.width"), height: requireNumber(size.height, "size.height"),
-      revision: 1, payload: requireObject(input.payload, "payload", {}),
+      revision: 1, payload: normalizeCreatedNodePayload(kind, input.payload),
       createdAt: timestamp, updatedAt: timestamp
     };
     await ports.projects.createNode(projectId, node);
@@ -107,7 +146,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
       id: requireText(input.id, "id"), canvasId, kind, title: optionalText(input.title, kind),
       x: requireNumber(input.x, "x", 0), y: requireNumber(input.y, "y", 0),
       width: requireNumber(size.width, "size.width"), height: requireNumber(size.height, "size.height"),
-      revision: requireNumber(input.revision, "revision", 1), payload: requireObject(input.payload, "payload", {}),
+      revision: requireNumber(input.revision, "revision", 1), payload: normalizeCreatedNodePayload(kind, input.payload),
       createdAt: optionalText(input.createdAt, timestamp), updatedAt: timestamp
     };
     await ports.projects.createNode(projectId, node);
@@ -130,7 +169,28 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     const patch = {};
     if (input.title !== undefined) patch.title = optionalText(input.title, "未命名节点");
     for (const field of ["x", "y", "width", "height"]) if (input[field] !== undefined) patch[field] = requireNumber(input[field], field);
-    if (input.payload !== undefined) patch.payload = requireObject(input.payload, "payload");
+    if (input.payload !== undefined) {
+      const payload = requireObject(input.payload, "payload");
+      const current = await ports.projects.getNode(projectId, nodeId);
+      if (!current) throw new UnuTvError("node_not_found", `Node not found: ${nodeId}`, 404);
+      if (current.kind === "text") {
+        const currentMode = resolveTextNodeMode(current);
+        const requestedMode = payload.textMode === undefined
+          ? currentMode
+          : requireEnum(payload.textMode, TEXT_NODE_MODES, "payload.textMode");
+        if (requestedMode !== currentMode) {
+          throw new UnuTvError(
+            "text_node_mode_immutable",
+            "文本节点类型创建后不能切换，请新建对应类型的节点",
+            409,
+            { currentMode, requestedMode }
+          );
+        }
+        patch.payload = { ...payload, textMode: currentMode };
+      } else {
+        patch.payload = payload;
+      }
+    }
     const screenplayCas = input.screenplayCas === undefined
       ? undefined
       : requireObject(input.screenplayCas, "screenplayCas");
@@ -181,6 +241,75 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
 
   async function getProviderSettings() { return ports.credentials.status(); }
 
+  async function getProviderHealth(input = {}) {
+    const providerId = requireText(input.providerId, "providerId");
+    return ports.provider.checkHealth?.(providerId) ?? { configured: false, ok: false, state: "unsupported", message: "Provider health check is unavailable" };
+  }
+
+  async function getH3MotionContextCapabilities() {
+    if (!ports.provider.inspectH3MotionContext) {
+      throw new UnuTvError("h3_motion_context_inspection_unsupported", "H3 Motion Context inspection is unavailable", 409);
+    }
+    return ports.provider.inspectH3MotionContext();
+  }
+
+  async function installH3MotionContext(input = {}) {
+    if (!ports.provider.installH3MotionContext) {
+      throw new UnuTvError("h3_motion_context_install_unsupported", "H3 Motion Context installation is unavailable", 409);
+    }
+    return ports.provider.installH3MotionContext({
+      sourcePath: requireText(input.sourcePath, "sourcePath"),
+      expectedSourceHash: optionalText(input.expectedSourceHash, "")
+    });
+  }
+
+  async function exportH3MotionContextWorkflows(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    if (!ports.provider.exportH3MotionContextWorkflows) {
+      throw new UnuTvError("h3_motion_context_export_unsupported", "H3 Motion Context workflow export is unavailable", 409);
+    }
+    const initialRunId = requireText(input.initialRunId, "initialRunId");
+    const continuationRunId = requireText(input.continuationRunId, "continuationRunId");
+    const [initialRun, continuationRun] = await Promise.all([
+      ports.projects.getRun(projectId, initialRunId),
+      ports.projects.getRun(projectId, continuationRunId)
+    ]);
+    const graphFromRun = (run, phase) => {
+      if (!run || run.status !== "succeeded") throw new UnuTvError("h3_motion_context_export_run_invalid", `A succeeded ${phase} run is required`, 409);
+      if (run.result?.requestSummary?.h3MotionContext?.phase !== phase) {
+        throw new UnuTvError("h3_motion_context_export_phase_mismatch", `Expected a ${phase} Motion Context run`, 409);
+      }
+      const taskId = run.result?.task?.taskId;
+      const graph = run.result?.pollResponse?.[taskId]?.prompt?.[2];
+      if (!graph || typeof graph !== "object" || Array.isArray(graph)) {
+        throw new UnuTvError("h3_motion_context_export_graph_missing", `The ${phase} run has no persisted ComfyUI graph`, 409);
+      }
+      return graph;
+    };
+    const prefix = optionalText(input.prefix, "UnuTV-H3-MotionContext");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(prefix)) {
+      throw new UnuTvError("h3_motion_context_export_prefix_invalid", "Export prefix must use letters, digits, dots, underscores, or hyphens", 400);
+    }
+    const uiTemplate = requireObject(input.uiTemplate, "uiTemplate");
+    if (!Array.isArray(uiTemplate.nodes) || !Array.isArray(uiTemplate.links)) {
+      throw new UnuTvError("h3_motion_context_ui_template_invalid", "The ComfyUI UI template must contain nodes and links arrays", 400);
+    }
+    return ports.provider.exportH3MotionContextWorkflows({
+      files: [
+        { filename: `${prefix}-UI-Template.json`, kind: "ui", data: uiTemplate },
+        { filename: `${prefix}-Initial-Executed.api.json`, kind: "api", data: graphFromRun(initialRun, "initial") },
+        { filename: `${prefix}-Continue-Executed.api.json`, kind: "api", data: graphFromRun(continuationRun, "continue") }
+      ]
+    });
+  }
+
+  async function importH3ProviderConfig(input = {}) {
+    const sourcePath = requireText(input.sourcePath, "sourcePath");
+    if (!ports.credentials.importH3Config) throw new UnuTvError("h3_config_import_unsupported", "H3 config import is unavailable", 409);
+    const settings = ports.credentials.importH3Config(sourcePath);
+    const health = await ports.provider.checkHealth?.("minimax");
+    return { settings, health };
+  }
   // 模型目录来自网关,不写死在前端。网关加了模型,选择器立刻能看到。
   async function listProviderModels(input = {}) {
     const capability = ["text", "image", "video", "audio"].includes(input.capability) ? input.capability : "text";
@@ -210,8 +339,19 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     assertProductionNodeRunAllowed(node, { generationUnitId: input.generationUnitId, authorization: input.generationUnitAuthorization });
     const prompt = await ports.projects.getNodePrompt(projectId, nodeId);
     const requested = { ...(prompt?.text && input.request?.prompt === undefined ? { prompt: prompt.text } : {}), ...requireObject(input.request, "request", {}) };
+    if (node.kind === "image") {
+      const ownPrompt = String(requested.prompt || prompt?.text || node.payload?.prompt || "").trim();
+      const incomingPrompt = ownPrompt ? "" : await collectIncomingNodeText(projectId, node);
+      if (ownPrompt || incomingPrompt) requested.prompt = ownPrompt || incomingPrompt;
+    }
     const request = compileNodeGenerationRequest(node, requested);
-    const provider = optionalText(input.provider, optionalText(prompt?.provider, optionalText(node.payload?.provider, node.kind === "audio" ? "openspeech" : node.kind === "text" ? "ununu" : "openrouter")));
+    if (node.kind === "script" && !request.scriptSourceText) {
+      request.scriptSourceText = await collectIncomingNodeText(projectId, node);
+    }
+    const provider = optionalText(input.provider, optionalText(prompt?.provider, optionalText(node.payload?.provider, node.kind === "audio" ? "openspeech" : node.kind === "text" || node.kind === "script" ? "ununu" : "openrouter")));
+    if (isH3VideoRun(node, provider, request) && !Number.isSafeInteger(request.seed)) {
+      request.seed = nextAutomaticH3Seed();
+    }
     if (node.kind === "audio" && node.payload?.resourceType === "cinematic_dialogue_line") {
       const productionId = requireText(node.payload?.productionId, "node.payload.productionId");
       const [authorities, canvas, reviews] = await Promise.all([
@@ -249,9 +389,56 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     }
   }
 
+  async function compileH3Prompt(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const nodeId = requireText(input.nodeId, "nodeId");
+    const sourcePrompt = requireText(input.sourcePrompt, "sourcePrompt");
+    const node = await ports.projects.getNode(projectId, nodeId);
+    if (!node) throw new UnuTvError("node_not_found", `Node not found: ${nodeId}`, 404);
+    if (!["video", "videoShot", "compose"].includes(node.kind)) {
+      throw new UnuTvError("h3_video_node_required", "H3 Prompt compilation requires a video node", 400);
+    }
+    const request = {
+      prompt: sourcePrompt,
+      model: optionalText(input.modelId, "openai/gpt-5.6-sol"),
+      modelId: optionalText(input.modelId, "openai/gpt-5.6-sol"),
+      systemPrompt: h3PromptCompilerSystemPrompt({
+        duration: input.duration,
+        mode: input.mode,
+        referenceCount: input.referenceCount
+      }),
+      temperature: 0.2,
+      maxTokens: 2400
+    };
+    const run = { id: createId("h3-compile"), nodeId, provider: "ununu", request };
+    const result = await ports.provider.run({
+      projectId,
+      node: { ...node, kind: "text", payload: {} },
+      run,
+      request
+    });
+    const compiledPrompt = String(result?.text || "").trim();
+    if (!compiledPrompt) throw new UnuTvError("h3_prompt_compilation_empty", "H3 Prompt 编译没有返回提交稿", 502);
+    return {
+      compiledPrompt,
+      sourcePrompt,
+      compiler: `${H3_PROMPT_COMPILER_VERSION}:${request.modelId}`
+    };
+  }
   async function finishProviderResult(projectId, nodeId, runId, result) {
     const materialized = [];
-    for (const artifact of result.artifacts ?? []) materialized.push(await ports.media.importBytes({ projectId, nodeId, kind: artifact.kind, mimeType: artifact.mimeType, bytes: artifact.bytes, title: artifact.title }));
+    const targetNode = await ports.projects.getNode(projectId, nodeId);
+    const preserveCurrentVideo = ["video", "videoShot", "compose", "video-clip"].includes(targetNode?.kind)
+      && Boolean(targetNode?.payload?.currentMediaId);
+    for (const artifact of result.artifacts ?? []) materialized.push(await ports.media.importBytes({
+      projectId,
+      nodeId,
+      kind: artifact.kind,
+      mimeType: artifact.mimeType,
+      bytes: artifact.bytes,
+      title: artifact.title,
+      makeCurrent: !(artifact.kind === "video" && preserveCurrentVideo)
+    }));
     // 文本生成的产物不是媒体二进制,直接写回节点正文,和手写落同一个字段
     if (typeof result.text === "string" && result.text.trim()) {
       await writeGeneratedNodeText(projectId, nodeId, result.text);
@@ -259,10 +446,44 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     return ports.projects.finishRun(projectId, runId, result.status ?? "succeeded", { ...result, artifacts: materialized });
   }
 
+  async function collectIncomingNodeText(projectId, node) {
+    if (!node?.canvasId) return "";
+    const canvas = await ports.projects.openCanvas(projectId, node.canvasId);
+    if (!canvas) return "";
+    const incoming = (canvas.edges || []).filter((edge) => edge.toNodeId === node.id);
+    const texts = [];
+    for (const edge of incoming) {
+      const source = (canvas.nodes || []).find((item) => item.id === edge.fromNodeId);
+      if (!source) continue;
+      const text = source.payload?.textDocument?.plainText || source.payload?.plainText || source.payload?.text || source.payload?.content || "";
+      if (!String(text).trim()) continue;
+      texts.push(`【${source.title || "文本"}】\n${String(text).trim()}`);
+    }
+    return texts.join("\n\n");
+  }
+
   async function writeGeneratedNodeText(projectId, nodeId, text) {
     const node = await ports.projects.getNode(projectId, nodeId);
     if (!node) return;
     const payload = node.payload || {};
+    if (node.kind === "script") {
+      const parsed = parseScriptModelOutput(text, nowIso());
+      if (!parsed.ok) {
+        throw new UnuTvError("script_rows_required", "分镜脚本模型没有返回可用镜头表", 502, { issue: parsed.issue });
+      }
+      const hasRows = parsed.document.rows.length > 0;
+      await ports.projects.updateNode(projectId, nodeId, {
+        ...(hasRows ? { width: Math.max(node.width || 0, 760), height: Math.max(node.height || 0, 360) } : {}),
+        ...(node.title === "分镜脚本" || node.title === "script" ? { title: parsed.document.title } : {}),
+        payload: {
+          ...payload,
+          text,
+          scriptDocument: parsed.document,
+          structuredRowCount: parsed.document.rows.length
+        }
+      });
+      return;
+    }
     await ports.projects.updateNode(projectId, nodeId, {
       payload: {
         ...payload,
@@ -286,7 +507,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     const runId = requireText(input.runId, "runId");
     const run = await ports.projects.getRun(projectId, runId);
     if (!run) throw new UnuTvError("run_not_found", `Run not found: ${runId}`, 404);
-    const recoverablePollFailure = run.status === "failed" && run.result?.task?.taskId && run.result?.code === "provider_request_failed";
+    const recoverablePollFailure = run.status === "failed" && run.result?.task?.taskId && ["provider_request_failed", "provider_poll_failed", "h3_remote_unavailable"].includes(run.result?.code);
     if (["succeeded", "failed", "blocked", "canceled"].includes(run.status) && !recoverablePollFailure) return run;
     if (run.status === "queued" && !run.result?.task?.taskId) return run;
     const node = await ports.projects.getNode(projectId, run.nodeId);
@@ -295,7 +516,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
       const result = await ports.provider.poll({ projectId, node, run });
       return finishProviderResult(projectId, node.id, run.id, result);
     } catch (error) {
-      const retryable = run.result?.task?.taskId && error.code === "provider_request_failed";
+      const retryable = Boolean(run.result?.task?.taskId) && ["provider_request_failed", "provider_poll_failed", "h3_remote_unavailable"].includes(error.code);
       return ports.projects.finishRun(projectId, run.id, retryable ? "running" : "failed", {
         ...run.result,
         ...(retryable ? { pollError: { code: error.code, message: error.message } } : { code: error.code ?? "provider_poll_failed", message: error.message })
@@ -379,9 +600,9 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
   async function listRuns(input = {}) { return ports.projects.listRuns(requireText(input.projectId, "projectId")); }
 
   return {
-    addGroupMember, cancelRun, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
-    disconnectEdge, finishProviderResult, getDirectorStage, getPanorama, getProviderSettings, getWorkflow,
-    listProjects, listProviderModels, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode,
-    saveDirectorStage, setPanorama, setWorkflowLayer, updateNode, updateProject, updateProviderSettings
+    addGroupMember, cancelRun, compileH3Prompt, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
+    disconnectEdge, exportH3MotionContextWorkflows, finishProviderResult, getDirectorStage, getH3MotionContextCapabilities, getPanorama, getProviderHealth, getProviderSettings, getWorkspace, getWorkflow,
+    importH3ProviderConfig, initializeWorkspace, installH3MotionContext, listProjects, listProviderModels, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode,
+    saveDirectorStage, setPanorama, setWorkspaceRoot, setWorkflowLayer, updateNode, updateProject, updateProviderSettings
   };
 }

@@ -7,8 +7,8 @@ import { resolveNodePromptCapability } from "@ununu/unutv-contracts";
 import { createLocalRuntime } from "@ununu/unutv-local-runtime";
 import { buildNodePresentationV2 } from "../apps/web/src/node-presentation-view-model.js";
 
-test("canonical Prompt capability is limited to image, videoShot/video, and audio execution nodes", () => {
-  for (const kind of ["image", "video", "videoShot", "audio"]) {
+test("canonical Prompt capability separates plain text from Prompt text", () => {
+  for (const kind of ["image", "video", "videoShot", "audio", "script"]) {
     const capability = resolveNodePromptCapability({ kind, payload: {} });
     assert.equal(capability.promptCapable, true, kind);
     assert.equal(capability.promptDocumentCapable, true, kind);
@@ -17,9 +17,31 @@ test("canonical Prompt capability is limited to image, videoShot/video, and audi
   }
   assert.equal(resolveNodePromptCapability({ kind: "videoShot", payload: {} }).executionKind, "video");
   assert.equal(resolveNodePromptCapability({ kind: "videoShot", payload: {} }).surface, "dedicated");
-  for (const kind of ["review", "script", "story", "asset", "director", "cinematic", "generationUnit", "qa", "world"]) {
+  assert.equal(resolveNodePromptCapability({ kind: "script", payload: {} }).executionKind, "text");
+  assert.equal(resolveNodePromptCapability({ kind: "script", payload: { scriptRole: "group" } }).promptCapable, false);
+  assert.equal(resolveNodePromptCapability({ kind: "text", payload: { textMode: "plain" } }).promptCapable, false);
+  assert.equal(resolveNodePromptCapability({ kind: "text", payload: { textMode: "plain" } }).reason, "plain_text_node");
+  assert.equal(resolveNodePromptCapability({ kind: "text", payload: { textMode: "prompt" } }).executionKind, "text");
+  assert.equal(resolveNodePromptCapability({ kind: "text", payload: { prompt: "旧 Prompt" } }).promptCapable, true);
+  assert.equal(resolveNodePromptCapability({ kind: "text", payload: { text: "旧纯文本" } }).promptCapable, false);
+  for (const kind of ["review", "story", "asset", "director", "cinematic", "generationUnit", "qa", "world"]) {
     assert.equal(resolveNodePromptCapability({ kind, payload: {} }).promptCapable, false, kind);
   }
+});
+
+test("Core locks a text node's mode at creation", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-text-node-mode-"));
+  const runtime = createLocalRuntime({ dataRoot, recoverAutomation: false, recoverRenders: false, runAutomationExecutor: false });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject({ title: "Text node modes" });
+  const plain = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "text", payload: { text: "手写" } });
+  const prompt = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "text", payload: { textMode: "prompt", prompt: "写一段" } });
+  assert.equal(plain.payload.textMode, "plain");
+  assert.equal(prompt.payload.textMode, "prompt");
+  await assert.rejects(
+    runtime.app.updateNode({ projectId: project.id, nodeId: plain.id, payload: { ...plain.payload, textMode: "prompt" } }),
+    (error) => error?.code === "text_node_mode_immutable"
+  );
 });
 
 test("dialogue_editor professional contribution never projects as Prompt-capable", () => {

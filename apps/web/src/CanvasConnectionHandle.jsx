@@ -7,7 +7,7 @@ import { clampConnectionHandleMotion } from "./connection-handle-policy.js";
 
 const EMPTY_MOTION = Object.freeze({ active: false, x: 0, y: 0 });
 
-export function CanvasConnectionHandle({ id, label, readOnly, side, zoomPercent = 100 }) {
+export function CanvasConnectionHandle({ id, isConnecting = false, label, readOnly, side, zoomPercent = 100 }) {
   const [motion, setMotion] = useState(EMPTY_MOTION);
   const input = side === "input";
   const moveVisual = (event, active = true) => {
@@ -23,7 +23,7 @@ export function CanvasConnectionHandle({ id, label, readOnly, side, zoomPercent 
 
   return <Handle
     aria-label={label}
-    className={`canvas-flow-handle ${input ? "input-handle" : "output-handle"}`}
+    className={`canvas-flow-handle ${input ? "input-handle" : "output-handle"}${input && isConnecting ? " is-connection-target" : ""}`}
     id={id}
     isConnectable={!readOnly}
     position={input ? Position.Left : Position.Right}

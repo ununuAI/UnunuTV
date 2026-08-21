@@ -60,4 +60,4 @@ GenerationUnit 表示一次模型请求。它可以关联一个镜头、多个�
 - `extensionDepth/maxExtensionDepth/reanchorPolicy`：按模型和镜头风险配置续接深度，达到上限或提前出现漂移就从已接受 Authority 重锚，不能把固定“2/3 次”包装成普适定律。
 
 三张节拍表两两交叉、父审片不是最新 ACCEPT、实际完成节拍没有写回、入口状态与真实出口不一致，都会在 Provider 调用前阻断。详见 Skill 参考
-[`sequence-state-canon-retake-control.md`](../../skills/ununu-cinematic-production/references/sequence-state-canon-retake-control.md)。
+[`sequence-state-canon-retake-control.md`](../../skills/unutv/references/sequence-state-canon-retake-control.md)。

@@ -1,6 +1,7 @@
-export const VIDEO_MODEL_REGISTRY_VERSION = "2026-07-28";
+export const VIDEO_MODEL_REGISTRY_VERSION = "2026-08-15";
 
 export const ARK_SEEDANCE_2_MINI_MODEL_ID = "doubao-seedance-2-0-mini-260615";
+export const MINIMAX_H3_MODEL_ID = "MiniMax-H3";
 export const OPENROUTER_GROK_VIDEO_MODEL_ID = "x-ai/grok-imagine-video";
 export const OPENROUTER_HAPPYHORSE_MODEL_ID = "alibaba/happyhorse-1.1";
 
@@ -30,6 +31,30 @@ const PROFILES = [
       "https://www.volcengine.com/docs/82379/2291680",
       "https://www.volcengine.com/docs/82379/1520757"
     ]
+  },
+  {
+    provider: "minimax",
+    model: MINIMAX_H3_MODEL_ID,
+    displayName: "MiniMax H3",
+    verifiedAt: "2026-08-16",
+    supportedModes: ["text_to_video", "image_reference", "first_frame", "first_last_frame"],
+    supportedGenerationStrategies: ["single_shot", "designed_multi_shot", "continuous_segment", "storyboard_action_sequence"],
+    visualAnchors: ["NONE", "FIRST_FRAME", "FIRST_LAST_FRAME", "STORYBOARD_SHEET", "SHOT_FRAME_SET", "ACTION_PHASE_BOARD", "PREVIOUS_ACCEPTED_TAIL", "DUPLICATE_HANDOFF"],
+    duration: { min: 4, max: 15 },
+    promptMaxBytes: null,
+    maxReferenceImages: 9,
+    forbidsReferenceImagesWithFrameInput: true,
+    forbidsReferenceImagesWithFirstLastFrame: true,
+    supportsNativeAudio: true,
+    supportsIndependentNegativePrompt: false,
+    supportsInternalCuts: true,
+    supportsPromptTimeSlots: true,
+    supportedCapabilities: ["first_frame", "first_last_frame", "multi_reference", "native_audio", "internal_cuts", "storyboard_reference", "prompt_time_slots"],
+    supportedAspectRatios: ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+    supportedResolutions: ["480p", "720p"],
+    supportedProfiles: ["480p_accelerated", "720p_accelerated", "480p_native", "720p_native"],
+    evidence: "local-h3-comfyui-production-contract-2026-08-16",
+    evidenceUrls: []
   },
   {
     provider: "openrouter",

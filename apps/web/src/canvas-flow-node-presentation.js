@@ -20,6 +20,7 @@ export function toFlowNode(node, canvas, selectedIds, actions, editingTextId, ed
     zIndex: selected ? 100 : isStoryboardGroup(node) ? 0 : ["script", "text", "cinematic"].includes(node.kind) ? 20 : 6
   };
   if (node.kind === "asset") result.dragHandle = ".momo-asset-drag-handle";
-  else if (canvasNodeIsExpanded(node)) result.dragHandle = node.kind === "director" ? ".director-console-header" : ".cp-workspace-header";
+  else if (canvasNodeIsExpanded(node) && node.kind === "director") result.dragHandle = ".director-console-header";
+  else if (canvasNodeIsExpanded(node) && node.kind !== "script") result.dragHandle = ".cp-workspace-header";
   return result;
 }

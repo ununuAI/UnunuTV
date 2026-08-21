@@ -151,7 +151,7 @@ export function NodeReferencePickerModal({ canvas, nodeId, notify, onClose, proj
 
   const filters = view === "canvas" ? CANVAS_FILTERS : ASSET_FILTERS;
 
-  return <div className="reference-library-backdrop" onMouseDown={onClose}>
+  return <div className="reference-library-backdrop">
     <section aria-label="添加参考" aria-modal="true" className="reference-library-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog">
       <header className="reference-library-header">
         <div className="reference-library-tabs" role="tablist">

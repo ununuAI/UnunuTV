@@ -4,7 +4,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { UnuTvError } from "@ununu/unutv-contracts";
-import { projectDirectory } from "./paths.mjs";
 
 function presetOutput(preset) {
   if (preset === "prores_master") return { extension: ".mov", videoArgs: ["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"], audioArgs: ["-c:a", "pcm_s24le"] };
@@ -180,7 +179,7 @@ export class LocalFfmpegRenderAdapter {
       ...audioInputs.map((input, index) => ({ ...input, inputIndex: inputs.length + index }))
     ];
     const target = presetOutput(job.preset);
-    const outputDirectory = path.join(projectDirectory(this.dataRoot, projectId), "exports");
+    const outputDirectory = path.join(this.media.projectRoot(projectId), "Videos");
     const outputPath = path.join(outputDirectory, `${job.id}${target.extension}`);
     await mkdir(outputDirectory, { recursive: true });
     const inputArgs = [

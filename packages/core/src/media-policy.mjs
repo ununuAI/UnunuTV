@@ -17,6 +17,6 @@ export function inferMediaKind(filePath, explicitKind) {
 }
 
 export function mediaDirectoryForKind(kind, generated = false) {
-  const family = kind === "image" ? "images" : kind === "video" ? "videos" : kind === "world" ? "worlds" : "audio";
-  return `media/${generated ? "generated" : "source"}/${family}`;
+  void generated;
+  return kind === "image" ? "Images" : kind === "video" ? "Videos" : kind === "world" ? "Worlds" : "Audio";
 }

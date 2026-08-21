@@ -2,11 +2,11 @@
 
 UnunuTV is a single-user, local-first **AI-video low-poly previs and shot-control
 console** for cinematic and multi-episode short-drama work. Operate it through
-the single `ununu-cinematic-production` Skill and inspect every persisted stage
+the single `unutv` Skill and inspect every persisted stage
 on the production canvas.
 
 ```text
-ununu-cinematic-production / Codex
+unutv / Codex
         │
         ▼
 CLI / HTTP  →  Orchestrator + Workers  →  contracts / Knowledge Port / Series
@@ -20,7 +20,7 @@ CLI / HTTP  →  Orchestrator + Workers  →  contracts / Knowledge Port / Serie
 
 ## Platform OS (v1)
 
-- **Single entry**: `skills/ununu-cinematic-production` → `workflow cinematic-start|status|advance|owner-decide`
+- **Single entry**: `skills/unutv` → `workflow cinematic-start|status|advance|owner-decide`
 - **Single next step**: every status returns machine-readable `nextAction`
 - **Single formal video path**: accepted low-poly previs → GenerationUnit compile/preflight → exact formal-generation intent → idempotent run
 - **Canvas-visible law**: every source, contract, request, candidate, render and delivery binds a visible node

@@ -1,4 +1,7 @@
-# UnuTV API and CLI boundary
+# UnuTV cinematic nextAction notes
+
+HTTP/CLI 操作手册只有一份：仓库 `skills/unutv/references/api.md`。
+本文件只保留电影工业 nextAction、审查证据和 Authority 门，不再重复路由表。
 
 ## Runtime
 

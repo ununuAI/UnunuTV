@@ -58,7 +58,7 @@ test("local runtime covers the video production data loop", async (context) => {
   assert.equal(renamedProject.title, "竖屏短剧·改名");
   assert.ok(existsSync(path.join(dataRoot, "catalog.sqlite")));
   assert.ok(existsSync(path.join(dataRoot, "projects", project.id, "project.sqlite")));
-  assert.ok(existsSync(path.join(dataRoot, "projects", project.id, "media", "source", "images")));
+  assert.ok(existsSync(path.join(project.mediaRoot, "Images")));
 
   const script = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "script", title: "第 1 场", payload: { text: "雨夜相遇" } });
   const image = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "image", title: "首帧", x: 600 });
@@ -80,10 +80,10 @@ test("local runtime covers the video production data loop", async (context) => {
   await writeFile(sourceImage, Buffer.from("89504e470d0a1a0a", "hex"));
   const media = await runtime.app.importMedia({ projectId: project.id, nodeId: image.id, filePath: sourceImage });
   assert.equal(media.kind, "image");
-  assert.ok(existsSync(path.join(dataRoot, "projects", project.id, media.relativePath)));
+  assert.ok(existsSync(path.join(project.mediaRoot, media.relativePath)));
   const capturedMedia = await runtime.app.importDataMedia({ projectId: project.id, nodeId: director.id, kind: "image", title: "机位导出.png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" });
   assert.equal(capturedMedia.mimeType, "image/png");
-  assert.ok(existsSync(path.join(dataRoot, "projects", project.id, capturedMedia.relativePath)));
+  assert.ok(existsSync(path.join(project.mediaRoot, capturedMedia.relativePath)));
 
   const publication = await runtime.app.publishMedia({ projectId: project.id, mediaId: media.id, provider: "ark", expiresInSeconds: 3600 });
   const publicUrl = new URL(publication.remoteUrl);
@@ -187,7 +187,7 @@ test("local runtime covers the video production data loop", async (context) => {
   assert.equal((await reopened.app.getTimeline({ projectId: project.id, timelineId: timeline.id })).clips[0].durationMs, 4200);
   assert.equal((await reopened.app.listReviews({ projectId: project.id }))[0].note, "首帧通过");
   assert.equal((await reopened.app.listRuns({ projectId: project.id }))[0].status, "blocked");
-  assert.ok(existsSync(path.join(dataRoot, "projects", project.id, media.relativePath)));
+  assert.ok(existsSync(path.join(project.mediaRoot, media.relativePath)));
 
   const projectDatabase = new DatabaseSync(path.join(dataRoot, "projects", project.id, "project.sqlite"), { readOnly: true });
   context.after(() => projectDatabase.close());

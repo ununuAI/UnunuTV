@@ -29,6 +29,46 @@ function seedanceInput(mode, parameters = {}) {
   };
 }
 
+function h3Input(mode, parameters = {}) {
+  return {
+    ...input(mode, parameters),
+    modelId: "MiniMax-H3",
+    provider: "minimax"
+  };
+}
+
+test("connected audio stays on the canvas and is not sent as a video image reference", () => {
+  const voice = { id: "audio-1", kind: "audio", payload: { currentMediaId: "media-voice" } };
+  const payload = generationRunPayload(
+    video,
+    input("image_reference"),
+    [edge(first.id), edge(voice.id)],
+    [video, first, voice]
+  );
+  assert.deepEqual(payload.request.referenceMediaIds, ["media-first"]);
+});
+
+test("H3 sends connected audio as ordered standalone audio references", () => {
+  const voiceOne = { id: "audio-1", kind: "audio", payload: { currentMediaId: "media-voice-1" } };
+  const voiceTwo = { id: "audio-2", kind: "audio", payload: { currentMediaId: "media-voice-2" } };
+  const payload = generationRunPayload(
+    video,
+    h3Input("image_reference"),
+    [edge(first.id), edge(voiceOne.id), edge(voiceTwo.id)],
+    [video, first, voiceOne, voiceTwo]
+  );
+  assert.deepEqual(payload.request.referenceMediaIds, ["media-first"]);
+  assert.deepEqual(payload.request.audioReferenceMediaIds, ["media-voice-1", "media-voice-2"]);
+});
+
+test("H3 refuses connected audio outside all-purpose reference mode", () => {
+  const voice = { id: "audio-1", kind: "audio", payload: { currentMediaId: "media-voice" } };
+  assert.throws(
+    () => generationRunPayload(video, h3Input("text_to_video"), [edge(voice.id)], [video, voice]),
+    /声音参考只能在全能参考模式中使用/
+  );
+});
+
 test("connected images remain all-purpose references by default and never become a first frame implicitly", () => {
   const payload = generationRunPayload(video, input("image_reference"), [edge(first.id)], [video, first]);
   assert.deepEqual(payload.request.referenceMediaIds, ["media-first"]);
@@ -98,4 +138,28 @@ test("Grok rejects UTF-8 prompts above 4096 bytes before payment", () => {
     () => generationRunPayload(video, { ...input("text_to_video", { duration: 10, generateAudio: false }), text: "人".repeat(1400) }, [], [video]),
     /提示词过长：当前 4200 bytes/
   );
+});
+
+test("MiniMax H3 submits the ordinary node prompt directly", () => {
+  const sourcePrompt = "原始导演意图";
+  const payload = generationRunPayload(video, {
+    modelId: "MiniMax-H3",
+    parameters: {
+      mode: "text_to_video",
+      duration: 4,
+      resolution: "480p",
+      h3Profile: "480p_accelerated",
+      ratio: "16:9",
+      h3CompiledPrompt: "应被忽略的历史提交稿",
+      h3SourcePrompt: sourcePrompt,
+      h3Compiler: "director-skill"
+    },
+    provider: "minimax",
+    referenceMediaIds: [],
+    referenceNodeIds: [],
+    text: sourcePrompt
+  }, [], [video]);
+  assert.equal(payload.request.prompt, sourcePrompt);
+  assert.equal(payload.provider, "minimax");
+  assert.equal(payload.request.h3Profile, "480p_accelerated");
 });

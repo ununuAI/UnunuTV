@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import { formatGenerationError } from "./generation-error-message.js";
 import { generationRunPayload } from "./generation-run-payload.js";
-import { reconcileRunActivities } from "./generation-run-recovery.js";
+import { pollableRunActivities, reconcileRunActivities } from "./generation-run-recovery.js";
 
-export function useCanvasGenerationRunner({ canvas, foregroundRunNodeId, notify, projectId, refresh }) {
+export function useCanvasGenerationRunner({ canvas, notify, projectId, refresh }) {
   const [activities, setActivities] = useState({});
   const updateActivity = useCallback((nodeId, value) => setActivities((current) => {
     if (value) return { ...current, [nodeId]: value };
@@ -91,11 +91,30 @@ export function useCanvasGenerationRunner({ canvas, foregroundRunNodeId, notify,
     }
   }, [activities, notify, projectId, refresh, updateActivity]);
 
+  const cancelRun = useCallback(async (node) => {
+    const current = activities[node.id];
+    const runId = current?.runId || node.payload?.generationRunId;
+    if (!runId) {
+      notify("任务正在提交，取得运行编号后才能取消", true);
+      return null;
+    }
+    updateActivity(node.id, { phase: "canceling", runId });
+    try {
+      const result = await api.cancelRun(projectId, runId);
+      updateActivity(node.id, { phase: "canceled", runId });
+      notify("已取消当前生成", false);
+      await refresh();
+      return result;
+    } catch (error) {
+      updateActivity(node.id, current || { phase: "running", runId });
+      notify(error, true);
+      return null;
+    }
+  }, [activities, notify, projectId, refresh, updateActivity]);
+
   useEffect(() => {
-    const backgroundActivities = Object.entries(activities).filter(([nodeId, activity]) => (
-      nodeId !== foregroundRunNodeId && activity?.runId
-    ));
-    if (!backgroundActivities.length) return undefined;
+    const activeRuns = pollableRunActivities(activities);
+    if (!activeRuns.length) return undefined;
 
     let stopped = false;
     let timer;
@@ -119,9 +138,9 @@ export function useCanvasGenerationRunner({ canvas, foregroundRunNodeId, notify,
     };
     const tick = async () => {
       try {
-        const queued = backgroundActivities.filter(([, activity]) => activity.phase === "requesting");
+        const queued = activeRuns.filter(([, activity]) => activity.phase === "requesting");
         const queuedRuns = queued.length ? (await api.runs(projectId)).runs : [];
-        await Promise.all(backgroundActivities.map(async ([nodeId, activity]) => {
+        await Promise.all(activeRuns.map(async ([nodeId, activity]) => {
           const result = activity.phase === "requesting"
             ? queuedRuns.find((run) => run.id === activity.runId)
             : await api.pollRun(projectId, activity.runId);
@@ -138,12 +157,12 @@ export function useCanvasGenerationRunner({ canvas, foregroundRunNodeId, notify,
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [activities, foregroundRunNodeId, notify, projectId, refresh, updateActivity]);
+  }, [activities, notify, projectId, refresh, updateActivity]);
 
   const decorateNode = useCallback((node) => {
     const activity = activities[node.id];
-    return activity ? { ...node, payload: { ...node.payload, generationStatus: "running", generationPhase: activity.phase, generationRunId: activity.runId } } : node;
+    return activity ? { ...node, payload: { ...node.payload, generationStatus: activity.phase === "canceled" ? "canceled" : "running", generationPhase: activity.phase, generationRunId: activity.runId } } : node;
   }, [activities]);
 
-  return { decorateNode, pollRun, readRun, runNode };
+  return { cancelRun, decorateNode, pollRun, readRun, runNode };
 }

@@ -1,5 +1,6 @@
 const PROVIDER_LABELS = {
   ark: "Ark",
+  minimax: "MiniMax",
   openrouter: "OpenRouter",
   ununu: "Ununu"
 };
@@ -32,7 +33,7 @@ export function formatGenerationError(run, node) {
     `模型：${model}`
   ];
 
-  if (/input image may contain real person/i.test(message)) {
+  if (/input image(?:\s+['`][^'`]+['`])?\s+may contain real person/i.test(message)) {
     lines.push(
       "原因：参考图被供应商检测为可能含真人，因此本次生成被拒绝。",
       "处理：Seedance 请使用 Ark 已认证的人像/虚拟人资产，或改用支持当前参考图的模型。"

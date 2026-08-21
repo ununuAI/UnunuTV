@@ -30,8 +30,8 @@ function assertOrdered(text, tokens) {
 
 test("the single cinematic Skill and absorption contract preserve the Core post-production order", async () => {
   const [skill, absorption] = await Promise.all([
-    readRepositoryFile("skills/ununu-cinematic-production/SKILL.md"),
-    readRepositoryFile("skills/ununu-cinematic-production/references/director-toonflow-openmontage-absorption.md")
+    readRepositoryFile("skills/unutv/references/cinematic.md"),
+    readRepositoryFile("skills/unutv/references/director-toonflow-openmontage-absorption.md")
   ]);
   const postOrder = ["continuity_qa", "timeline_edit", "sound_design", "candidate_render"];
 
@@ -74,7 +74,7 @@ test("the absorption contract preserves the seven confirmed Core production gate
     automationRenderStageExecutor,
     renderUseCases
   ] = await Promise.all([
-    readRepositoryFile("skills/ununu-cinematic-production/references/director-toonflow-openmontage-absorption.md"),
+    readRepositoryFile("skills/unutv/references/director-toonflow-openmontage-absorption.md"),
     readRepositoryFile("packages/contracts/src/screenplay-authority-contract.mjs"),
     readRepositoryFile("packages/core/src/cinematic-development-review-policy.mjs"),
     readRepositoryFile("packages/core/src/use-cases/cinematic-workflow-use-cases.mjs"),
@@ -149,7 +149,7 @@ test("the absorption contract preserves the seven confirmed Core production gate
 
 test("the absorption contract preserves shot-versus-segment decisions and canonical visual input packing", async () => {
   const [absorption, visualInputPolicy, canvasPromptGraphPolicy] = await Promise.all([
-    readRepositoryFile("skills/ununu-cinematic-production/references/director-toonflow-openmontage-absorption.md"),
+    readRepositoryFile("skills/unutv/references/director-toonflow-openmontage-absorption.md"),
     readRepositoryFile("packages/contracts/src/cinematic-visual-input-decision-policy.mjs"),
     readRepositoryFile("packages/core/src/cinematic-canvas-prompt-graph-policy.mjs")
   ]);
@@ -259,7 +259,7 @@ test("the absorption contract separates enforced handoff primitives from pending
     timelineEditPolicy,
     promptRenderPolicy
   ] = await Promise.all([
-    readRepositoryFile("skills/ununu-cinematic-production/references/director-toonflow-openmontage-absorption.md"),
+    readRepositoryFile("skills/unutv/references/director-toonflow-openmontage-absorption.md"),
     readRepositoryFile("packages/contracts/src/cinematic-cross-modal-control-policy.mjs"),
     readRepositoryFile("packages/contracts/src/cinematic-sequence-workspace-contracts.mjs"),
     readRepositoryFile("packages/core/src/use-cases/media-use-cases.mjs"),
@@ -317,8 +317,8 @@ test("the absorption contract separates enforced handoff primitives from pending
 
 test("the Skill requires batch-wide canvas Prompt materialization and a clean Director reference before storyboard payment", async () => {
   const [skill, apiReference, batchUseCases, cleanReferencePolicy] = await Promise.all([
-    readRepositoryFile("skills/ununu-cinematic-production/SKILL.md"),
-    readRepositoryFile("skills/ununu-cinematic-production/references/api-cli.md"),
+    readRepositoryFile("skills/unutv/references/cinematic.md"),
+    readRepositoryFile("skills/unutv/references/api-cli.md"),
     readRepositoryFile("packages/core/src/use-cases/storyboard-batch-use-cases.mjs"),
     readRepositoryFile("packages/core/src/cinematic-storyboard-image-reference-policy.mjs")
   ]);

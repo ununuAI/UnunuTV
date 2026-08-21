@@ -74,7 +74,7 @@ export function AssetRegistrationModal({ canvas, notify, onClose, opened, projec
   }
 
   return <div className="asset-registration-layer" role="presentation">
-    <button aria-label="关闭资产弹窗" className="asset-registration-backdrop" onClick={onClose} type="button" />
+    <div aria-hidden="true" className="asset-registration-backdrop" />
     <section aria-label="加入资产" className="asset-registration-modal" role="dialog">
       <header className="asset-registration-header">
         <div className="asset-registration-tabs" role="tablist"><button className={tab === "create" ? "active" : ""} onClick={() => setTab("create")} type="button">创建资产</button><button className={tab === "existing" ? "active" : ""} onClick={() => setTab("existing")} type="button">添加到现有资产</button></div>

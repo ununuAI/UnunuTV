@@ -84,7 +84,7 @@ export function useDirectorCapture({
     }
     if (created) {
       setStage(current);
-      notify?.(`已导出 ${created} 张机位图到画布,并记入导演台。到分镜上绑定即可作为空间参考进入生成。`, false);
+      notify?.(`已导出 ${created} 张资产视图到画布，并记入3D导演台。需要时可由用户绑定为图片或空间参考。`, false);
       await refresh?.();
     }
   }, [canvasId, node, notify, projectId, refresh]);

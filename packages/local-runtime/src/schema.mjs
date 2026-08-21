@@ -6,10 +6,11 @@ import { RENDER_SCHEMA } from "./render-schema.mjs";
 import { DIRECTOR_STAGE_SCHEMA } from "./director-stage-schema.mjs";
 import { SCRIPT_BREAKDOWN_SCHEMA } from "./script-breakdown-schema.mjs";
 import { CINEMATIC_SEQUENCE_WORKSPACE_SCHEMA } from "./cinematic-sequence-workspace-schema.mjs";
-
+import { PROJECT_LOCATIONS_SCHEMA, WORKSPACE_SETTINGS_SCHEMA } from "./workspace-schema.mjs";
 export const CATALOG_SCHEMA = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
+${WORKSPACE_SETTINGS_SCHEMA}
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_catalog_projects_updated ON projects(updated_at DESC);
+${PROJECT_LOCATIONS_SCHEMA}
 CREATE TABLE IF NOT EXISTS global_assets (
   id TEXT PRIMARY KEY,
   role TEXT NOT NULL,

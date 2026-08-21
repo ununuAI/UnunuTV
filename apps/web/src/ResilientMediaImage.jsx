@@ -7,17 +7,16 @@ import { MEDIA_IMAGE_RETRY_LIMIT, mediaImageRetryDelay, mediaImageRetryUrl } fro
 export function ResilientMediaImage({ alt, className, onLoad, src }) {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState("loading");
+  const imageRef = useRef(null);
   const retryTimer = useRef(null);
 
   useEffect(() => {
-    if (retryTimer.current) clearTimeout(retryTimer.current);
-    retryTimer.current = null;
-    setAttempt(0);
-    setState("loading");
+    const image = imageRef.current;
+    if (image?.complete && image.naturalWidth > 0) setState("loaded");
     return () => {
       if (retryTimer.current) clearTimeout(retryTimer.current);
     };
-  }, [src]);
+  }, []);
 
   const retry = () => {
     if (retryTimer.current) clearTimeout(retryTimer.current);
@@ -37,6 +36,7 @@ export function ResilientMediaImage({ alt, className, onLoad, src }) {
     <div className={`resilient-media-image${className ? ` ${className}` : ""}`} data-media-state={state}>
       <img
         alt={state === "loaded" ? alt : ""}
+        ref={imageRef}
         onError={retry}
         onLoad={(event) => {
           setState("loaded");

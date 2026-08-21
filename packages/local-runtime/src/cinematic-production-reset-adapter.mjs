@@ -1,7 +1,6 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { UnuTvError, nowIso } from "@ununu/unutv-contracts";
-import { projectDirectory } from "./paths.mjs";
 
 function transaction(database, work) {
   database.exec("BEGIN IMMEDIATE");
@@ -132,7 +131,7 @@ export function attachCinematicProductionResetMethods(prototype, recordEvent) {
     // Remove only files whose exact relative paths were read from the deleted
     // media rows. The story source node and its media are never touched.
     for (const relativePath of cleanupPaths) {
-      try { rmSync(path.join(projectDirectory(this.dataRoot, projectId), relativePath), { force: true }); } catch { /* receipt remains authoritative */ }
+      try { rmSync(path.join(this.mediaRoot(projectId), relativePath), { force: true }); } catch { /* receipt remains authoritative */ }
     }
     return receipt;
   };

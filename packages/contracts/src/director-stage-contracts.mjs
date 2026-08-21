@@ -120,6 +120,14 @@ function validateObject(value, path, issues) {
   validateVector(value.size, `${path}.size`, issues);
   requiredText(value.color, `${path}.color`, issues);
   booleanValue(value.visible, `${path}.visible`, issues);
+  if (value.assetBinding !== undefined) {
+    requiredRecord(value.assetBinding, `${path}.assetBinding`, issues);
+    if (isRecord(value.assetBinding)) {
+      for (const field of ["assetId", "assetVersionId", "mediaId"]) {
+        requiredText(value.assetBinding[field], `${path}.assetBinding.${field}`, issues);
+      }
+    }
+  }
 }
 
 function validateRoute(value, path, issues) {

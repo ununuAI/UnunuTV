@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlignJustify,
   Boxes,
   Blocks,
   Clapperboard,
@@ -9,15 +10,12 @@ import {
   Drama,
   FileText,
   Globe2,
-  Grid2X2,
   Image as ImageIcon,
   Library,
   Mic2,
-  PackageOpen,
   Plus,
   Redo2,
   ShieldCheck,
-  Sparkles,
   Trash2,
   Undo2,
   Upload,
@@ -27,34 +25,28 @@ import {
 import { nodeKindCanBeAddedToCanvas } from "./canvas-entry-policy.js";
 
 export const NODE_ITEM_DEFINITIONS = [
-  { group: "base", kind: "text", label: "文本节点", meta: "资料 / 旁白 / 说明", icon: FileText },
+  { group: "base", kind: "text", textMode: "plain", label: "纯文本", meta: "手动输入 · 不使用模型", icon: FileText },
+  { group: "base", kind: "text", textMode: "prompt", label: "Prompt 文本", meta: "通过大模型生成文本", icon: WandSparkles },
+  { group: "base", kind: "script", label: "分镜脚本", meta: "镜头表 / 拆镜", icon: AlignJustify },
   { group: "base", kind: "image", label: "图片节点", meta: "关键帧 / 参考图", icon: ImageIcon },
   { group: "base", kind: "video", label: "视频节点", meta: "视频运动生成", icon: Video },
   { group: "base", kind: "audio", label: "音频节点", meta: "对白 / 音乐 / 音效", icon: Mic2 },
-  { group: "base", kind: "grid", label: "宫格节点", meta: "多图组织与选择", icon: Grid2X2 },
-  { group: "base", kind: "asset", label: "资产节点", meta: "全类型电影工业资产", icon: PackageOpen },
   { group: "base", kind: "imageEdit", label: "图片编辑节点", meta: "局部修改与派生", icon: WandSparkles },
   { group: "base", kind: "compare", label: "对比节点", meta: "版本审看与选择", icon: Columns2 },
   { group: "base", kind: "world", label: "3D 世界节点", meta: "空间与环境设计", icon: Globe2 },
-  { group: "base", kind: "director", label: "导演台节点", meta: "调度 / 机位 / 灯光", icon: Drama },
+  { group: "base", kind: "director", label: "3D导演台（资产）", meta: "人物 / 场景 / 道具", icon: Drama },
   { group: "ununu", kind: "cinematic", label: "影视总控", meta: "项目资源与生产合同", icon: Clapperboard },
-  { group: "ununu", kind: "script", label: "剧本节点", meta: "StoryProductionPacket", icon: Sparkles },
   { group: "ununu", kind: "storyboard", label: "故事板节点", meta: "镜头卡片与参考选择", icon: Blocks },
   { group: "ununu", kind: "shot", label: "镜头节点", meta: "CinematicShotSpec", icon: Crosshair },
   { group: "ununu", kind: "generationUnit", label: "生成单元节点", meta: "Prompt 编译与请求", icon: Clapperboard },
   { group: "ununu", kind: "qa", label: "专业审片节点", meta: "连续性与技术 QC", icon: ShieldCheck },
-  { group: "utility", kind: "compose", label: "视频合成", meta: "片段装配", icon: Clapperboard },
-  { group: "utility", kind: "material", label: "素材库", meta: "本地素材", icon: Library },
-  { group: "utility", kind: "upload", label: "上传", meta: "本地文件", icon: Upload },
-  { group: "utility", kind: "historyPick", label: "从生成历史选择", meta: "历史资产", icon: Redo2 }
 ];
 
 export const ADD_ITEMS = NODE_ITEM_DEFINITIONS.filter((item) => nodeKindCanBeAddedToCanvas(item.kind));
 
 const ADD_GROUPS = Object.freeze([
   ["base", "基础节点"],
-  ["ununu", "电影工业节点"],
-  ["utility", "媒体与工具"]
+  ["ununu", "电影工业节点"]
 ]);
 
 function menuPosition(menu, height = 650) {
@@ -75,7 +67,7 @@ export function AddMenu({ menu, onAdd, onClose }) {
       // 整组被创建策略过滤空了就不要留一个光秃秃的标题
       const items = ADD_ITEMS.filter((item) => item.group === group);
       if (!items.length) return null;
-      return <section className="node-type-group" key={group}><header>{label}</header>{items.map((item) => { const Icon = item.icon; return <button aria-label={`${item.label}：${item.meta}`} className="node-type-row" key={item.kind} onClick={() => onAdd(item.kind)} title={`${item.label}：${item.meta}`} type="button"><Icon size={15} /><span><strong>{item.label}</strong><small>{item.meta}</small></span></button>; })}</section>;
+      return <section className="node-type-group" key={group}><header>{label}</header>{items.map((item) => { const Icon = item.icon; return <button aria-label={`${item.label}：${item.meta}`} className="node-type-row" key={`${item.kind}:${item.textMode || "default"}`} onClick={() => onAdd(item)} title={`${item.label}：${item.meta}`} type="button"><Icon size={15} /><span><strong>{item.label}</strong><small>{item.meta}</small></span></button>; })}</section>;
     })}</div>
   </aside></>;
 }

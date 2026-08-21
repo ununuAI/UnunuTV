@@ -17,7 +17,7 @@ function command(type, expectedRevision, payload, suffix = type, actorType = "ag
   };
 }
 
-function stageObject() {
+function stageObject(assetBinding) {
   return {
     id: "object-detective",
     label: "侦探",
@@ -26,7 +26,8 @@ function stageObject() {
     rotation: { x: 0, y: 0, z: 0 },
     size: { x: 0.6, y: 1.8, z: 0.4 },
     color: "#8f3028",
-    visible: true
+    visible: true,
+    ...(assetBinding ? { assetBinding } : {})
   };
 }
 
@@ -131,4 +132,92 @@ test("Director Stage command receipts are atomic, restart-safe, and automation-g
   });
   assert.equal(automated.director.stage.revision, 4);
   assert.deepEqual(automated.director.stage.objects[0].position, { x: 2, y: 0, z: 1 });
+});
+
+test("3D asset workbench objects persist real project asset-version bindings", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-director-assets-"));
+  let runtime = createLocalRuntime({ dataRoot, recoverRenders: false });
+  context.after(() => runtime?.close());
+  const { project, canvas } = await runtime.app.createProject({ title: "3D资产绑定测试" });
+  const director = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "director",
+    title: "3D导演台（资产）"
+  });
+  const image = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "image",
+    title: "侦探身份资产"
+  });
+  const media = await runtime.app.importDataMedia({
+    projectId: project.id,
+    nodeId: image.id,
+    kind: "image",
+    title: "侦探身份资产",
+    dataUrl: "data:image/png;base64,iVBORw0KGgo="
+  });
+  const asset = await runtime.app.createAsset({
+    projectId: project.id,
+    role: "character",
+    title: "侦探"
+  });
+  const assetVersion = await runtime.app.addAssetVersion({
+    projectId: project.id,
+    assetId: asset.id,
+    mediaId: media.id,
+    payload: { purpose: "3d_asset_workbench" }
+  });
+  const assetBinding = {
+    assetId: asset.id,
+    assetVersionId: assetVersion.id,
+    mediaId: media.id
+  };
+
+  await runtime.app.applyDirectorStageCommand({
+    projectId: project.id,
+    nodeId: director.id,
+    command: command("initialize", 0, {}, "asset-initialize")
+  });
+  const bound = await runtime.app.applyDirectorStageCommand({
+    projectId: project.id,
+    nodeId: director.id,
+    command: command("upsert_object", 1, { object: stageObject(assetBinding) }, "bound-object")
+  });
+  assert.deepEqual(bound.director.stage.objects[0].assetBinding, assetBinding);
+
+  await assert.rejects(
+    runtime.app.applyDirectorStageCommand({
+      projectId: project.id,
+      nodeId: director.id,
+      command: command("upsert_object", 2, {
+        object: stageObject({ ...assetBinding, assetVersionId: "asset-version-missing" })
+      }, "missing-asset-version")
+    }),
+    (error) => error.code === "director_asset_version_not_found" && error.status === 409
+  );
+
+  const otherMedia = await runtime.app.importDataMedia({
+    projectId: project.id,
+    nodeId: image.id,
+    kind: "image",
+    title: "错误媒体",
+    dataUrl: "data:image/png;base64,iVBORw0KGgo="
+  });
+  await assert.rejects(
+    runtime.app.applyDirectorStageCommand({
+      projectId: project.id,
+      nodeId: director.id,
+      command: command("upsert_object", 2, {
+        object: stageObject({ ...assetBinding, mediaId: otherMedia.id })
+      }, "mismatched-asset-media")
+    }),
+    (error) => error.code === "director_asset_media_mismatch" && error.status === 409
+  );
+
+  runtime.close();
+  runtime = createLocalRuntime({ dataRoot, recoverRenders: false });
+  const persisted = await runtime.app.getDirectorStage({ projectId: project.id, nodeId: director.id });
+  assert.deepEqual(persisted.stage.objects[0].assetBinding, assetBinding);
 });

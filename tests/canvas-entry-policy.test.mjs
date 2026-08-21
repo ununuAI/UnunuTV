@@ -24,7 +24,7 @@ test("cinematic controller is project-level and no longer appears as an addable 
 // 无限画布是普通创作画布,和三个 skill 没关系。剧作生产链属于 skill,
 // 数据照常写进同一份库,但完全不在画布上呈现,也没有创建入口。
 test("skill-owned production kinds stay off the canvas entirely", () => {
-  for (const kind of ["script", "batch", "storyboard", "shot", "generationUnit", "qa"]) {
+  for (const kind of ["batch", "storyboard", "shot", "generationUnit", "qa"]) {
     assert.equal(
       nodeHasCanvasPresentation({ id: kind, kind }),
       false,
@@ -39,10 +39,20 @@ test("skill-owned production kinds stay off the canvas entirely", () => {
 });
 
 test("canvas keeps the ordinary creative node kinds", () => {
-  for (const kind of ["text", "image", "video", "audio", "grid", "asset", "imageEdit", "compare", "world", "director"]) {
+  for (const kind of ["text", "script", "image", "video", "audio", "imageEdit", "compare", "world", "director"]) {
     assert.equal(nodeHasCanvasPresentation({ id: kind, kind }), true, `${kind} 是普通画布节点`);
     assert.equal(nodeKindCanBeAddedToCanvas(kind), true, `${kind} 应当可以手工添加`);
   }
+});
+
+test("grid nodes are removed from the add menu while legacy cards remain deletable", () => {
+  assert.equal(nodeHasCanvasPresentation({ id: "legacy-grid", kind: "grid" }), true);
+  assert.equal(nodeKindCanBeAddedToCanvas("grid"), false);
+});
+
+test("asset identity lives in the library and has no canvas add entry", () => {
+  assert.equal(nodeHasCanvasPresentation({ id: "legacy-asset", kind: "asset" }), true);
+  assert.equal(nodeKindCanBeAddedToCanvas("asset"), false);
 });
 
 test("edges into skill-owned nodes are dropped so the canvas has no dangling wires", () => {
@@ -74,6 +84,13 @@ test("the whole 电影工业节点 group is filtered out of the add menu, leavin
       `${group} 组被清空了,菜单会渲染一个空标题`
     );
   }
+});
+
+test("the add menu offers two exclusive text node creation choices", () => {
+  const source = readFileSync(new URL("../apps/web/src/CanvasMenus.jsx", import.meta.url), "utf8");
+  assert.match(source, /kind:\s*"text",\s*textMode:\s*"plain",\s*label:\s*"纯文本"/);
+  assert.match(source, /kind:\s*"text",\s*textMode:\s*"prompt",\s*label:\s*"Prompt 文本"/);
+  assert.match(source, /onAdd\(item\)/);
 });
 
 test("canvas presentation drops edges whose endpoint is a hidden project controller", () => {

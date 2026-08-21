@@ -9,7 +9,7 @@ test("real-person provider rejection includes provider, model, action and reques
     provider: "ark",
     request: { model: "doubao-seedance-2-0-mini-260615" },
     result: {
-      message: "The request failed because the input image may contain real person. Request id: 021784440508203ffa368fe9ac51d90198cd5026e9cf3e3d8ceb5"
+      message: "The request failed because the input image 'content[1]' may contain real person. Request id: 021784440508203ffa368fe9ac51d90198cd5026e9cf3e3d8ceb5"
     }
   }, { title: "视频" });
 

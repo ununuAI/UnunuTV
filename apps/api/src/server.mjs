@@ -1,4 +1,5 @@
 import { createReadStream, existsSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
 } from "@ununu/unutv-contracts";
 import { createLocalRuntime } from "@ununu/unutv-local-runtime";
 import { handleBudgetRoutes } from "./budget-routes.mjs";
+import { handleAiFilmRoutes } from "./ai-film-routes.mjs";
 import { handleCinematicRoutes } from "./cinematic-routes.mjs";
 import { handleCinematicSequenceWorkspaceRoutes } from "./cinematic-sequence-workspace-routes.mjs";
 import { handleCinematicWorkflowRoutes } from "./cinematic-workflow-routes.mjs";
@@ -20,6 +22,16 @@ import { handleRenderRoutes } from "./render-routes.mjs";
 import { handleTimelineRoutes } from "./timeline-routes.mjs";
 
 const DEFAULT_WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
+
+function selectWorkspaceDirectory() {
+  if (process.platform !== "darwin") throw new UnuTvError("native_directory_picker_unavailable", "当前系统不支持原生目录选择器", 501);
+  const script = 'POSIX path of (choose folder with prompt "选择 UnunuTV 项目根目录")';
+  return new Promise((resolve, reject) => execFile("osascript", ["-e", script], { encoding: "utf8" }, (error, stdout, stderr) => {
+    if (!error) return resolve({ cancelled: false, rootPath: stdout.trim() });
+    if (String(stderr).includes("(-128)")) return resolve({ cancelled: true, rootPath: null });
+    reject(new UnuTvError("native_directory_picker_failed", "无法打开系统目录选择器", 500, { cause: error.message }));
+  }));
+}
 
 function json(response, status, value) {
   const payload = Buffer.from(JSON.stringify(value), "utf8");
@@ -104,9 +116,10 @@ function requestedByteRange(request, size) {
 async function serveOpenedMedia(request, response, media) {
   const info = await stat(media.filePath);
   const range = requestedByteRange(request, info.size);
+  const bypassCache = new URL(request.url, "http://127.0.0.1").searchParams.get("playback_blob") === "1";
   const sharedHeaders = {
     "content-type": media.mimeType,
-    "cache-control": "private, max-age=3600",
+    "cache-control": bypassCache ? "private, no-store" : "private, max-age=3600, immutable",
     "access-control-allow-origin": "*",
     "accept-ranges": "bytes"
   };
@@ -120,9 +133,11 @@ async function serveOpenedMedia(request, response, media) {
       "content-range": `bytes ${range.start}-${range.end}/${info.size}`,
       "content-length": range.end - range.start + 1
     });
+    if (request.method === "HEAD") return response.end();
     return createReadStream(media.filePath, range).pipe(response);
   }
   response.writeHead(200, { ...sharedHeaders, "content-length": info.size });
+  if (request.method === "HEAD") return response.end();
   return createReadStream(media.filePath).pipe(response);
 }
 
@@ -174,10 +189,22 @@ async function dispatch(request, response, runtime, webRoot) {
     });
     return serveOpenedMedia(request, response, media);
   }
+  if (method === "GET" && pathname === "/api/workspace") return json(response, 200, await runtime.app.getWorkspace());
+  if (method === "POST" && pathname === "/api/workspace/select-root") return json(response, 200, await selectWorkspaceDirectory());
+  if (method === "POST" && pathname === "/api/workspace/initialize") return json(response, 201, await runtime.app.initializeWorkspace(await body(request)));
+  if (method === "PUT" && pathname === "/api/workspace/root") return json(response, 200, await runtime.app.setWorkspaceRoot(await body(request)));
   if (method === "GET" && pathname === "/api/projects") return json(response, 200, await runtime.app.listProjects());
   if (method === "POST" && pathname === "/api/projects") return json(response, 201, await runtime.app.createProject(await body(request)));
   if (method === "GET" && pathname === "/api/model-capabilities") return json(response, 200, await runtime.app.getModelCapabilities({ capability: url.searchParams.get("capability") }));
   if (method === "GET" && pathname === "/api/settings/providers") return json(response, 200, await runtime.app.getProviderSettings());
+  if ((params = route(method, pathname, "GET", "/api/settings/providers/:providerId/health"))) return json(response, 200, await runtime.app.getProviderHealth(params));
+  if (method === "POST" && pathname === "/api/settings/providers/minimax/import") return json(response, 200, await runtime.app.importH3ProviderConfig(await body(request)));
+  if (method === "GET" && pathname === "/api/settings/providers/minimax/motion-context-capabilities") {
+    return json(response, 200, await runtime.app.getH3MotionContextCapabilities());
+  }
+  if (method === "POST" && pathname === "/api/settings/providers/minimax/motion-context/install") {
+    return json(response, 200, await runtime.app.installH3MotionContext(await body(request)));
+  }
   if (method === "GET" && pathname === "/api/settings/models") {
     return json(response, 200, await runtime.app.listProviderModels({ capability: url.searchParams.get("capability") }));
   }
@@ -195,6 +222,7 @@ async function dispatch(request, response, runtime, webRoot) {
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/automation-runs"))) {
     return json(response, 201, await runtime.app.startAutomation({ ...params, ...(await body(request)) }));
   }
+  if (await handleAiFilmRoutes({ body, json, method, pathname, request, response, route, runtime })) return;
   if (await handleCinematicWorkflowRoutes({ body, json, method, pathname, request, response, route, runtime })) return;
   if (await handlePlatformOsRoutes({ body, json, method, pathname, request, response, route, runtime })) return;
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/automation-runs/:automationRunId/checkpoints"))) {
@@ -264,6 +292,9 @@ async function dispatch(request, response, runtime, webRoot) {
   if ((params = route(method, pathname, "PUT", "/api/projects/:projectId/nodes/:nodeId/prompt"))) {
     return json(response, 200, await runtime.app.saveNodePrompt({ ...params, ...(await body(request)) }));
   }
+  if ((params = route(method, pathname, "POST", "/api/projects/:projectId/nodes/:nodeId/prompt/h3-compile"))) {
+    return json(response, 200, await runtime.app.compileH3Prompt({ ...params, ...(await body(request)) }));
+  }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/scripts/:nodeId"))) {
     return json(response, 200, { script: await runtime.app.getScriptDocument(params) });
   }
@@ -280,6 +311,9 @@ async function dispatch(request, response, runtime, webRoot) {
   if (await handleCinematicRoutes({ body, json, method, pathname, request, response, route, runtime, url })) return;
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/nodes/:nodeId/run"))) {
     return json(response, 200, await runtime.app.runNode({ ...params, ...(await body(request)) }));
+  }
+  if ((params = route(method, pathname, "POST", "/api/projects/:projectId/h3-motion-context/export"))) {
+    return json(response, 200, await runtime.app.exportH3MotionContextWorkflows({ ...params, ...(await body(request, 2_000_000)) }));
   }
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/runs/:runId/poll"))) {
     return json(response, 200, await runtime.app.pollRun(params));
@@ -339,7 +373,8 @@ async function dispatch(request, response, runtime, webRoot) {
     if (!prepared) throw new UnuTvError("media_thumbnail_not_found", "Prepared thumbnail not found", 404);
     return serveOpenedMedia(request, response, prepared);
   }
-  if ((params = route(method, pathname, "GET", "/api/projects/:projectId/media/:mediaId"))) {
+  if ((params = route(method, pathname, "GET", "/api/projects/:projectId/media/:mediaId"))
+    || (params = route(method, pathname, "HEAD", "/api/projects/:projectId/media/:mediaId"))) {
     return serveMedia(request, response, runtime, params);
   }
   if ((params = route(method, pathname, "GET", "/api/projects/:projectId/assets"))) {
@@ -400,6 +435,9 @@ async function dispatch(request, response, runtime, webRoot) {
 }
 
 const SSE_ROUTE = /^\/api\/projects\/([^/]+)\/events\/?$/;
+const EVENT_SNAPSHOT_ROUTE = /^\/api\/projects\/([^/]+)\/events\/snapshot\/?$/;
+const activeRequests = new Map();
+let activeRequestSequence = 0;
 
 /** 事件推送中枢按 runtime 复用,取代浏览器轮询。 */
 function eventHub(runtime) {
@@ -409,9 +447,40 @@ function eventHub(runtime) {
 
 export async function handleUnuTvRequest(request, response, runtime, webRoot = "/__ununu_no_static_web__") {
   const requestUrl = new URL(request.url, "http://127.0.0.1");
+  if (request.method === "GET" && requestUrl.pathname === "/api/debug/active-requests") {
+    return json(response, 200, {
+      requests: [...activeRequests.values()].map((entry) => ({
+        ...entry,
+        elapsedMs: Date.now() - entry.startedAtMs
+      }))
+    });
+  }
+  const requestId = ++activeRequestSequence;
+  const requestEntry = {
+    id: requestId,
+    method: request.method,
+    url: request.url,
+    remotePort: request.socket?.remotePort || null,
+    startedAtMs: Date.now()
+  };
+  activeRequests.set(requestId, requestEntry);
+  const clearRequest = () => activeRequests.delete(requestId);
+  response.once("finish", clearRequest);
+  response.once("close", clearRequest);
+  const snapshotMatch = request.method === "GET" && EVENT_SNAPSHOT_ROUTE.exec(requestUrl.pathname);
+  if (snapshotMatch) {
+    return json(response, 200, eventHub(runtime).snapshot(
+      decodeURIComponent(snapshotMatch[1]),
+      requestUrl.searchParams.get("since")
+    ));
+  }
   const sseMatch = request.method === "GET" && SSE_ROUTE.exec(requestUrl.pathname);
   if (sseMatch) {
-    return eventHub(runtime).handle(request, response, decodeURIComponent(sseMatch[1]), requestUrl.searchParams.get("since"));
+    response.writeHead(204, {
+      "cache-control": "no-store",
+      connection: "close"
+    });
+    return response.end();
   }
 
   try {

@@ -29,8 +29,8 @@ test("media preparation creates persistent thumbnail, proxy, probe and normalize
   assert.equal(prepared.waveform.length, 96);
   assert.ok(prepared.waveform.every((peak) => peak >= 0 && peak <= 1));
   assert.ok(prepared.probe.streams.some((stream) => stream.codec_type === "video"));
-  assert.ok((await stat(path.join(dataRoot, "projects", project.id, prepared.thumbnailRelativePath))).size > 0);
-  assert.ok((await stat(path.join(dataRoot, "projects", project.id, prepared.proxyRelativePath))).size > 0);
+  assert.ok((await stat(path.join(project.mediaRoot, prepared.thumbnailRelativePath))).size > 0);
+  assert.ok((await stat(path.join(project.mediaRoot, prepared.proxyRelativePath))).size > 0);
   const reused = await runtime.app.prepareMedia({ projectId: project.id, mediaId: media.id });
   assert.equal(reused.id, prepared.id);
 
@@ -56,6 +56,10 @@ test("accepted video can yield a persistent exact-time handoff frame through Cor
   assert.equal(frame.mimeType, "image/png");
   assert.equal(frame.title, "上一镜权威尾帧");
   assert.ok(frame.sizeBytes > 0);
+
+  const endFrame = await runtime.app.extractMediaFrame({ projectId: project.id, mediaId: video.id, seconds: 1, title: "片尾可见帧" });
+  assert.equal(endFrame.kind, "image");
+  assert.ok(endFrame.sizeBytes > 0, "exact-duration capture must retry just before EOF instead of returning an empty frame");
 });
 
 test("full-auto read-only blocks owner media preparation", async (context) => {

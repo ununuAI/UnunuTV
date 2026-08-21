@@ -135,7 +135,18 @@ export function createCanvasEventHub(runtime) {
     rooms.clear();
   }
 
-  return { handle, notify, close };
+  function snapshot(projectId, since) {
+    const start = since != null && since !== "" && Number.isFinite(Number(since))
+      ? Number(since)
+      : maxSequence(projectId);
+    const events = eventsSince(projectId, start);
+    return {
+      events,
+      latestSequence: events.at(-1)?.sequence ?? start
+    };
+  }
+
+  return { handle, notify, close, snapshot };
 }
 
 function write(response, payload) {

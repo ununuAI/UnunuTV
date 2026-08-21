@@ -55,7 +55,14 @@ export function createMediaUseCases(ports, actions = {}) {
   async function separateMediaAudio(input = {}) {
     const projectId = requireText(input.projectId, "projectId");
     const mediaId = requireText(input.mediaId, "mediaId");
-    const sourceNodeId = requireText(input.sourceNodeId, "sourceNodeId");
+    const sourceNodeId = requireText(input.sourceNodeId || input.nodeId, "sourceNodeId");
+    const projection = optionalText(input.projection, "all_stems");
+    if (!["all_stems", "dialogue_only"].includes(projection)) {
+      throw new UnuTvError("audio_separation_projection_invalid", `Unknown audio separation projection: ${projection}`, 400);
+    }
+    const requestedRoles = projection === "dialogue_only"
+      ? ["dialogue_candidate"]
+      : ["original_mix", "dialogue_candidate", "background_candidate"];
     if (typeof ports.media?.separateAudioStems !== "function") {
       throw new UnuTvError("audio_separator_unavailable", "当前媒体端口未提供真正的音源分离能力。", 500);
     }
@@ -74,24 +81,28 @@ export function createMediaUseCases(ports, actions = {}) {
       && node.payload?.sourceMediaId === mediaId
       && node.payload?.sourceChecksum === sourceMedia.sha256
     ));
-    if (existingNodes.length >= 3) {
-      return { reused: true, nodes: existingNodes, sourceMediaId: mediaId };
+    const existingByRole = new Map(existingNodes.map((node) => [node.payload?.stemRole, node]));
+    const missingRoles = requestedRoles.filter((role) => !existingByRole.has(role));
+    if (!missingRoles.length) {
+      return { projection, reused: true, nodes: requestedRoles.map((role) => existingByRole.get(role)), sourceMediaId: mediaId };
     }
     const separation = await ports.media.separateAudioStems({
       projectId,
       mediaId,
+      roles: missingRoles,
       title: optionalText(input.title, sourceNode.title || sourceMedia.title)
     });
     const nodes = [];
     const edges = [];
-    for (const [index, stem] of separation.stems.entries()) {
+    for (const stem of separation.stems) {
+      const index = requestedRoles.indexOf(stem.role);
       const node = await actions.createNode({
         projectId,
         canvasId: sourceNode.canvasId,
         kind: "audio",
         title: stem.media.title,
-        x: 80 + index * 520,
-        y: 0,
+        x: (Number.isFinite(sourceNode.x) ? sourceNode.x : 0) + (Number.isFinite(sourceNode.width) ? sourceNode.width : 444) + 80,
+        y: (Number.isFinite(sourceNode.y) ? sourceNode.y : 0) + Math.max(0, index) * 290,
         size: { width: 444, height: 250 },
         payload: {
           productionId: sourceNode.payload?.productionId ?? null,
@@ -123,7 +134,8 @@ export function createMediaUseCases(ports, actions = {}) {
       nodes.push(node);
       edges.push(edge);
     }
-    return { ...separation, edges, nodes, reused: false, stems: undefined };
+    const projectedNodes = requestedRoles.flatMap((role) => existingByRole.get(role) || nodes.find((node) => node.payload?.stemRole === role) || []);
+    return { ...separation, edges, nodes: projectedNodes, projection, reused: false, stems: undefined };
   }
 
   async function createVideoQaContactSheet(input = {}) {

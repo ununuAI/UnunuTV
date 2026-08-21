@@ -10,9 +10,9 @@ const DEFINITIONS = Object.freeze({
   imageEdit: ["图片编辑节点", "局部修改与可追溯派生", "源图片与编辑指令", "派生图片"],
   compare: ["对比节点", "版本并排审看与选择", "两个或多个版本", "审看结论"],
   world: ["3D 世界节点", "空间、布景、机位与环境参考", "场景资产", "空间与机位"],
-  director: ["导演台节点", "人物调度、机位、灯光和空间设计", "剧本与资产", "导演设计"],
+  director: ["3D导演台（资产）", "人物、场景、道具、材质和空间资产工作台", "剧本与资产", "资产状态与捕获"],
   cinematic: ["影视总控节点", "项目级电影工业合同与资源总览", "剧本与项目资源", "生产任务图"],
-  script: ["剧本节点", "剧本分析、场景、节拍与连续性", "创意与原始剧本", "StoryProductionPacket"],
+  script: ["分镜脚本", "从剧本拆出可拍镜头表", "剧本文本与拆镜要求", "镜头表"],
   storyboard: ["故事板节点", "正式镜头驱动的故事板与视频参考选择", "CinematicShotSpec", "故事板版本"],
   shot: ["镜头节点", "景别、表演、摄影与声音微节拍", "场景与资产权威", "CinematicShotSpec"],
   generationUnit: ["生成单元节点", "确定性 Prompt 编译与模型请求", "镜头与引用绑定", "GenerationUnit"],
@@ -50,7 +50,8 @@ export function nodeVisibleText(node) {
     payload.plainText,
     payload.text,
     payload.content,
-    payload.prompt
+    // Prompt 文本节点的 prompt 是生成指令，不是待展示的正文。
+    node?.kind === "text" ? "" : payload.prompt
   ]);
   if (direct) return direct;
   const story = payload.storyPacket;
