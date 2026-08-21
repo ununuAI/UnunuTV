@@ -25,15 +25,20 @@ function durationOf(value) {
   return duration;
 }
 
-function resolutionOf(request, mode) {
+function resolutionOf(request, { audioCount, duration, mode }) {
   const resolution = text(request.resolution).toLowerCase() || "480p";
-  if (!new Set(["480p", "768p"]).has(resolution)) {
-    throw new UnuTvError("autodl_h3_resolution_invalid", "AutoDL H3 supports 480p or 768p", 400);
+  const supports1080 = mode === "image_reference" && duration <= 10;
+  if (!new Set(["480p", "768p", ...(supports1080 ? ["1080p"] : [])]).has(resolution)) {
+    throw new UnuTvError(
+      "autodl_h3_resolution_invalid",
+      supports1080 ? "AutoDL H3 supports 480p, 768p, or 1080p for image-reference clips up to 10 seconds" : "This AutoDL H3 workflow supports 480p or 768p",
+      400
+    );
   }
   const ratio = text(request.aspectRatio) || "16:9";
   if (ratio === "1:1") {
-    if (mode !== "image_reference") {
-      throw new UnuTvError("autodl_h3_ratio_unsupported", "AutoDL H3 exposes 1:1 only for image-reference workflows", 400);
+    if (mode !== "image_reference" || audioCount > 0) {
+      throw new UnuTvError("autodl_h3_ratio_unsupported", "AutoDL H3 exposes 1:1 only for image-reference workflows without reference audio", 400);
     }
     return `${resolution}(1:1)`;
   }
@@ -131,10 +136,13 @@ export async function submitAutoDlH3(input, config, fetchImpl = fetch) {
     throw new UnuTvError("provider_mode_reference_conflict", "AutoDL H3 frame input cannot be mixed with ordinary reference images", 409);
   }
   const workflowId = selectWorkflow({ audioCount: audios.length, duration, mode });
+  if (audios.length && prompt.length > 10_000) {
+    throw new UnuTvError("autodl_h3_prompt_too_long", "AutoDL H3 image/audio workflows accept at most 10000 prompt characters", 400);
+  }
   const body = {
     prompt,
     duration,
-    resolution: resolutionOf(input.request, mode)
+    resolution: resolutionOf(input.request, { audioCount: audios.length, duration, mode })
   };
   if (Number.isSafeInteger(input.request?.seed) && mode === "image_reference") body.seed = input.request.seed;
   if (mode === "image_reference") {

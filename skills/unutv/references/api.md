@@ -78,16 +78,20 @@ Content-Type: application/json
 
 AutoDL H3 已核验工作流（2026-08-21）：
 
-| UnuTV 模式 | 条件 | AutoDL workflow_id |
-|---|---|---|
-| `text_to_video` | 1—15 秒 | `minimax_h3_lightx2v_no_pic` |
-| `image_reference` | 1—10 秒，无音频 | `minimax_h3_lightx2v_v5` |
-| `image_reference` | 11—15 秒，无音频 | `minimax_h3_lightx2v_v5_15s` |
-| `image_reference` | 1—10 秒，带 1—3 条音频 | `minimax_h3_image_audio_to_video_v2` |
-| `image_reference` | 11—15 秒，带 1—3 条音频 | `minimax_h3_image_audio_to_video_v2_15s` |
-| `first_last_frame` | 1—15 秒 | `minimax_h3_lightx2v` |
+用户侧只暴露生产意图，不要求选择 workflow：0 个参考是“文生视频”；1 张图是“图生视频”；多图或图片＋音频是“多参生视频”。`first_last_frame` 作为图生视频的高级控制。下面的多条 workflow 只由 UnunuTV 根据时长、参考音频和清晰度自动路由，不能原样堆给用户。
 
-AutoDL 当前没有可忠实对应的纯 `first_frame` 工作流；请求会以 `autodl_h3_mode_unsupported` 阻塞，禁止暗中改成多图参考。Motion Context 只走本地 `minimax`，AutoDL 不支持。AutoDL 支持 `480p` / `768p`；画幅为 `16:9` / `9:16`，`1:1` 只用于 `image_reference`。图片最多 9 张，独立音频最多 3 条。
+| UnuTV 模式 | 条件 | 官方清晰度 | AutoDL workflow_id |
+|---|---|---|---|
+| `text_to_video` | 1—15 秒 | 480p / 768p | `minimax_h3_lightx2v_no_pic` |
+| `image_reference` | 1—10 秒，无音频 | 480p / 768p / 1080p | `minimax_h3_lightx2v_v5` |
+| `image_reference` | 11—15 秒，无音频 | 480p / 768p | `minimax_h3_lightx2v_v5_15s` |
+| `image_reference` | 1—10 秒，带 1—3 条音频 | 480p / 768p / 1080p | `minimax_h3_image_audio_to_video_v2` |
+| `image_reference` | 11—15 秒，带 1—3 条音频 | 480p / 768p | `minimax_h3_image_audio_to_video_v2_15s` |
+| `first_last_frame` | 1—15 秒 | 480p / 768p | `minimax_h3_lightx2v` |
+
+提交字段严格按官方：`prompt`、整数 `duration`、官方中文枚举 `resolution`（如 `1080p横`）、可选整数 `seed`，以及顺序连续的 `ref_image_0..8` / `ref_audio_0..2`；首尾帧只使用 `first_frame` / `last_frame`。查询只读取官方 `data.task_id`、`data.status` 与 `data.results[].url`。
+
+AutoDL 当前没有可忠实对应的纯 `first_frame` 工作流；请求会以 `autodl_h3_mode_unsupported` 阻塞，禁止暗中改成多图参考。Motion Context 只走本地 `minimax`，AutoDL 不支持。所有工作流支持 `480p` / `768p`；`1080p` 只用于 1—10 秒 `image_reference`。画幅为 `16:9` / `9:16`；`1:1` 只用于不带参考音频的 `image_reference`。图片最多 9 张，独立音频最多 3 条；带参考音频的 Prompt 最多 10000 字符。
 
 Agent 仍只调用 UnuTV 的 Run/Poll API，不直接调用 AutoDL：
 

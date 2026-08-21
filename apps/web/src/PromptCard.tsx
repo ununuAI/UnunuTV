@@ -507,10 +507,16 @@ export function PromptCard({
   const chooseVideoMode = (mode: VideoReferenceMode) => {
     if (readOnly) return;
     if ((videoModelId === GROK_VIDEO_MODEL_ID && mode === "first_last_frame") || (videoModelId === H3_VIDEO_MODEL_ID && videoProvider === "autodl" && mode === "first_frame")) return;
+    const autoDlChannel = videoModelId === H3_VIDEO_MODEL_ID && videoProvider === "autodl";
+    const nextRatio = autoDlChannel && mode !== "image_reference" && videoRatio === "1:1" ? "16:9" : videoRatio;
+    const nextResolution = autoDlChannel && mode !== "image_reference" && videoResolution === "1080p" ? "768p" : videoResolution;
     setVideoMode(mode);
+    setVideoRatio(nextRatio);
+    setVideoResolution(nextResolution);
     const duration = clampVideoDuration(videoDuration, videoDurationRange({ modelId: videoModelId, mode, generateAudio: videoGenerateAudio, providerId: videoProvider }));
     setVideoDuration(duration);
     const selection = videoSelection(mode, { duration });
+    selection.parameters = { ...selection.parameters, ratio: nextRatio, resolution: nextResolution };
     latestSelectionRef.current = selection;
     void actions.savePromptDraft(node.id, value, selection);
   };
@@ -520,10 +526,14 @@ export function PromptCard({
       || (modelId === H3_VIDEO_MODEL_ID && providerId === "autodl" && videoMode === "first_frame")
       ? "image_reference"
       : videoMode;
-    const nextRatio = providerId === "autodl" && !["16:9", "9:16", ...(nextMode === "image_reference" ? ["1:1"] : [])].includes(videoRatio)
+    const nextRatio = providerId === "autodl" && (!["16:9", "9:16", ...(nextMode === "image_reference" ? ["1:1"] : [])].includes(videoRatio)
+      || (videoRatio === "1:1" && connectedSourceNodes.some((source) => source.kind === "audio")))
       ? "16:9"
       : videoRatio;
     const duration = clampVideoDuration(videoDuration, videoDurationRange({ modelId, mode: nextMode, generateAudio: videoGenerateAudio, providerId }));
+    const nextResolution = providerId === "autodl" && resolution === "1080p" && (nextMode !== "image_reference" || duration > 10)
+      ? "768p"
+      : resolution;
     const current = videoSelection(nextMode, { duration });
     const { h3Profile: _h3Profile, ...baseParameters } = current.parameters ?? {};
     const selection: ModelExecutionSelection = {
@@ -533,16 +543,16 @@ export function PromptCard({
         ...baseParameters,
         mode: nextMode,
         ratio: nextRatio,
-        resolution: modelId === H3_VIDEO_MODEL_ID && providerId === "minimax" ? h3ProfileResolution(resolution) : resolution,
+        resolution: modelId === H3_VIDEO_MODEL_ID && providerId === "minimax" ? h3ProfileResolution(nextResolution) : nextResolution,
         duration,
-        ...(modelId === H3_VIDEO_MODEL_ID ? { ...(providerId === "minimax" ? { h3Profile: resolution } : {}), generateAudio: true } : {})
+        ...(modelId === H3_VIDEO_MODEL_ID ? { ...(providerId === "minimax" ? { h3Profile: nextResolution } : {}), generateAudio: true } : {})
       }
     };
     setVideoModelId(modelId);
     setVideoProvider(providerId);
     setVideoMode(nextMode);
     setVideoRatio(nextRatio);
-    setVideoResolution(resolution);
+    setVideoResolution(nextResolution);
     setVideoDuration(duration);
     setVideoCount(1);
     latestSelectionRef.current = selection;
@@ -574,6 +584,18 @@ export function PromptCard({
   const isArkSeedanceMini = videoModelId === SEEDANCE_VIDEO_MODEL_ID;
   const isMiniMaxH3 = videoModelId === H3_VIDEO_MODEL_ID;
   const isAutoDlH3 = isMiniMaxH3 && videoProvider === "autodl";
+  const autoDlHasAudioReference = isAutoDlH3 && connectedSourceNodes.some((source) => source.kind === "audio");
+  const autoDlResolutionOptions = isAutoDlH3 && videoMode === "image_reference" && displayedVideoDuration <= 10
+    ? ["480p", "768p", "1080p"]
+    : ["480p", "768p"];
+  const autoDlRatioOptions = autoDlHasAudioReference ? ["16:9", "9:16"] : ["16:9", "9:16", "1:1"];
+  const videoModeDisplayLabel = isAutoDlH3
+    ? videoMode === "text_to_video"
+      ? "文生视频"
+      : videoMode === "first_last_frame"
+        ? "首尾帧控制"
+        : videoReferenceCount <= 1 && !autoDlHasAudioReference ? "图生视频" : "多参生视频"
+    : videoReferenceModeLabel(videoMode);
   const isOpenRouterGrok = videoModelId === GROK_VIDEO_MODEL_ID;
   const videoPromptBytes = utf8ByteLength(value.trim() || node.prompt);
   const videoPromptTooLong = isOpenRouterGrok && videoPromptBytes > GROK_PROMPT_MAX_BYTES;
@@ -644,23 +666,23 @@ export function PromptCard({
           <button className={isOpenRouterGrok ? "active" : ""} onClick={(event) => { chooseVideoModel(GROK_VIDEO_MODEL_ID, "openrouter", videoResolution === "480p" ? "480p" : "720p"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Grok Imagine Video · OpenRouter</button>
           <button className={isArkSeedanceMini ? "active" : ""} onClick={(event) => { chooseVideoModel(SEEDANCE_VIDEO_MODEL_ID, "ark", "480p"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Seedance 2.0 Mini · Ark</button>
           <button className={isMiniMaxH3 && !isAutoDlH3 ? "active" : ""} onClick={(event) => { chooseVideoModel(H3_VIDEO_MODEL_ID, "minimax", isH3Profile(videoResolution) ? videoResolution : "480p_accelerated"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">MiniMax H3 · 本地算力</button>
-          <button className={isAutoDlH3 ? "active" : ""} onClick={(event) => { chooseVideoModel(H3_VIDEO_MODEL_ID, "autodl", ["480p", "768p"].includes(videoResolution) ? videoResolution : "480p"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">MiniMax H3 · AutoDL</button>
+          <button className={isAutoDlH3 ? "active" : ""} onClick={(event) => { chooseVideoModel(H3_VIDEO_MODEL_ID, "autodl", ["480p", "768p", "1080p"].includes(videoResolution) ? videoResolution : "480p"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">MiniMax H3 · AutoDL</button>
         </div>
       </details>
       <details className="video-mode-select">
         <summary className="generator-spec-pill">
           <ImageIcon size={13} />
-          <span>{videoReferenceModeLabel(videoMode)}</span>
+          <span>{videoModeDisplayLabel}</span>
           <ChevronDown size={12} />
         </summary>
         <div className="video-mode-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}>
           <small>视频生成模式</small>
           {[
             { icon: <FileText size={14} />, label: "文生视频", mode: "text_to_video" as VideoReferenceMode, note: "不使用图片" },
-            { icon: <ImageIcon size={14} />, label: "全能参考", mode: "image_reference" as VideoReferenceMode, note: "可使用多张图片" },
+            { icon: <ImageIcon size={14} />, label: isAutoDlH3 ? "图生 / 多参生视频" : "全能参考", mode: "image_reference" as VideoReferenceMode, note: isAutoDlH3 ? "1张图为图生；多图或图片＋音频为多参" : "可使用多张图片" },
             { icon: <Video size={14} />, label: "首帧", mode: "first_frame" as VideoReferenceMode, note: "只使用 1 张图片" },
-            { icon: <Video size={14} />, label: "首尾帧", mode: "first_last_frame" as VideoReferenceMode, note: "首帧＋尾帧，共 2 张" }
-          ].map(({ icon, label, mode, note }) => {
+            { icon: <Video size={14} />, label: isAutoDlH3 ? "首尾帧控制" : "首尾帧", mode: "first_last_frame" as VideoReferenceMode, note: isAutoDlH3 ? "图生视频的高级约束：首帧＋尾帧" : "首帧＋尾帧，共 2 张" }
+          ].filter(({ mode }) => !(isAutoDlH3 && mode === "first_frame")).map(({ icon, label, mode, note }) => {
             const unsupported = (isOpenRouterGrok && mode === "first_last_frame") || (isAutoDlH3 && mode === "first_frame");
             return (
             <button
@@ -687,9 +709,9 @@ export function PromptCard({
           <ChevronDown size={12} />
         </summary>
         <div className="video-parameter-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}>
-          <section><span>比例</span><div>{(isAutoDlH3 ? ["16:9", "9:16", "1:1"] : isMiniMaxH3 ? ["21:9", "16:9", "9:16", "1:1", "4:3", "3:4"] : ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"]).map((ratio) => <button className={videoRatio === ratio ? "active" : ""} key={ratio} onClick={() => setVideoRatio(ratio)} type="button">{ratio}</button>)}</div></section>
-          <section><span>{isMiniMaxH3 && !isAutoDlH3 ? "生成档位" : "清晰度"}</span><div>{isAutoDlH3 ? ["480p", "768p"].map((resolution) => <button className={videoResolution === resolution ? "active" : ""} key={resolution} onClick={() => setVideoResolution(resolution)} type="button">{resolution.toUpperCase()}</button>) : isMiniMaxH3 ? H3_PROFILE_OPTIONS.map((profile) => <button className={videoResolution === profile.id ? "active" : ""} key={profile.id} onClick={() => setVideoResolution(profile.id)} type="button">{profile.label}</button>) : (isArkSeedanceMini ? ["480p"] : ["480p", "720p"]).map((resolution) => <button className={videoResolution === resolution ? "active" : ""} key={resolution} onClick={() => setVideoResolution(resolution)} type="button">{resolution.toUpperCase()}</button>)}</div></section>
-          <section><span>生成时长</span><label><input max={videoDurationCapability.max} min={videoDurationCapability.min} onChange={(event) => setVideoDuration(Number(event.target.value))} type="range" value={displayedVideoDuration} /><strong>{displayedVideoDuration}s</strong></label></section>
+          <section><span>比例</span><div>{(isAutoDlH3 ? autoDlRatioOptions : isMiniMaxH3 ? ["21:9", "16:9", "9:16", "1:1", "4:3", "3:4"] : ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"]).map((ratio) => <button className={videoRatio === ratio ? "active" : ""} key={ratio} onClick={() => setVideoRatio(ratio)} type="button">{ratio}</button>)}</div></section>
+          <section><span>{isMiniMaxH3 && !isAutoDlH3 ? "生成档位" : "清晰度"}</span><div>{isAutoDlH3 ? autoDlResolutionOptions.map((resolution) => <button className={videoResolution === resolution ? "active" : ""} key={resolution} onClick={() => setVideoResolution(resolution)} type="button">{resolution.toUpperCase()}</button>) : isMiniMaxH3 ? H3_PROFILE_OPTIONS.map((profile) => <button className={videoResolution === profile.id ? "active" : ""} key={profile.id} onClick={() => setVideoResolution(profile.id)} type="button">{profile.label}</button>) : (isArkSeedanceMini ? ["480p"] : ["480p", "720p"]).map((resolution) => <button className={videoResolution === resolution ? "active" : ""} key={resolution} onClick={() => setVideoResolution(resolution)} type="button">{resolution.toUpperCase()}</button>)}</div></section>
+          <section><span>生成时长</span><label><input max={videoDurationCapability.max} min={videoDurationCapability.min} onChange={(event) => { const next = Number(event.target.value); setVideoDuration(next); if (isAutoDlH3 && videoResolution === "1080p" && (videoMode !== "image_reference" || next > 10)) setVideoResolution("768p"); }} type="range" value={displayedVideoDuration} /><strong>{displayedVideoDuration}s</strong></label></section>
           <section><span>生成数量</span><div>{[1].map((count) => <button className={videoCount === count ? "active" : ""} key={count} onClick={() => setVideoCount(count)} type="button">{count}个</button>)}</div></section>
           <section className={`video-audio-setting${isMiniMaxH3 ? " is-fixed" : ""}`}><span>原声音频</span>{isMiniMaxH3 ? <strong className="video-audio-fixed">固定开启</strong> : <label><input checked={videoGenerateAudio} onChange={(event) => { const next = event.target.checked; setVideoGenerateAudio(next); setVideoDuration((current) => clampVideoDuration(current, videoDurationRange({ modelId: videoModelId, mode: videoMode, generateAudio: next }))); }} type="checkbox" /><strong>{videoGenerateAudio ? "生成" : "关闭"}</strong></label>}</section>
         </div>

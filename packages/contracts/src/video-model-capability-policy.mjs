@@ -80,7 +80,14 @@ const PROFILES = [
       image_reference: ["16:9", "9:16", "1:1"],
       first_last_frame: ["16:9", "9:16"]
     },
-    supportedResolutions: ["480p", "768p"],
+    supportedResolutions: ["480p", "768p", "1080p"],
+    supportedResolutionsByMode: {
+      text_to_video: ["480p", "768p"],
+      image_reference: ["480p", "768p", "1080p"],
+      first_last_frame: ["480p", "768p"]
+    },
+    resolutionDurationLimits: { "1080p": { max: 10, modes: ["image_reference"] } },
+    forbidsSquareWithAudioReferences: true,
     evidence: "autodl-comfyui-api-and-h3-workflow-contract-2026-08-21",
     evidenceUrls: [
       "https://autodl.art/docs/comfyui_api/",
@@ -194,6 +201,16 @@ export function preflightVideoModelCapability({ generationParameters, generation
     || profile.supportedResolutions;
   if (supportedResolutions.length && !supportedResolutions.includes(generationParameters.resolution)) {
     errors.push({ code: "unsupported_resolution", message: `${profile.displayName} does not support resolution ${generationParameters.resolution}.` });
+  }
+  const resolutionDurationLimit = profile.resolutionDurationLimits?.[generationParameters.resolution];
+  if (resolutionDurationLimit
+    && (!resolutionDurationLimit.modes.includes(generationParameters.mode) || generationParameters.duration > resolutionDurationLimit.max)) {
+    errors.push({ code: "unsupported_resolution_duration", message: `${profile.displayName} supports ${generationParameters.resolution} only for ${resolutionDurationLimit.modes.join(", ")} up to ${resolutionDurationLimit.max} seconds.` });
+  }
+  if (profile.forbidsSquareWithAudioReferences
+    && generationParameters.aspectRatio === "1:1"
+    && (generationParameters.audioReferenceMediaIds?.length ?? 0) > 0) {
+    errors.push({ code: "unsupported_audio_reference_aspect_ratio", message: `${profile.displayName} reference-audio workflows do not expose 1:1 output.` });
   }
   const requiredFrameMode = {
     FIRST_FRAME: "first_frame",

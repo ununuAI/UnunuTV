@@ -555,14 +555,14 @@ test("AutoDL H3 selects the 15-second multi-image/audio workflow and publishes s
       mode: "image_reference",
       duration: 15,
       resolution: "768p",
-      aspectRatio: "1:1",
+      aspectRatio: "16:9",
       referenceMediaIds: [image.id],
       audioReferenceMediaIds: [audio.id]
     }
   });
   assert.equal(started.status, "running");
   assert.equal(submission.duration, 15);
-  assert.equal(submission.resolution, "768p(1:1)");
+  assert.equal(submission.resolution, "768p横");
   assert.equal(Number.isSafeInteger(submission.seed), true);
   for (const field of ["ref_image_0", "ref_audio_0"]) {
     const url = new URL(submission[field]);
@@ -570,6 +570,72 @@ test("AutoDL H3 selects the 15-second multi-image/audio workflow and publishes s
     assert.ok(url.searchParams.get("expires"));
     assert.ok(url.searchParams.get("signature"));
   }
+});
+
+test("AutoDL H3 exposes official 1080p only on image-reference workflows up to 10 seconds", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-h3-1080-"));
+  let submission;
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "https://autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_lightx2v_v5") {
+      submission = JSON.parse(options.body);
+      return Response.json({ code: "Success", data: { task_id: "autodl-1080-task", status: "QUEUED" } });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const runtime = createLocalRuntime({
+    dataRoot,
+    env: { AUTODL_API_TOKEN: "autodl-test-token" },
+    fetchImpl,
+    connectH3Remote: false,
+    publisher: { publicBaseUrl: "https://media.unutv.test", signingSecret: "autodl-signing-secret" }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const imagePath = path.join(dataRoot, "autodl-1080-reference.png");
+  await writeFile(imagePath, Buffer.from("image"));
+  const image = await runtime.app.importMedia({ projectId: project.id, filePath: imagePath });
+  const video = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "video", payload: { provider: "autodl", modelId: "MiniMax-H3" } });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "autodl",
+    request: { prompt: "1080p reference test", model: "MiniMax-H3", mode: "image_reference", duration: 10, resolution: "1080p", aspectRatio: "9:16", referenceMediaIds: [image.id] }
+  });
+  assert.equal(started.status, "running");
+  assert.equal(submission.duration, 10);
+  assert.equal(submission.resolution, "1080p竖");
+  assert.match(submission.ref_image_0, /^https:\/\/media\.unutv\.test\//);
+});
+
+test("AutoDL H3 blocks unofficial 1080p and square-audio parameter combinations before submission", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-h3-official-limits-"));
+  let providerCalls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    env: { AUTODL_API_TOKEN: "autodl-test-token" },
+    fetchImpl: async () => { providerCalls += 1; throw new Error("must not submit"); },
+    connectH3Remote: false
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "video", payload: { provider: "autodl", modelId: "MiniMax-H3" } });
+  const tooLong = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "autodl",
+    request: { prompt: "too long for 1080p", model: "MiniMax-H3", mode: "image_reference", duration: 15, resolution: "1080p", aspectRatio: "16:9", referenceMediaIds: ["unused-image"] }
+  });
+  assert.equal(tooLong.status, "blocked");
+  assert.equal(tooLong.result.code, "autodl_h3_resolution_invalid");
+  const squareAudio = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "autodl",
+    request: { prompt: "square audio is not official", model: "MiniMax-H3", mode: "image_reference", duration: 10, resolution: "768p", aspectRatio: "1:1", referenceMediaIds: ["unused-image"], audioReferenceMediaIds: ["unused-audio"] }
+  });
+  assert.equal(squareAudio.status, "blocked");
+  assert.equal(squareAudio.result.code, "autodl_h3_ratio_unsupported");
+  assert.equal(providerCalls, 0);
 });
 
 test("AutoDL H3 blocks pure first-frame mode because the catalog exposes no faithful workflow", async (context) => {

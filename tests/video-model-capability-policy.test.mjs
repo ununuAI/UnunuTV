@@ -234,8 +234,31 @@ test("AutoDL H3 is a separate channel with the exact hosted workflow limits", ()
   const profile = getVideoModelCapability({ provider: "autodl", model: MINIMAX_H3_MODEL_ID });
   assert.deepEqual(profile.supportedModes, ["text_to_video", "image_reference", "first_last_frame"]);
   assert.deepEqual(profile.duration, { min: 1, max: 15 });
-  assert.deepEqual(profile.supportedResolutions, ["480p", "768p"]);
+  assert.deepEqual(profile.supportedResolutions, ["480p", "768p", "1080p"]);
+  assert.deepEqual(profile.supportedResolutionsByMode.text_to_video, ["480p", "768p"]);
+  assert.deepEqual(profile.supportedResolutionsByMode.image_reference, ["480p", "768p", "1080p"]);
+  assert.deepEqual(profile.resolutionDurationLimits["1080p"], { max: 10, modes: ["image_reference"] });
   assert.deepEqual(profile.supportedAspectRatiosByMode.text_to_video, ["16:9", "9:16"]);
   assert.deepEqual(profile.supportedAspectRatiosByMode.image_reference, ["16:9", "9:16", "1:1"]);
   assert.equal(profile.supportedModes.includes("first_frame"), false);
+});
+
+test("AutoDL H3 preflight rejects 1080p above 10 seconds and 1:1 with reference audio", () => {
+  const generationUnit = { strategy: "storyboard_action_sequence", visualAnchorPolicy: "SHOT_FRAME_SET", requiredCapabilities: ["multi_reference"] };
+  const base = {
+    provider: "autodl",
+    model: MINIMAX_H3_MODEL_ID,
+    mode: "image_reference",
+    duration: 10,
+    aspectRatio: "16:9",
+    resolution: "1080p",
+    generateAudio: true,
+    referenceMediaIds: ["media-storyboard"]
+  };
+  const accepted = preflightVideoModelCapability({ generationParameters: base, generationUnit, promptBytes: 100, referenceBindings: [{ mediaId: "media-storyboard" }] });
+  assert.equal(accepted.ok, true, JSON.stringify(accepted.errors));
+  const tooLong = preflightVideoModelCapability({ generationParameters: { ...base, duration: 15 }, generationUnit, promptBytes: 100, referenceBindings: [{ mediaId: "media-storyboard" }] });
+  assert.equal(tooLong.errors.some((entry) => entry.code === "unsupported_resolution_duration"), true);
+  const squareAudio = preflightVideoModelCapability({ generationParameters: { ...base, resolution: "768p", aspectRatio: "1:1", audioReferenceMediaIds: ["media-audio"] }, generationUnit, promptBytes: 100, referenceBindings: [{ mediaId: "media-storyboard" }] });
+  assert.equal(squareAudio.errors.some((entry) => entry.code === "unsupported_audio_reference_aspect_ratio"), true);
 });
