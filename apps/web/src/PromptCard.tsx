@@ -81,9 +81,13 @@ function videoReferenceModeLabel(mode: VideoReferenceMode) {
   return "全能参考";
 }
 
-function normalizedVideoResolution(modelId: string, resolution: unknown, h3Profile?: unknown) {
+function normalizedVideoResolution(modelId: string, providerId: string, resolution: unknown, h3Profile?: unknown) {
   if (modelId === SEEDANCE_VIDEO_MODEL_ID) return "480p";
   if (modelId === H3_VIDEO_MODEL_ID) {
+    if (providerId === "autodl") {
+      const hostedResolution = String(resolution || "480p").toLowerCase();
+      return ["480p", "768p", "1080p"].includes(hostedResolution) ? hostedResolution : "480p";
+    }
     if (isH3Profile(h3Profile)) return String(h3Profile);
     return String(resolution).toLowerCase() === "720p" ? "720p_accelerated" : "480p_accelerated";
   }
@@ -216,6 +220,7 @@ export function PromptCard({
   const [videoRatio, setVideoRatio] = useState(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
   const [videoResolution, setVideoResolution] = useState(normalizedVideoResolution(
     String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID),
+    String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID))),
     node.modelSelection?.parameters?.resolution,
     node.modelSelection?.parameters?.h3Profile
   ));
@@ -276,10 +281,12 @@ export function PromptCard({
 
   useEffect(() => {
     setVideoModelId(String(node.modelSelection?.modelId ?? "x-ai/grok-imagine-video"));
+    setVideoProvider(String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID))));
     setVideoMode(normalizeVideoReferenceMode(node.modelSelection?.parameters?.mode));
     setVideoRatio(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
     setVideoResolution(normalizedVideoResolution(
       String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID),
+      String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID))),
       node.modelSelection?.parameters?.resolution,
       node.modelSelection?.parameters?.h3Profile
     ));
@@ -291,11 +298,13 @@ export function PromptCard({
   }, [
     node.id,
     node.modelSelection?.modelId,
+    node.modelSelection?.providerId,
     node.modelSelection?.parameters?.audioSpeed,
     node.modelSelection?.parameters?.aspectRatio,
     node.modelSelection?.parameters?.count,
     node.modelSelection?.parameters?.duration,
     node.modelSelection?.parameters?.generateAudio,
+    node.modelSelection?.parameters?.h3Profile,
     node.modelSelection?.parameters?.mode,
     node.modelSelection?.parameters?.n,
     node.modelSelection?.parameters?.ratio,

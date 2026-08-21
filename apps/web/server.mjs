@@ -11,7 +11,7 @@ const QUICK_TUNNEL_PATTERN = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 
 async function waitForProviderMediaTunnel(publicUrl, options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
-  const deadline = Date.now() + (options.timeoutMs || 20_000);
+  const deadline = Date.now() + (options.timeoutMs || 60_000);
   const probeUrl = new URL("/provider-media/__tunnel_probe__/__tunnel_probe__", `${publicUrl}/`);
   probeUrl.searchParams.set("expires", "0");
   probeUrl.searchParams.set("signature", "probe");
