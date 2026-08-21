@@ -23,7 +23,7 @@ export default function ProviderSettings({ notify }) {
   const [status, setStatus] = useState(null);
   const [h3Health, setH3Health] = useState(null);
   const [checkingH3, setCheckingH3] = useState(false);
-  const [form, setForm] = useState({ ununuApiKey: "", arkApiKey: "", openrouterApiKey: "", openspeechApiKey: "", openspeechSpeakerId: "" });
+  const [form, setForm] = useState({ ununuApiKey: "", arkApiKey: "", openrouterApiKey: "", autodlApiToken: "", openspeechApiKey: "", openspeechSpeakerId: "" });
   const load = useCallback(async () => {
     const [settings, health] = await Promise.all([api.providerSettings(), api.providerHealth("minimax")]);
     setStatus(settings);
@@ -76,6 +76,11 @@ export default function ProviderSettings({ notify }) {
         <div><strong>{checkingH3 ? "正在检测远端…" : h3Health?.message || "尚未检测"}</strong><small>{h3Health?.ok ? `${h3Health.gpu || "GPU"} · 队列 ${h3Health.queueRunning || 0} 运行 / ${h3Health.queuePending || 0} 等待` : "只做连通性、ComfyUI 与队列检测，不会提交生成任务"}</small></div>
         <button disabled={checkingH3 || !status.providers.minimax?.configured} onClick={() => void checkH3()} type="button">{checkingH3 ? "检测中" : "检测远端"}</button>
       </div>
+    </article>
+
+    <article className="provider-card">
+      <header><div><b>MiniMax H3 · AutoDL</b><small>托管 ComfyUI API · 480P/768P · 1—15 秒</small></div><Status {...(status.providers.autodl || { configured: false, source: "none" })} /></header>
+      <SecretField label="AutoDL ComfyUI Token" placeholder="输入 ComfyUI 分组 Token（保存后立即清空）" configured={status.providers.autodl?.configured} source={status.providers.autodl?.source} {...field("autodlApiToken")} />
     </article>
 
     <article className="provider-card">

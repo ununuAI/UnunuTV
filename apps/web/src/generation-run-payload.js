@@ -35,7 +35,8 @@ export function generationRunPayload(node, input, edges, nodes) {
       mode: videoMode,
       duration: parameters.duration,
       generateAudio: parameters.generateAudio,
-      prompt: submissionPrompt
+      prompt: submissionPrompt,
+      providerId: input.provider
     });
     if (videoMode === "text_to_video") {
       if (referenceMediaIds.length !== 0) throw new Error("文生视频不能携带参考图，请先移除当前参考");
@@ -63,7 +64,7 @@ export function generationRunPayload(node, input, edges, nodes) {
   }
   const mediaParameters = node.kind === "image"
     ? { background: parameters.background, n: parameters.n, outputFormat: parameters.outputFormat, quality: parameters.quality, responseFormat: parameters.responseFormat, size: parameters.size }
-    : { duration: parameters.duration, resolution: parameters.resolution, aspectRatio: parameters.ratio, mode: isVideoNode ? videoMode : input.mode, generateAudio: parameters.generateAudio, ...(input.modelId === H3_VIDEO_MODEL_ID ? { h3Profile: parameters.h3Profile, seed: parameters.seed } : {}) };
+    : { duration: parameters.duration, resolution: parameters.resolution, aspectRatio: parameters.ratio, mode: isVideoNode ? videoMode : input.mode, generateAudio: parameters.generateAudio, ...(input.modelId === H3_VIDEO_MODEL_ID ? { ...(input.provider === "minimax" ? { h3Profile: parameters.h3Profile } : {}), seed: parameters.seed } : {}) };
   return {
     provider: input.provider,
     request: {

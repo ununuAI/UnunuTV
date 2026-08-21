@@ -229,3 +229,13 @@ test("MiniMax H3 exposes the local ComfyUI frame, reference, duration, and four-
   assert.equal(profile.maxReferenceImages, 9);
   assert.equal(profile.supportedAspectRatios.includes("21:9"), true);
 });
+
+test("AutoDL H3 is a separate channel with the exact hosted workflow limits", () => {
+  const profile = getVideoModelCapability({ provider: "autodl", model: MINIMAX_H3_MODEL_ID });
+  assert.deepEqual(profile.supportedModes, ["text_to_video", "image_reference", "first_last_frame"]);
+  assert.deepEqual(profile.duration, { min: 1, max: 15 });
+  assert.deepEqual(profile.supportedResolutions, ["480p", "768p"]);
+  assert.deepEqual(profile.supportedAspectRatiosByMode.text_to_video, ["16:9", "9:16"]);
+  assert.deepEqual(profile.supportedAspectRatiosByMode.image_reference, ["16:9", "9:16", "1:1"]);
+  assert.equal(profile.supportedModes.includes("first_frame"), false);
+});

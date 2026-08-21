@@ -6,6 +6,7 @@ const FIELDS = Object.freeze({
   ununuApiKey: { file: "ununu-api-key", env: "UNUNU_GATE_API_KEY", provider: "ununu" },
   arkApiKey: { file: "ark-api-key", env: "ARK_API_KEY", provider: "ark" },
   openrouterApiKey: { file: "openrouter-api-key", env: "OPENROUTER_API_KEY", provider: "openrouter" },
+  autodlApiToken: { file: "autodl-api-token", env: "AUTODL_API_TOKEN", provider: "autodl" },
   arkTtsApiKey: { file: "ark-tts-api-key", env: "ARK_TTS_API_KEY", provider: "arkTts" },
   arkTtsVoiceId: { file: "ark-tts-voice-id", env: "ARK_TTS_VOICE_ID", provider: "arkTtsVoice" },
   openspeechApiKey: { file: "openspeech-api-key", env: "OPENSPEECH_API_KEY", provider: "openspeech" },
@@ -118,6 +119,7 @@ export class LocalSecretStore {
         ununu: { configured: Boolean(this.effectiveValue("ununuApiKey")), source: this.source("ununuApiKey") },
         ark: { configured: Boolean(this.effectiveValue("arkApiKey")), source: this.source("arkApiKey") },
         minimax: { configured: Boolean(this.h3Config()), source: this.h3ConfigSource(), kind: "local-comfyui" },
+        autodl: { configured: Boolean(this.effectiveValue("autodlApiToken")), source: this.source("autodlApiToken"), kind: "hosted-comfyui-api" },
         openrouter: { configured: Boolean(this.effectiveValue("openrouterApiKey")), source: this.source("openrouterApiKey") },
         arkTts: {
           configured: Boolean(this.effectiveValue("arkTtsApiKey")),

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   GROK_PROMPT_MAX_BYTES,
   GROK_VIDEO_MODEL_ID,
+  H3_VIDEO_MODEL_ID,
   SEEDANCE_VIDEO_MODEL_ID,
   clampVideoDuration,
   validateVideoGenerationSelection,
@@ -23,6 +24,14 @@ test("Grok without audio permits fifteen seconds outside all-purpose reference m
 test("Seedance remains four to fifteen seconds with either audio setting", () => {
   assert.deepEqual(videoDurationRange({ modelId: SEEDANCE_VIDEO_MODEL_ID, mode: "image_reference", generateAudio: true }), { min: 4, max: 15 });
   assert.deepEqual(videoDurationRange({ modelId: SEEDANCE_VIDEO_MODEL_ID, mode: "image_reference", generateAudio: false }), { min: 4, max: 15 });
+});
+
+test("AutoDL H3 uses its hosted duration range and rejects the unavailable pure first-frame mode", () => {
+  assert.deepEqual(videoDurationRange({ modelId: H3_VIDEO_MODEL_ID, providerId: "autodl", mode: "text_to_video", generateAudio: true }), { min: 1, max: 15 });
+  assert.throws(
+    () => validateVideoGenerationSelection({ modelId: H3_VIDEO_MODEL_ID, providerId: "autodl", mode: "first_frame", duration: 5, generateAudio: true }),
+    /不支持纯首帧模式/
+  );
 });
 
 test("invalid paid Grok selections are rejected before provider submission", () => {

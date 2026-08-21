@@ -22,17 +22,19 @@ test("local secrets are redacted, permissioned, and used without restart", async
     ununuApiKey: "ununu-secret-value",
     arkApiKey: "ark-secret-value",
     openrouterApiKey: "openrouter-secret-value",
+    autodlApiToken: "autodl-secret-value",
     openspeechApiKey: "tts-secret-value",
     openspeechSpeakerId: "voice-local"
   });
   assert.equal(status.providers.ark.configured, true);
   assert.equal(status.providers.ununu.configured, true);
   assert.equal(status.providers.openrouter.source, "local-file");
+  assert.equal(status.providers.autodl.source, "local-file");
   assert.equal(JSON.stringify(status).includes("secret-value"), false);
   assert.equal(status.providers.openspeech.configured, true);
   assert.deepEqual(runtime.credentials.permissions(), {
     directory: 0o700,
-    files: { ununuApiKey: 0o600, arkApiKey: 0o600, openrouterApiKey: 0o600, openspeechApiKey: 0o600, openspeechSpeakerId: 0o600 }
+    files: { ununuApiKey: 0o600, arkApiKey: 0o600, openrouterApiKey: 0o600, autodlApiToken: 0o600, openspeechApiKey: 0o600, openspeechSpeakerId: 0o600 }
   });
 
   const { project, canvas } = await runtime.app.createProject();
@@ -62,16 +64,21 @@ test("settings HTTP API never returns plaintext credentials", async (context) =>
   const address = await service.listen(0);
   const base = `http://127.0.0.1:${address.port}`;
   const secret = "never-return-this-secret";
+  const autodlSecret = "never-return-this-autodl-token";
   const savedResponse = await fetch(`${base}/api/settings/providers`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ arkApiKey: secret })
+    body: JSON.stringify({ arkApiKey: secret, autodlApiToken: autodlSecret })
   });
   assert.equal(savedResponse.status, 200);
   const savedText = await savedResponse.text();
   assert.equal(savedText.includes(secret), false);
+  assert.equal(savedText.includes(autodlSecret), false);
   assert.equal(JSON.parse(savedText).providers.ark.configured, true);
+  assert.equal(JSON.parse(savedText).providers.autodl.configured, true);
   const readText = await fetch(`${base}/api/settings/providers`).then((response) => response.text());
   assert.equal(readText.includes(secret), false);
+  assert.equal(readText.includes(autodlSecret), false);
   assert.equal(JSON.parse(readText).providers.ark.source, "local-file");
+  assert.equal(JSON.parse(readText).providers.autodl.source, "local-file");
 });

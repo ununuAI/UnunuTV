@@ -20,7 +20,7 @@ function nextAutomaticH3Seed() {
 }
 
 function isH3VideoRun(node, provider, request) {
-  if (!["video", "videoShot", "video-clip", "compose"].includes(node.kind) || provider !== "minimax") return false;
+  if (!["video", "videoShot", "video-clip", "compose"].includes(node.kind) || !["minimax", "autodl"].includes(provider)) return false;
   return [request.model, request.modelId, node.payload?.modelId].some((modelId) => modelId === MINIMAX_H3_MODEL_ID);
 }
 
@@ -323,7 +323,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
 
   async function updateProviderSettings(input = {}) {
     const settings = requireObject(input, "settings");
-    const allowed = new Set(["ununuApiKey", "arkApiKey", "openrouterApiKey", "arkTtsApiKey", "arkTtsVoiceId", "openspeechApiKey", "openspeechSpeakerId"]);
+    const allowed = new Set(["ununuApiKey", "arkApiKey", "openrouterApiKey", "autodlApiToken", "arkTtsApiKey", "arkTtsVoiceId", "openspeechApiKey", "openspeechSpeakerId"]);
     for (const [field, value] of Object.entries(settings)) {
       if (!allowed.has(field)) throw new UnuTvError("invalid_provider_setting", `Unknown provider setting: ${field}`);
       if (value !== null && typeof value !== "string") throw new UnuTvError("invalid_provider_setting", `${field} must be a string or null`);

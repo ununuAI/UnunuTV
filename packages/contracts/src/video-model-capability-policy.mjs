@@ -57,6 +57,37 @@ const PROFILES = [
     evidenceUrls: []
   },
   {
+    provider: "autodl",
+    model: MINIMAX_H3_MODEL_ID,
+    displayName: "MiniMax H3 · AutoDL",
+    verifiedAt: "2026-08-21",
+    supportedModes: ["text_to_video", "image_reference", "first_last_frame"],
+    supportedGenerationStrategies: ["single_shot", "designed_multi_shot", "continuous_segment", "storyboard_action_sequence"],
+    visualAnchors: ["NONE", "FIRST_LAST_FRAME", "STORYBOARD_SHEET", "SHOT_FRAME_SET", "ACTION_PHASE_BOARD", "DUPLICATE_HANDOFF"],
+    duration: { min: 1, max: 15 },
+    promptMaxBytes: null,
+    maxReferenceImages: 9,
+    forbidsReferenceImagesWithFrameInput: true,
+    forbidsReferenceImagesWithFirstLastFrame: true,
+    supportsNativeAudio: true,
+    supportsIndependentNegativePrompt: false,
+    supportsInternalCuts: true,
+    supportsPromptTimeSlots: true,
+    supportedCapabilities: ["first_last_frame", "multi_reference", "native_audio", "internal_cuts", "storyboard_reference", "prompt_time_slots"],
+    supportedAspectRatios: ["16:9", "9:16", "1:1"],
+    supportedAspectRatiosByMode: {
+      text_to_video: ["16:9", "9:16"],
+      image_reference: ["16:9", "9:16", "1:1"],
+      first_last_frame: ["16:9", "9:16"]
+    },
+    supportedResolutions: ["480p", "768p"],
+    evidence: "autodl-comfyui-api-and-h3-workflow-contract-2026-08-21",
+    evidenceUrls: [
+      "https://autodl.art/docs/comfyui_api/",
+      "https://autodl.art/large-model/comfyui/minimax_h3_lightx2v_v5"
+    ]
+  },
+  {
     provider: "openrouter",
     model: OPENROUTER_GROK_VIDEO_MODEL_ID,
     displayName: "OpenRouter Grok Imagine Video",
@@ -154,7 +185,9 @@ export function preflightVideoModelCapability({ generationParameters, generation
       message: "Seedance virtual-person asset:// inputs are reference_image controls and require image_reference mode."
     });
   }
-  if (profile.supportedAspectRatios.length && !profile.supportedAspectRatios.includes(generationParameters.aspectRatio)) {
+  const supportedAspectRatios = profile.supportedAspectRatiosByMode?.[generationParameters.mode]
+    || profile.supportedAspectRatios;
+  if (supportedAspectRatios.length && !supportedAspectRatios.includes(generationParameters.aspectRatio)) {
     errors.push({ code: "unsupported_aspect_ratio", message: `${profile.displayName} does not support aspect ratio ${generationParameters.aspectRatio}.` });
   }
   const supportedResolutions = profile.supportedResolutionsByMode?.[generationParameters.mode]

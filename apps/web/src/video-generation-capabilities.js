@@ -11,9 +11,9 @@ export const H3_VIDEO_MODEL_ID = MINIMAX_H3_MODEL_ID;
 export const SEEDANCE_VIDEO_MODEL_ID = ARK_SEEDANCE_2_MINI_MODEL_ID;
 export const GROK_PROMPT_MAX_BYTES = getVideoModelCapability({ provider: "openrouter", model: GROK_VIDEO_MODEL_ID }).promptMaxBytes;
 
-export function videoProviderId(modelId) {
+export function videoProviderId(modelId, preferredProviderId) {
   if (modelId === SEEDANCE_VIDEO_MODEL_ID) return "ark";
-  if (modelId === H3_VIDEO_MODEL_ID) return "minimax";
+  if (modelId === H3_VIDEO_MODEL_ID) return preferredProviderId === "autodl" ? "autodl" : "minimax";
   return "openrouter";
 }
 
@@ -21,9 +21,9 @@ export function utf8ByteLength(value) {
   return new TextEncoder().encode(String(value || "")).length;
 }
 
-export function videoDurationRange({ modelId, mode, generateAudio }) {
+export function videoDurationRange({ modelId, mode, generateAudio, providerId }) {
   return videoModelDurationRange({
-    provider: videoProviderId(modelId),
+    provider: videoProviderId(modelId, providerId),
     model: modelId,
     mode,
     generateAudio
@@ -36,16 +36,17 @@ export function clampVideoDuration(duration, capability) {
   return Math.max(capability.min, Math.min(capability.max, Number.isFinite(numeric) ? numeric : fallback));
 }
 
-export function validateVideoGenerationSelection({ modelId, mode, duration, generateAudio, prompt }) {
+export function validateVideoGenerationSelection({ modelId, mode, duration, generateAudio, prompt, providerId }) {
   const promptBytes = utf8ByteLength(prompt);
   if (modelId === GROK_VIDEO_MODEL_ID && promptBytes > GROK_PROMPT_MAX_BYTES) {
     throw new Error(`Grok Imagine Video 提示词过长：当前 ${promptBytes} bytes，上限 ${GROK_PROMPT_MAX_BYTES} bytes；请精简后再提交`);
   }
-  const profile = getVideoModelCapability({ provider: videoProviderId(modelId), model: modelId });
+  const profile = getVideoModelCapability({ provider: videoProviderId(modelId, providerId), model: modelId });
   if (profile && !profile.supportedModes.includes(mode)) {
-    throw new Error("当前视频模型不支持所选参考模式");
+    const modeLabel = mode === "first_last_frame" ? "首尾帧" : mode === "first_frame" ? "纯首帧" : "所选参考";
+    throw new Error(`当前视频模型不支持${modeLabel}模式`);
   }
-  const capability = videoDurationRange({ modelId, mode, generateAudio });
+  const capability = videoDurationRange({ modelId, mode, generateAudio, providerId });
   if (Number(duration) > capability.max) {
     const reason = modelId === GROK_VIDEO_MODEL_ID
       ? mode === "image_reference"

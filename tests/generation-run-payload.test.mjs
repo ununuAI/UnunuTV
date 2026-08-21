@@ -37,6 +37,13 @@ function h3Input(mode, parameters = {}) {
   };
 }
 
+function autodlH3Input(mode, parameters = {}) {
+  return {
+    ...h3Input(mode, parameters),
+    provider: "autodl"
+  };
+}
+
 test("connected audio stays on the canvas and is not sent as a video image reference", () => {
   const voice = { id: "audio-1", kind: "audio", payload: { currentMediaId: "media-voice" } };
   const payload = generationRunPayload(
@@ -162,4 +169,16 @@ test("MiniMax H3 submits the ordinary node prompt directly", () => {
   assert.equal(payload.request.prompt, sourcePrompt);
   assert.equal(payload.provider, "minimax");
   assert.equal(payload.request.h3Profile, "480p_accelerated");
+});
+
+test("AutoDL H3 keeps its channel and never leaks a local ComfyUI profile", () => {
+  const payload = generationRunPayload(video, autodlH3Input("text_to_video", {
+    duration: 12,
+    resolution: "768p",
+    ratio: "9:16",
+    h3Profile: "480p_accelerated"
+  }), [], [video]);
+  assert.equal(payload.provider, "autodl");
+  assert.equal(payload.request.resolution, "768p");
+  assert.equal(Object.hasOwn(payload.request, "h3Profile"), false);
 });

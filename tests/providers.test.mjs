@@ -476,6 +476,125 @@ test("Local H3 submits a ComfyUI workflow, polls history, and materializes video
   assert.equal(submittedPayload.prompt["15"].inputs.noise_seed, 20260821);
 });
 
+test("AutoDL H3 submits the hosted text workflow, polls data.status, and downloads the expiring result", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-h3-text-"));
+  let submitted;
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "https://autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_lightx2v_no_pic" && options.method === "POST") {
+      submitted = { headers: options.headers, body: JSON.parse(options.body) };
+      return Response.json({ code: "Success", data: { task_id: "autodl-task-1", status: "QUEUED" }, request_id: "req-1" });
+    }
+    if (url === "https://autodl.art/api/v1/comfyui/comfyui_workflow/result/autodl-task-1") {
+      assert.equal(options.headers.authorization, "autodl-test-token");
+      return Response.json({ code: "Success", data: { task_id: "autodl-task-1", status: "SUCCESS", results: [{ url: "https://result.autodl.test/h3.mp4", type: "video", file_type: "mp4" }] } });
+    }
+    if (url === "https://result.autodl.test/h3.mp4") {
+      return new Response(Buffer.from("autodl-h3-video"), { headers: { "content-type": "video/mp4" } });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const runtime = createLocalRuntime({ dataRoot, env: { AUTODL_API_TOKEN: "autodl-test-token" }, fetchImpl, connectH3Remote: false });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "video",
+    title: "AutoDL H3 文生视频",
+    payload: { provider: "autodl", modelId: "MiniMax-H3", prompt: "source prompt" }
+  });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "autodl",
+    request: { prompt: "a quiet tracking shot", model: "MiniMax-H3", mode: "text_to_video", duration: 12, resolution: "480p", aspectRatio: "16:9" }
+  });
+  assert.equal(started.status, "running");
+  assert.equal(submitted.headers.authorization, "autodl-test-token");
+  assert.equal(submitted.headers.authorization.startsWith("Bearer "), false);
+  assert.deepEqual(submitted.body, { prompt: "a quiet tracking shot", duration: 12, resolution: "480p横" });
+  assert.equal(started.result.requestSummary.channel, "autodl");
+  const completed = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
+  assert.equal(completed.status, "succeeded");
+  assert.ok(existsSync(path.join(project.mediaRoot, completed.result.artifacts[0].relativePath)));
+});
+
+test("AutoDL H3 selects the 15-second multi-image/audio workflow and publishes signed references", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-h3-reference-"));
+  let submission;
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "https://autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_image_audio_to_video_v2_15s") {
+      submission = JSON.parse(options.body);
+      return Response.json({ code: "Success", data: { task_id: "autodl-ref-task", status: "QUEUED" } });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const runtime = createLocalRuntime({
+    dataRoot,
+    env: { AUTODL_API_TOKEN: "autodl-test-token" },
+    fetchImpl,
+    connectH3Remote: false,
+    publisher: { publicBaseUrl: "https://media.unutv.test", signingSecret: "autodl-signing-secret" }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const imagePath = path.join(dataRoot, "autodl-reference.png");
+  const audioPath = path.join(dataRoot, "autodl-voice.wav");
+  await writeFile(imagePath, Buffer.from("image"));
+  await writeFile(audioPath, Buffer.from("audio"));
+  const image = await runtime.app.importMedia({ projectId: project.id, filePath: imagePath });
+  const audio = await runtime.app.importMedia({ projectId: project.id, filePath: audioPath });
+  const video = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "video", payload: { provider: "autodl", modelId: "MiniMax-H3" } });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "autodl",
+    request: {
+      prompt: "Subject 1 speaks while the camera arcs",
+      model: "MiniMax-H3",
+      mode: "image_reference",
+      duration: 15,
+      resolution: "768p",
+      aspectRatio: "1:1",
+      referenceMediaIds: [image.id],
+      audioReferenceMediaIds: [audio.id]
+    }
+  });
+  assert.equal(started.status, "running");
+  assert.equal(submission.duration, 15);
+  assert.equal(submission.resolution, "768p(1:1)");
+  assert.equal(Number.isSafeInteger(submission.seed), true);
+  for (const field of ["ref_image_0", "ref_audio_0"]) {
+    const url = new URL(submission[field]);
+    assert.equal(url.hostname, "media.unutv.test");
+    assert.ok(url.searchParams.get("expires"));
+    assert.ok(url.searchParams.get("signature"));
+  }
+});
+
+test("AutoDL H3 blocks pure first-frame mode because the catalog exposes no faithful workflow", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-h3-first-frame-"));
+  let providerCalls = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    env: { AUTODL_API_TOKEN: "autodl-test-token" },
+    fetchImpl: async () => { providerCalls += 1; throw new Error("must not submit"); },
+    connectH3Remote: false
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "video", payload: { provider: "autodl", modelId: "MiniMax-H3" } });
+  const blocked = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "autodl",
+    request: { prompt: "hold the opening composition", model: "MiniMax-H3", mode: "first_frame", duration: 5, resolution: "480p", aspectRatio: "16:9", firstFrameMediaId: "media-unused" }
+  });
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.result.code, "autodl_h3_mode_unsupported");
+  assert.equal(providerCalls, 0);
+});
+
 test("Local H3 uploads connected audio and binds it to the exact Ref2VA audio slot", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-h3-audio-reference-"));
   const uploads = [];

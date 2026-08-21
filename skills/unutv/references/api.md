@@ -63,9 +63,54 @@ HTTP 与 CLI 做同一件事。CLI 用 `node apps/cli/src/index.mjs --help` 看�
 | DELETE | `/api/projects/:projectId/runs/:runId` |
 | GET | `/api/projects/:projectId/runs` |
 
-H3：`provider: "minimax"`，`modelId: "MiniMax-H3"`。默认 `h3Profile: "480p_accelerated"`。可选 `720p_accelerated` / `480p_native` / `720p_native`。必须先有确认过的 H3 提交稿。用户没点更高档位时不要改成 720p。
+H3 本地 ComfyUI：`provider: "minimax"`，`modelId: "MiniMax-H3"`。默认 `h3Profile: "480p_accelerated"`。可选 `720p_accelerated` / `480p_native` / `720p_native`。必须先有确认过的 H3 提交稿。用户没点更高档位时不要改成 720p。
 
-H3 Motion Context：
+H3 AutoDL 托管 ComfyUI：`provider: "autodl"`，`modelId: "MiniMax-H3"`。它是独立渠道，不替换 `minimax`，也不读取本地 H3 配置。首次使用先配置 ComfyUI 分组 Token：
+
+```http
+PUT /api/settings/providers
+Content-Type: application/json
+
+{"autodlApiToken":"AutoDL ComfyUI Token"}
+```
+
+也可用环境变量 `AUTODL_API_TOKEN`。状态从 `GET /api/settings/providers` 的 `providers.autodl` 读取；明文 Token 不会返回。参考图或参考音频必须能由当前 UnuTV 公网媒体隧道访问，否则 Run 会以 `public_tunnel_not_configured` / `public_tunnel_invalid` 阻塞。
+
+AutoDL H3 已核验工作流（2026-08-21）：
+
+| UnuTV 模式 | 条件 | AutoDL workflow_id |
+|---|---|---|
+| `text_to_video` | 1—15 秒 | `minimax_h3_lightx2v_no_pic` |
+| `image_reference` | 1—10 秒，无音频 | `minimax_h3_lightx2v_v5` |
+| `image_reference` | 11—15 秒，无音频 | `minimax_h3_lightx2v_v5_15s` |
+| `image_reference` | 1—10 秒，带 1—3 条音频 | `minimax_h3_image_audio_to_video_v2` |
+| `image_reference` | 11—15 秒，带 1—3 条音频 | `minimax_h3_image_audio_to_video_v2_15s` |
+| `first_last_frame` | 1—15 秒 | `minimax_h3_lightx2v` |
+
+AutoDL 当前没有可忠实对应的纯 `first_frame` 工作流；请求会以 `autodl_h3_mode_unsupported` 阻塞，禁止暗中改成多图参考。Motion Context 只走本地 `minimax`，AutoDL 不支持。AutoDL 支持 `480p` / `768p`；画幅为 `16:9` / `9:16`，`1:1` 只用于 `image_reference`。图片最多 9 张，独立音频最多 3 条。
+
+Agent 仍只调用 UnuTV 的 Run/Poll API，不直接调用 AutoDL：
+
+```http
+POST /api/projects/:projectId/nodes/:nodeId/run
+Content-Type: application/json
+
+{
+  "provider": "autodl",
+  "request": {
+    "model": "MiniMax-H3",
+    "mode": "text_to_video",
+    "prompt": "已确认的 H3 提交稿",
+    "duration": 12,
+    "resolution": "480p",
+    "aspectRatio": "16:9"
+  }
+}
+```
+
+之后用 `POST /api/projects/:projectId/runs/:runId/poll` 查询。UnuTV 内部按 AutoDL 合同提交到 `POST https://autodl.art/api/v1/comfyui/comfyui_workflow/{workflow_id}`，再查询 `GET .../result/{task_id}`；鉴权头是原始 Token，不加 `Bearer`。成功后立即下载短时效结果 URL 并物化到项目媒体目录。
+
+H3 Motion Context（仅本地 `minimax`）：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|

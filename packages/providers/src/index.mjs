@@ -10,6 +10,7 @@ import { submitTextCompletion } from "./text-completion.mjs";
 import { listGatewayModels } from "./gateway-model-listing.mjs";
 import { cancelLocalH3, pollLocalH3, submitLocalH3 } from "./local-h3-comfy-provider.mjs";
 import { inspectH3MotionContextCapabilities } from "./local-h3-motion-context-provider.mjs";
+import { pollAutoDlH3, submitAutoDlH3 } from "./autodl-h3-provider.mjs";
 const VIDEO_SUCCESS = new Set(["completed", "complete", "succeeded", "success", "done"]);
 const VIDEO_FAILURE = new Set(["failed", "error", "cancelled", "canceled", "expired"]);
 function deterministicGatewayRequestId(input) {
@@ -515,6 +516,10 @@ export function createProviderRouter(options = {}) {
         imageModel: env.OPENROUTER_IMAGE_MODEL || "google/gemini-3.1-flash-image-preview",
         model: env.OPENROUTER_VIDEO_MODEL || "alibaba/happyhorse-1.1"
       },
+      autodl: {
+        apiToken: credential(env.AUTODL_API_TOKEN, env.AUTODL_TOKEN),
+        baseUrl: (env.AUTODL_API_BASE_URL || "https://autodl.art").replace(/\/$/, "")
+      },
       // 文本生成按 provider 分别取 baseUrl 与 key;模型优先用 Prompt 里选的,env 只兜底
       text: {
         ununu: { provider: "ununu", label: "Ununu 网关", apiKey: credential(env.UNUNU_GATE_API_KEY, env.UNUNU_API_KEY), baseUrl: env.UNUNU_GATE_BASE_URL || env.UNUNU_BASE_URL || "https://api.ununu.ai/v1", model: env.UNUNU_TEXT_MODEL || "openai/gpt-5.6-sol" },
@@ -541,6 +546,7 @@ export function createProviderRouter(options = {}) {
         if (!options.h3Remote) throw new UnuTvError("provider_not_configured", "H3 local runtime is not configured", 409);
         return submitLocalH3(enriched, options.h3Remote, fetchImpl);
       }
+      if (input.run.provider === "autodl") return submitAutoDlH3(enriched, configs.autodl, fetchImpl);
       if (input.run.provider === "openrouter" && input.node.kind === "image") return submitOpenRouterImage(enriched, configs.openrouter, fetchImpl);
       if (input.run.provider === "openrouter") return submitOpenRouter(enriched, configs.openrouter, fetchImpl);
       if (input.run.provider === "ark-tts") return submitTts(enriched, configs["ark-tts"], fetchImpl);
@@ -553,6 +559,10 @@ export function createProviderRouter(options = {}) {
     },
     checkHealth(providerId) {
       if (providerId === "minimax") return options.h3Remote?.checkHealth?.() ?? { configured: false, ok: false, state: "not_configured", message: "H3 local runtime is not configured" };
+      if (providerId === "autodl") {
+        const isConfigured = Boolean(configured().autodl.apiToken);
+        return { configured: isConfigured, ok: isConfigured, state: isConfigured ? "configured" : "not_configured", message: isConfigured ? "AutoDL API Token is configured" : "AUTODL_API_TOKEN is not configured" };
+      }
       return { configured: true, ok: true, state: "not_applicable", message: "Provider does not expose a remote health probe" };
     },
     inspectH3MotionContext() {
@@ -569,6 +579,7 @@ export function createProviderRouter(options = {}) {
     },
     poll(input) {
       if (input.run.result?.task?.provider === "h3-local") return pollLocalH3(input, options.h3Remote, fetchImpl);
+      if (input.run.result?.task?.provider === "autodl") return pollAutoDlH3(input, configured().autodl, fetchImpl);
       return pollVideo(input, configured(), fetchImpl);
     },
     cancel(input) {
@@ -583,3 +594,4 @@ export function createProviderRouter(options = {}) {
 
 export { H3_LOCAL_PROFILES, buildLocalH3Workflow, h3Dimensions, h3FrameCount } from "./local-h3-comfy-provider.mjs";
 export { buildLocalH3MotionContextWorkflow, H3_MOTION_CONTEXT_NODE_TYPES, H3_MOTION_CONTEXT_SUPPORT_NODE_TYPES, inspectH3MotionContextCapabilities } from "./local-h3-motion-context-provider.mjs";
+export { AUTODL_H3_WORKFLOWS, pollAutoDlH3, submitAutoDlH3 } from "./autodl-h3-provider.mjs";
