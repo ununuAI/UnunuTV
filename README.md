@@ -5,6 +5,8 @@ console** for cinematic and multi-episode short-drama work. Operate it through
 the single `unutv` Skill and inspect every persisted stage
 on the production canvas.
 
+Current public release: **[v0.1.0](https://github.com/ununuAI/UnunuTV/releases/tag/v0.1.0)**.
+
 ```text
 unutv / Codex
         │
@@ -74,6 +76,16 @@ generation request may contain multiple designed artistic shots.
 Character, scene, prop, and storyboard image Prompts use deterministic V2
 compilers. UnunuTV remains the only execution runtime; supported local or
 remote ComfyUI providers are optional execution backends.
+
+## Versioning
+
+- Product and workspace packages use Semantic Versioning from `package.json`.
+- GitHub releases use immutable `vX.Y.Z` tags.
+- The Codex plugin uses the same product version plus a cachebuster, for
+  example `0.1.0+codex.<timestamp>`, so Skill updates are not served from an
+  old local cache.
+- `main` is the latest development release; pin a Git tag when reproducibility
+  matters more than automatic updates.
 
 ## Install from GitHub in Codex
 
