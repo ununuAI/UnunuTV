@@ -13,6 +13,69 @@ function presetOutput(preset) {
 }
 
 function seconds(milliseconds) { return Math.max(0, milliseconds / 1000).toFixed(3); }
+function clamp(value, minimum, maximum, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(minimum, Math.min(maximum, number)) : fallback;
+}
+
+function audioClipFilterList(input) {
+  const durationMs = Math.max(1, Number(input.durationMs));
+  const fadeInMs = Math.min(durationMs, Math.max(0, Number(input.fadeInMs ?? 0)));
+  const fadeOutMs = Math.min(durationMs, Math.max(0, Number(input.fadeOutMs ?? 0)));
+  return [
+    `atrim=start=${seconds(input.trimInMs)}:duration=${seconds(durationMs)}`,
+    "asetpts=PTS-STARTPTS",
+    `volume=${Math.max(0, Number(input.volume ?? 1))}`,
+    ...(fadeInMs ? [`afade=t=in:st=0:d=${seconds(fadeInMs)}`] : []),
+    ...(fadeOutMs ? [`afade=t=out:st=${seconds(durationMs - fadeOutMs)}:d=${seconds(fadeOutMs)}`] : []),
+    "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo",
+    `adelay=${Math.max(0, Number(input.startMs))}|${Math.max(0, Number(input.startMs))}`
+  ];
+}
+
+export function buildAudioFilterGraph(audioInputs, durationMs, soundMix = {}) {
+  const filters = [];
+  const rows = audioInputs.map((input, index) => {
+    const name = `a${index}`;
+    filters.push(`[${input.inputIndex}:a]${audioClipFilterList(input).join(",")}[${name}]`);
+    return { input, label: `[${name}]`, role: String(input.role ?? "audio").toLowerCase() };
+  });
+  if (!rows.length) return { filters, outputLabel: null };
+
+  const voiceRoles = new Set(["narration", "voiceover", "dialogue", "speech"]);
+  const voiceRows = rows.filter((row) => voiceRoles.has(row.role));
+  const duckedMusicRows = rows.filter((row) => row.role === "music" && row.input.ducking?.enabled === true);
+  const otherRows = rows.filter((row) => !voiceRows.includes(row) && !duckedMusicRows.includes(row));
+  const bus = (items, name) => {
+    if (items.length === 1) filters.push(`${items[0].label}anull[${name}]`);
+    else filters.push(`${items.map((item) => item.label).join("")}amix=inputs=${items.length}:duration=longest:dropout_transition=0[${name}]`);
+    return `[${name}]`;
+  };
+
+  let finalLabels;
+  if (voiceRows.length && duckedMusicRows.length) {
+    const voiceBus = bus(voiceRows, "voicebus");
+    const musicBus = bus(duckedMusicRows, "musicbus");
+    filters.push(`${voiceBus}asplit=2[voiceout][voicekeyraw]`);
+    filters.push(`[voicekeyraw]apad=whole_dur=${seconds(durationMs)}[voicekey]`);
+    const ducking = duckedMusicRows[0].input.ducking ?? {};
+    const threshold = clamp(ducking.threshold, 0.001, 1, 0.05);
+    const ratio = clamp(ducking.ratio, 1, 20, 8);
+    const attack = clamp(ducking.attackMs ?? ducking.attack_ms, 0.01, 2000, 20);
+    const release = clamp(ducking.releaseMs ?? ducking.release_ms, 0.01, 9000, 300);
+    filters.push(`${musicBus}[voicekey]sidechaincompress=threshold=${threshold}:ratio=${ratio}:attack=${attack}:release=${release}:makeup=1:mix=1[musicduck]`);
+    finalLabels = ["[voiceout]", "[musicduck]", ...otherRows.map((row) => row.label)];
+  } else finalLabels = rows.map((row) => row.label);
+
+  const premix = bus(finalLabels.map((label) => ({ label })), "premix");
+  const normalize = soundMix.normalize === true;
+  const targetLufs = clamp(soundMix.targetLufs, -70, -5, -16);
+  const truePeakDbtp = clamp(soundMix.truePeakDbtp, -9, 0, -1.5);
+  const finalFilters = [`atrim=0:${seconds(durationMs)}`, ...(normalize ? [`loudnorm=I=${targetLufs}:LRA=11:TP=${truePeakDbtp}`, "aresample=48000"] : [])];
+  filters.push(`${premix}${finalFilters.join(",")}[aout]`);
+  return { filters, outputLabel: "[aout]" };
+}
+
 function parseProgress(text, totalSeconds) {
   const match = /time=(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(text);
   if (!match) return null;
@@ -106,7 +169,7 @@ async function writeAudioSidecars(ffmpegPath, outputPath, audioInputs, durationM
   for (const input of audioInputs) groups.set(input.track, [...(groups.get(input.track) ?? []), input]);
   for (const [track, inputs] of groups) {
     const stemPath = `${base}.stem-${track}.wav`;
-    const filters = inputs.map((input, index) => `[${index}:a]atrim=start=${seconds(input.trimInMs)}:duration=${seconds(input.durationMs)},asetpts=PTS-STARTPTS,volume=${Math.max(0, input.volume)},aformat=sample_rates=48000:channel_layouts=stereo,adelay=${input.startMs}|${input.startMs}[s${index}]`);
+    const filters = inputs.map((input, index) => `[${index}:a]${audioClipFilterList(input).join(",")}[s${index}]`);
     filters.push(`${inputs.map((_, index) => `[s${index}]`).join("")}amix=inputs=${inputs.length}:duration=longest:dropout_transition=0,atrim=0:${seconds(durationMs)}[stem]`);
     await runFfmpeg(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-y", ...inputs.flatMap((input) => ["-i", input.filePath]), "-filter_complex", filters.join(";"), "-map", "[stem]", "-c:a", "pcm_s24le", "-ar", "48000", stemPath]);
     result[`stemTrack${track}WavPath`] = stemPath;
@@ -224,14 +287,7 @@ export class LocalFfmpegRenderAdapter {
       }
       videoOutput = chain.label;
     }
-    if (mixedAudioInputs.length) {
-      const audioLabels = mixedAudioInputs.map((input, index) => {
-        const label = `a${index}`;
-        filters.push(`[${input.inputIndex}:a]atrim=start=${seconds(input.trimInMs)}:duration=${seconds(input.durationMs)},asetpts=PTS-STARTPTS,volume=${Math.max(0, input.volume)},aformat=sample_rates=48000:channel_layouts=stereo,adelay=${input.startMs}|${input.startMs}[${label}]`);
-        return `[${label}]`;
-      });
-      filters.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0,atrim=0:${seconds(graph.durationMs)}[aout]`);
-    }
+    if (mixedAudioInputs.length) filters.push(...buildAudioFilterGraph(mixedAudioInputs, graph.durationMs, graph.soundMix).filters);
     const audioArgs = mixedAudioInputs.length ? ["-map", "[aout]", ...target.audioArgs] : ["-an"];
     const args = target.audioOnly
       ? ["-hide_banner", "-y", ...inputArgs, "-filter_complex", filters.join(";"), "-map", "[aout]", ...target.audioArgs, outputPath]

@@ -281,6 +281,60 @@ test("a transient provider poll error keeps the persisted video run recoverable"
   assert.equal(completed.status, "succeeded");
 });
 
+test("a legacy failed Flux poll resumes from its persisted ComfyUI task id without resubmission", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-flux-poll-recovery-"));
+  let submitCount = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: {
+      async run() {
+        submitCount += 1;
+        return { status: "running", task: { provider: "flux-local", taskId: "flux-recover-1" }, artifacts: [] };
+      },
+      async poll(input) {
+        return { ...input.run.result, status: "succeeded", artifacts: [] };
+      }
+    }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const image = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "image", payload: { prompt: "测试恢复" } });
+  const started = await runtime.app.runNode({ projectId: project.id, nodeId: image.id, request: {} });
+  await runtime.projects.finishRun(project.id, started.id, "failed", { ...started.result, code: "flux_poll_failed", message: "temporary tunnel failure" });
+
+  const recovered = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
+
+  assert.equal(recovered.status, "succeeded");
+  assert.equal(submitCount, 1);
+});
+
+test("a legacy failed AutoDL artifact poll resumes the same task without resubmission", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-artifact-recovery-"));
+  let submitCount = 0;
+  const runtime = createLocalRuntime({
+    dataRoot,
+    provider: {
+      async run() {
+        submitCount += 1;
+        return { status: "running", task: { provider: "autodl", taskId: "autodl-recover-1" }, artifacts: [] };
+      },
+      async poll(input) {
+        return { ...input.run.result, status: "succeeded", artifacts: [] };
+      }
+    }
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "video", payload: { prompt: "测试恢复" } });
+  const started = await runtime.app.runNode({ projectId: project.id, nodeId: video.id, request: {} });
+  await runtime.projects.finishRun(project.id, started.id, "failed", { ...started.result, code: "provider_artifact_missing", message: "result URL pending" });
+
+  const recovered = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
+
+  assert.equal(recovered.status, "succeeded");
+  assert.equal(submitCount, 1);
+});
+
 test("polling an in-flight synchronous submission keeps its queued run intact", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-sync-submit-poll-"));
   let releaseProvider;

@@ -9,8 +9,9 @@ import { responseError } from "./provider-response-error.mjs";
 import { submitTextCompletion } from "./text-completion.mjs";
 import { listGatewayModels } from "./gateway-model-listing.mjs";
 import { cancelLocalH3, pollLocalH3, submitLocalH3 } from "./local-h3-comfy-provider.mjs";
+import { LOCAL_FLUX_DEFAULT_URL, cancelLocalFlux, checkLocalFlux, pollLocalFlux, submitLocalFlux } from "./local-flux-comfy-provider.mjs";
 import { inspectH3MotionContextCapabilities } from "./local-h3-motion-context-provider.mjs";
-import { pollAutoDlH3, submitAutoDlH3 } from "./autodl-h3-provider.mjs";
+import { AUTODL_INDEXTTS2_MODEL_ID, pollAutoDlH3, submitAutoDlH3, submitAutoDlIndexTts2 } from "./autodl-h3-provider.mjs";
 const VIDEO_SUCCESS = new Set(["completed", "complete", "succeeded", "success", "done"]);
 const VIDEO_FAILURE = new Set(["failed", "error", "cancelled", "canceled", "expired"]);
 function deterministicGatewayRequestId(input) {
@@ -520,6 +521,7 @@ export function createProviderRouter(options = {}) {
         apiToken: credential(env.AUTODL_API_TOKEN, env.AUTODL_TOKEN),
         baseUrl: (env.AUTODL_API_BASE_URL || "https://autodl.art").replace(/\/$/, "")
       },
+      flux: { apiToken: credential(env.UNUTV_FLUX_API_TOKEN), baseUrl: (env.UNUTV_FLUX_COMFY_URL || LOCAL_FLUX_DEFAULT_URL).replace(/\/$/, "") },
       // 文本生成按 provider 分别取 baseUrl 与 key;模型优先用 Prompt 里选的,env 只兜底
       text: {
         ununu: { provider: "ununu", label: "Ununu 网关", apiKey: credential(env.UNUNU_GATE_API_KEY, env.UNUNU_API_KEY), baseUrl: env.UNUNU_GATE_BASE_URL || env.UNUNU_BASE_URL || "https://api.ununu.ai/v1", model: env.UNUNU_TEXT_MODEL || "openai/gpt-5.6-sol" },
@@ -540,13 +542,24 @@ export function createProviderRouter(options = {}) {
         if (!textConfig) throw new UnuTvError("provider_not_configured", `文本生成不支持 provider: ${input.run.provider}`, 409);
         return submitTextCompletion(enriched, textConfig, fetchImpl);
       }
+      if (input.run.provider === "flux") {
+        if (input.node.kind !== "image") throw new UnuTvError("provider_capability_unsupported", "Local FLUX only supports image nodes", 409);
+        return submitLocalFlux(enriched, configs.flux, fetchImpl);
+      }
       if (input.run.provider === "ununu") return submitUnunuImage(enriched, configs.ununu, fetchImpl);
       if (input.run.provider === "ark") return submitArk(enriched, configs.ark, fetchImpl);
       if (input.run.provider === "minimax") {
         if (!options.h3Remote) throw new UnuTvError("provider_not_configured", "H3 local runtime is not configured", 409);
         return submitLocalH3(enriched, options.h3Remote, fetchImpl);
       }
-      if (input.run.provider === "autodl") return submitAutoDlH3(enriched, configs.autodl, fetchImpl);
+      if (input.run.provider === "autodl") {
+        if (input.node.kind === "audio") {
+          const modelId = input.request?.model || input.request?.modelId || input.node.payload?.modelId;
+          if (modelId !== AUTODL_INDEXTTS2_MODEL_ID) throw new UnuTvError("provider_model_unsupported", `AutoDL audio does not support model: ${modelId || "missing"}`, 409);
+          return submitAutoDlIndexTts2(enriched, configs.autodl, fetchImpl);
+        }
+        return submitAutoDlH3(enriched, configs.autodl, fetchImpl);
+      }
       if (input.run.provider === "openrouter" && input.node.kind === "image") return submitOpenRouterImage(enriched, configs.openrouter, fetchImpl);
       if (input.run.provider === "openrouter") return submitOpenRouter(enriched, configs.openrouter, fetchImpl);
       if (input.run.provider === "ark-tts") return submitTts(enriched, configs["ark-tts"], fetchImpl);
@@ -558,6 +571,7 @@ export function createProviderRouter(options = {}) {
       return listGatewayModels(configured().text.ununu, fetchImpl);
     },
     checkHealth(providerId) {
+      if (providerId === "flux") return checkLocalFlux(configured().flux, fetchImpl);
       if (providerId === "minimax") return options.h3Remote?.checkHealth?.() ?? { configured: false, ok: false, state: "not_configured", message: "H3 local runtime is not configured" };
       if (providerId === "autodl") {
         const isConfigured = Boolean(configured().autodl.apiToken);
@@ -578,11 +592,13 @@ export function createProviderRouter(options = {}) {
       return options.h3Remote.exportMotionContextWorkflows(input);
     },
     poll(input) {
+      if (input.run.result?.task?.provider === "flux-local") return pollLocalFlux(input, configured().flux, fetchImpl);
       if (input.run.result?.task?.provider === "h3-local") return pollLocalH3(input, options.h3Remote, fetchImpl);
       if (input.run.result?.task?.provider === "autodl") return pollAutoDlH3(input, configured().autodl, fetchImpl);
       return pollVideo(input, configured(), fetchImpl);
     },
     cancel(input) {
+      if (input.run.result?.task?.provider === "flux-local") return cancelLocalFlux(input, configured().flux, fetchImpl);
       if (input.run.result?.task?.provider === "h3-local") {
         if (!options.h3Remote) throw new UnuTvError("provider_not_configured", "H3 local runtime is not configured", 409);
         return cancelLocalH3(input, options.h3Remote, fetchImpl);
@@ -593,5 +609,6 @@ export function createProviderRouter(options = {}) {
 }
 
 export { H3_LOCAL_PROFILES, buildLocalH3Workflow, h3Dimensions, h3FrameCount } from "./local-h3-comfy-provider.mjs";
+export { LOCAL_FLUX_DEFAULT_URL, LOCAL_FLUX_MODEL_ID, LOCAL_FLUX_SIZES, buildLocalFluxWorkflow, cancelLocalFlux, checkLocalFlux, compileLocalFluxPrompt, pollLocalFlux, submitLocalFlux } from "./local-flux-comfy-provider.mjs";
 export { buildLocalH3MotionContextWorkflow, H3_MOTION_CONTEXT_NODE_TYPES, H3_MOTION_CONTEXT_SUPPORT_NODE_TYPES, inspectH3MotionContextCapabilities } from "./local-h3-motion-context-provider.mjs";
-export { AUTODL_H3_WORKFLOWS, pollAutoDlH3, submitAutoDlH3 } from "./autodl-h3-provider.mjs";
+export { AUTODL_H3_WORKFLOWS, AUTODL_INDEXTTS2_MODEL_ID, AUTODL_INDEXTTS2_WORKFLOW_ID, pollAutoDlH3, submitAutoDlH3, submitAutoDlIndexTts2 } from "./autodl-h3-provider.mjs";

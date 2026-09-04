@@ -1,12 +1,13 @@
 "use client";
 
-import { Box, Check, FileText, FolderOpen, Image as ImageIcon, MapPin, Palette, Search, Upload, UserRound, X } from "lucide-react";
+import { Box, Check, FileText, FolderOpen, Image as ImageIcon, MapPin, Palette, Search, Upload, UserRound, Volume2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 
 const CANVAS_FILTERS = [
   ["all", "全部"],
   ["text", "文本"],
+  ["audio", "音频"],
   ["image", "图片"],
   ["character", "角色"],
   ["scene", "场景"]
@@ -18,6 +19,7 @@ const ASSET_FILTERS = [
   ["scene", "场景"],
   ["prop", "物品"],
   ["style", "风格"],
+  ["audio", "音频"],
   ["other", "其他"]
 ];
 
@@ -33,13 +35,15 @@ function nodeCategory(node) {
   if (["actor", "character", "costume", "hair_makeup"].includes(role) || /actor|character|costume|hair_makeup/.test(type)) return "character";
   if (role === "scene" || /scene|panorama|director/.test(type)) return "scene";
   if (["text", "story", "script", "batch", "storyboard"].includes(node.kind)) return "text";
-  if (["image", "subject", "upload", "material", "historyPick", "video", "videoShot", "compose", "audio"].includes(node.kind)) return "image";
+  if (node.kind === "audio") return "audio";
+  if (["image", "subject", "upload", "material", "historyPick", "video", "videoShot", "compose"].includes(node.kind)) return "image";
   return "other";
 }
 
 function assetCategory(asset) {
   if (["actor", "character", "costume", "hair_makeup"].includes(asset.role)) return "character";
   if (["scene", "prop", "style"].includes(asset.role)) return asset.role;
+  if (asset.role === "audio") return "audio";
   return "other";
 }
 
@@ -63,6 +67,7 @@ function fileDataUrl(file) {
 function MediaPreview({ kind, title, url }) {
   if (url && kind === "video") return <video muted src={url} />;
   if (url && kind === "image") return <img alt={title} src={url} />;
+  if (kind === "audio") return <Volume2 size={28} />;
   if (kind === "text") return <FileText size={28} />;
   return <ImageIcon size={28} />;
 }
@@ -170,20 +175,20 @@ export function NodeReferencePickerModal({ canvas, nodeId, notify, onClose, proj
           <input accept="image/*,video/*,audio/*" hidden onChange={importLocalReference} ref={fileInputRef} type="file" />
           {canvasItems.map((node) => {
             const category = nodeCategory(node);
-            const mediaKind = node.kind === "video" || node.kind === "videoShot" || node.kind === "compose" ? "video" : category === "text" ? "text" : "image";
+            const mediaKind = node.kind === "video" || node.kind === "videoShot" || node.kind === "compose" ? "video" : category === "text" ? "text" : category === "audio" ? "audio" : "image";
             const connected = connectedIds.has(node.id);
             return <button aria-label={`添加画布参考 ${node.title}`} className={`reference-library-card${connected ? " selected" : ""}`} disabled={connected || Boolean(busyId)} key={node.id} onClick={() => void addCanvasReference(node)} type="button">
-              <span className="reference-library-preview"><MediaPreview kind={mediaKind} title={node.title} url={nodeMediaUrl(projectId, node)} /><small>{category === "character" ? <UserRound size={13} /> : category === "scene" ? <MapPin size={13} /> : category === "text" ? <FileText size={13} /> : <ImageIcon size={13} />}{category === "text" ? "文本" : category === "character" ? "角色" : category === "scene" ? "场景" : "图片"}</small>{connected ? <em><Check size={14} />已添加</em> : null}</span>
+              <span className="reference-library-preview"><MediaPreview kind={mediaKind} title={node.title} url={nodeMediaUrl(projectId, node)} /><small>{category === "character" ? <UserRound size={13} /> : category === "scene" ? <MapPin size={13} /> : category === "text" ? <FileText size={13} /> : category === "audio" ? <Volume2 size={13} /> : <ImageIcon size={13} />}{category === "text" ? "文本" : category === "character" ? "角色" : category === "scene" ? "场景" : category === "audio" ? "音频" : "图片"}</small>{connected ? <em><Check size={14} />已添加</em> : null}</span>
               <strong>{node.title}</strong>
             </button>;
           })}
         </> : assetItems.length ? assetItems.map((asset) => {
           const version = currentVersion(asset);
           const mime = version?.payload?.mime || "";
-          const kind = mime.startsWith("video/") ? "video" : "image";
+          const kind = mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : "image";
           const category = assetCategory(asset);
           return <button aria-label={`添加资产参考 ${asset.title}`} className="reference-library-card" disabled={!version?.mediaId || Boolean(busyId)} key={asset.id} onClick={() => void addAssetReference(asset)} type="button">
-            <span className="reference-library-preview"><MediaPreview kind={kind} title={asset.title} url={assetMediaUrl(projectId, asset, version)} /><small>{category === "character" ? <UserRound size={13} /> : category === "scene" ? <MapPin size={13} /> : category === "prop" ? <Box size={13} /> : category === "style" ? <Palette size={13} /> : <ImageIcon size={13} />}{filters.find(([id]) => id === category)?.[1] || "其他"}</small></span>
+            <span className="reference-library-preview"><MediaPreview kind={kind} title={asset.title} url={assetMediaUrl(projectId, asset, version)} /><small>{category === "character" ? <UserRound size={13} /> : category === "scene" ? <MapPin size={13} /> : category === "prop" ? <Box size={13} /> : category === "style" ? <Palette size={13} /> : category === "audio" ? <Volume2 size={13} /> : <ImageIcon size={13} />}{filters.find(([id]) => id === category)?.[1] || "其他"}</small></span>
             <strong>{asset.title}</strong>
           </button>;
         }) : <div className="reference-library-empty"><FolderOpen size={48} /><strong>暂无内容</strong></div>}

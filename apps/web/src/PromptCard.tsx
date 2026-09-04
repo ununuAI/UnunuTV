@@ -13,7 +13,8 @@ import { NodeReferenceControls, NodeReferenceRows } from "./NodeReferenceControl
 import { PromptDocumentEditor, type PromptDocumentV1 } from "./PromptDocumentEditor";
 import { CinematicPromptFacts } from "./CinematicPromptFacts";
 import { hydrateLegacyPromptReferences } from "./prompt-document-hydration.js";
-import { GROK_PROMPT_MAX_BYTES, GROK_VIDEO_MODEL_ID, H3_VIDEO_MODEL_ID, SEEDANCE_VIDEO_MODEL_ID, clampVideoDuration, utf8ByteLength, videoDurationRange, videoProviderId } from "./video-generation-capabilities.js";
+import { INDEXTTS2_MODEL_ID } from "./generation-run-payload.js";
+import { DEFAULT_VIDEO_MODEL_ID, DEFAULT_VIDEO_PROVIDER_ID, DEFAULT_VIDEO_RESOLUTION, GROK_PROMPT_MAX_BYTES, GROK_VIDEO_MODEL_ID, H3_VIDEO_MODEL_ID, SEEDANCE_VIDEO_MODEL_ID, clampVideoDuration, utf8ByteLength, videoDurationRange, videoProviderId } from "./video-generation-capabilities.js";
 import { PROMPT_OUTPUT_MODES, promptOutputModeMeta } from "./prompt-output-mode-policy.js";
 import { videoReferenceInputState } from "./video-reference-input-policy.js";
 function modelOptionsFor(node: CanvasNode) {
@@ -58,6 +59,13 @@ const H3_PROFILE_OPTIONS = [
   { id: "720p_native", label: "720P 原生", resolution: "720p" }
 ] as const;
 
+const INDEXTTS2_EMOTIONS = [
+  ["emo_sad", "悲伤", 0], ["emo_calm", "平静", 0.3], ["emo_angry", "愤怒", 0],
+  ["emo_happy", "开心", 0.5], ["emo_afraid", "害怕", 0], ["emo_disgusted", "厌恶", 0],
+  ["emo_surprised", "惊讶", 0], ["emo_melancholic", "忧郁", 0]
+] as const;
+type IndexTtsEmotionKey = typeof INDEXTTS2_EMOTIONS[number][0];
+
 function isH3Profile(value: unknown) {
   return H3_PROFILE_OPTIONS.some((profile) => profile.id === value);
 }
@@ -85,8 +93,8 @@ function normalizedVideoResolution(modelId: string, providerId: string, resoluti
   if (modelId === SEEDANCE_VIDEO_MODEL_ID) return "480p";
   if (modelId === H3_VIDEO_MODEL_ID) {
     if (providerId === "autodl") {
-      const hostedResolution = String(resolution || "480p").toLowerCase();
-      return ["480p", "768p", "1080p"].includes(hostedResolution) ? hostedResolution : "480p";
+      const hostedResolution = String(resolution || DEFAULT_VIDEO_RESOLUTION).toLowerCase();
+      return ["480p", "768p", "1080p"].includes(hostedResolution) ? hostedResolution : DEFAULT_VIDEO_RESOLUTION;
     }
     if (isH3Profile(h3Profile)) return String(h3Profile);
     return String(resolution).toLowerCase() === "720p" ? "720p_accelerated" : "480p_accelerated";
@@ -214,21 +222,27 @@ export function PromptCard({
   const [promptDocument, setPromptDocument] = useState<PromptDocumentV1>(() => (node.promptDocument as PromptDocumentV1 | undefined) ?? { type: "doc", version: 1, content: [{ type: "text", text: node.prompt }] });
   const [expanded, setExpanded] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
-  const [videoModelId, setVideoModelId] = useState(String(node.modelSelection?.modelId ?? "x-ai/grok-imagine-video"));
-  const [videoProvider, setVideoProvider] = useState(String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID))));
+  const [videoModelId, setVideoModelId] = useState(String(node.modelSelection?.modelId ?? DEFAULT_VIDEO_MODEL_ID));
+  const [videoProvider, setVideoProvider] = useState(String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? DEFAULT_VIDEO_MODEL_ID), DEFAULT_VIDEO_PROVIDER_ID)));
   const [videoMode, setVideoMode] = useState<VideoReferenceMode>(normalizeVideoReferenceMode(node.modelSelection?.parameters?.mode));
   const [videoRatio, setVideoRatio] = useState(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
   const [videoResolution, setVideoResolution] = useState(normalizedVideoResolution(
-    String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID),
-    String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID))),
+    String(node.modelSelection?.modelId ?? DEFAULT_VIDEO_MODEL_ID),
+    String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? DEFAULT_VIDEO_MODEL_ID), DEFAULT_VIDEO_PROVIDER_ID)),
     node.modelSelection?.parameters?.resolution,
     node.modelSelection?.parameters?.h3Profile
   ));
   const [videoDuration, setVideoDuration] = useState(Number(node.modelSelection?.parameters?.duration ?? 4));
   const [videoCount, setVideoCount] = useState(Number(node.modelSelection?.parameters?.n ?? node.modelSelection?.parameters?.count ?? 1));
   const [videoGenerateAudio, setVideoGenerateAudio] = useState(Boolean(node.modelSelection?.parameters?.generateAudio ?? true));
+  const [audioModelId, setAudioModelId] = useState(String(node.modelSelection?.modelId ?? "seed-audio-1.0"));
+  const [audioProvider, setAudioProvider] = useState(String(node.modelSelection?.providerId ?? "openspeech"));
   const [audioSpeakerId, setAudioSpeakerId] = useState(String(node.modelSelection?.parameters?.speakerId ?? ""));
   const [audioSpeed, setAudioSpeed] = useState(Number(node.modelSelection?.parameters?.speed ?? 1));
+  const [indexTtsEmotions, setIndexTtsEmotions] = useState<Record<IndexTtsEmotionKey, number>>(() => Object.fromEntries(
+    INDEXTTS2_EMOTIONS.map(([key, , fallback]) => [key, Number(node.modelSelection?.parameters?.[key] ?? fallback)])
+  ) as Record<IndexTtsEmotionKey, number>);
+  const [indexTtsRandom, setIndexTtsRandom] = useState(Boolean(node.modelSelection?.parameters?.emo_random ?? false));
   const inputRef = useRef<HTMLDivElement>(null);
   const expandedInputRef = useRef<HTMLTextAreaElement>(null);
   const mentionTargetRef = useRef<{ surface: "compact" | "expanded"; triggerIndex: number; range?: Range } | null>(null);
@@ -280,13 +294,13 @@ export function PromptCard({
   }, [actions, node.id, node.prompt, readOnly, value]);
 
   useEffect(() => {
-    setVideoModelId(String(node.modelSelection?.modelId ?? "x-ai/grok-imagine-video"));
-    setVideoProvider(String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID))));
+    setVideoModelId(String(node.modelSelection?.modelId ?? DEFAULT_VIDEO_MODEL_ID));
+    setVideoProvider(String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? DEFAULT_VIDEO_MODEL_ID), DEFAULT_VIDEO_PROVIDER_ID)));
     setVideoMode(normalizeVideoReferenceMode(node.modelSelection?.parameters?.mode));
     setVideoRatio(String(node.modelSelection?.parameters?.ratio ?? node.modelSelection?.parameters?.aspectRatio ?? "16:9"));
     setVideoResolution(normalizedVideoResolution(
-      String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID),
-      String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? GROK_VIDEO_MODEL_ID))),
+      String(node.modelSelection?.modelId ?? DEFAULT_VIDEO_MODEL_ID),
+      String(node.modelSelection?.providerId ?? videoProviderId(String(node.modelSelection?.modelId ?? DEFAULT_VIDEO_MODEL_ID), DEFAULT_VIDEO_PROVIDER_ID)),
       node.modelSelection?.parameters?.resolution,
       node.modelSelection?.parameters?.h3Profile
     ));
@@ -567,19 +581,38 @@ export function PromptCard({
     latestSelectionRef.current = selection;
     void actions.savePromptDraft(node.id, value, selection);
   };
-  const saveAudioConfig = () => sendValue({
-    modelId: "seed-audio-1.0",
-    providerId: "openspeech",
-    parameters: { responseFormat: "mp3", speakerId: audioSpeakerId, speed: audioSpeed }
-  });
+  const audioSelection = (modelId = audioModelId, providerId = audioProvider): ModelExecutionSelection => modelId === INDEXTTS2_MODEL_ID
+    ? {
+      modelId,
+      providerId,
+      parameters: {
+        ...indexTtsEmotions,
+        emo_random: indexTtsRandom,
+        emo_control_method: "与音色参考音频相同"
+      }
+    }
+    : { modelId, providerId, parameters: { responseFormat: "mp3", speakerId: audioSpeakerId, speed: audioSpeed } };
+  const chooseAudioModel = (modelId: string, providerId: string) => {
+    if (readOnly) return;
+    setAudioModelId(modelId);
+    setAudioProvider(providerId);
+    const selection = audioSelection(modelId, providerId);
+    latestSelectionRef.current = selection;
+    void actions.savePromptDraft(node.id, value, selection);
+  };
+  const saveAudioConfig = () => sendValue(audioSelection());
   const isInput = variant === "input";
   const isTextNode = node.kind === "text";
   const isScriptNode = node.kind === "script";
   const isImageExecutionNode = node.kind === "image";
   const isVideoExecutionNode = isVideoPromptNode(node);
   const isAudioExecutionNode = node.kind === "audio";
+  const isAutoDlIndexTts2 = audioModelId === INDEXTTS2_MODEL_ID && audioProvider === "autodl";
+  const indexTtsReferenceCount = connectedSourceNodes.filter((source) => source.kind === "audio" && (source.referenceMediaIds?.length || source.previewUrl)).length
+    + (node.assetReferences ?? []).filter((reference) => assets.some((asset) => asset.id === reference.assetId && asset.mediaKind === "audio")).length;
+  const indexTtsReferenceReady = indexTtsReferenceCount >= 1 && indexTtsReferenceCount <= 2;
   const isFormalDialogueNode = String(node.payload?.resourceType ?? "") === "cinematic_dialogue_line";
-  const audioVoiceRunnable = !isFormalDialogueNode || Boolean(audioSpeakerId);
+  const audioVoiceRunnable = isAutoDlIndexTts2 ? indexTtsReferenceReady && !isFormalDialogueNode : !isFormalDialogueNode || Boolean(audioSpeakerId);
   const isTextExecutionNode = isTextNode || isScriptNode;
   const isMediaNode = isMediaPromptNode(node);
   const usesCompactContext = isTextExecutionNode || isMediaNode || isAudioExecutionNode;
@@ -675,7 +708,7 @@ export function PromptCard({
           <button className={isOpenRouterGrok ? "active" : ""} onClick={(event) => { chooseVideoModel(GROK_VIDEO_MODEL_ID, "openrouter", videoResolution === "480p" ? "480p" : "720p"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Grok Imagine Video · OpenRouter</button>
           <button className={isArkSeedanceMini ? "active" : ""} onClick={(event) => { chooseVideoModel(SEEDANCE_VIDEO_MODEL_ID, "ark", "480p"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Seedance 2.0 Mini · Ark</button>
           <button className={isMiniMaxH3 && !isAutoDlH3 ? "active" : ""} onClick={(event) => { chooseVideoModel(H3_VIDEO_MODEL_ID, "minimax", isH3Profile(videoResolution) ? videoResolution : "480p_accelerated"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">MiniMax H3 · 本地算力</button>
-          <button className={isAutoDlH3 ? "active" : ""} onClick={(event) => { chooseVideoModel(H3_VIDEO_MODEL_ID, "autodl", ["480p", "768p", "1080p"].includes(videoResolution) ? videoResolution : "480p"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">MiniMax H3 · AutoDL</button>
+          <button className={isAutoDlH3 ? "active" : ""} onClick={(event) => { chooseVideoModel(H3_VIDEO_MODEL_ID, "autodl", ["480p", "768p", "1080p"].includes(videoResolution) ? videoResolution : DEFAULT_VIDEO_RESOLUTION); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">MiniMax H3 · AutoDL</button>
         </div>
       </details>
       <details className="video-mode-select">
@@ -734,10 +767,13 @@ export function PromptCard({
     <div className="generator-actions audio-execution-controls copilotKitInputControls">
       <PromptOutputModeSelect actions={actions} node={node} readOnly={readOnly} />
       <details className="generator-model-select">
-        <summary className="generator-model" data-model="Seed Audio 1.0"><Volume2 size={14} /><span>Seed Audio 1.0</span><ChevronDown size={12} /></summary>
-        <div className="generator-model-menu" role="listbox"><button className="active" type="button">Seed Audio 1.0 · 豆包音频</button></div>
+        <summary className="generator-model" data-model={isAutoDlIndexTts2 ? "IndexTTS2 · AutoDL" : "Seed Audio 1.0"}><Volume2 size={14} /><span>{isAutoDlIndexTts2 ? "IndexTTS2 · AutoDL" : "Seed Audio 1.0"}</span><ChevronDown size={12} /></summary>
+        <div className="generator-model-menu" role="listbox">
+          <button className={!isAutoDlIndexTts2 ? "active" : ""} onClick={(event) => { chooseAudioModel("seed-audio-1.0", "openspeech"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">Seed Audio 1.0 · 豆包音频</button>
+          <button className={isAutoDlIndexTts2 ? "active" : ""} onClick={(event) => { chooseAudioModel(INDEXTTS2_MODEL_ID, "autodl"); event.currentTarget.closest("details")?.removeAttribute("open"); }} type="button">IndexTTS2 · AutoDL</button>
+        </div>
       </details>
-      <details className="audio-voice-select">
+      {!isAutoDlIndexTts2 ? <details className="audio-voice-select">
         <summary className="generator-spec-pill"><Volume2 size={13} /><span>{audioVoiceLabel(audioSpeakerId)}</span><ChevronDown size={12} /></summary>
         <div className="audio-voice-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}>
           {AUDIO_VOICE_OPTIONS.map((voice) => (
@@ -750,13 +786,16 @@ export function PromptCard({
             <input onChange={(event) => setAudioSpeakerId(event.target.value.trim())} placeholder="粘贴 speaker ID" value={AUDIO_VOICE_OPTIONS.some((voice) => voice.id === audioSpeakerId) ? "" : audioSpeakerId} />
           </label>
         </div>
-      </details>
+      </details> : <span className="generator-spec-pill" title="第1条音频为音色参考；第2条可选音频为情绪参考"><Volume2 size={13} />{indexTtsReferenceCount}/2 条参考</span>}
       <details className="audio-parameter-select">
-        <summary className="generator-spec-pill" title="音频参数"><SlidersHorizontal size={13} /><span>{audioSpeed.toFixed(1)}x</span><ChevronDown size={12} /></summary>
-        <div className="audio-parameter-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}><span>语速</span><label><input max="1.5" min="0.6" onChange={(event) => setAudioSpeed(Number(event.target.value))} step="0.1" type="range" value={audioSpeed} /><strong>{audioSpeed.toFixed(1)}x</strong></label></div>
+        <summary className="generator-spec-pill" title="音频参数"><SlidersHorizontal size={13} /><span>{isAutoDlIndexTts2 ? `平静 ${indexTtsEmotions.emo_calm.toFixed(1)} · 开心 ${indexTtsEmotions.emo_happy.toFixed(1)}` : `${audioSpeed.toFixed(1)}x`}</span><ChevronDown size={12} /></summary>
+        {isAutoDlIndexTts2 ? <div className="audio-parameter-menu index-tts-emotion-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}>
+          {INDEXTTS2_EMOTIONS.map(([key, label]) => <label key={key}><span>{label}</span><input max="1" min="0" onChange={(event) => setIndexTtsEmotions((current) => ({ ...current, [key]: Number(event.target.value) }))} step="0.1" type="range" value={indexTtsEmotions[key]} /><strong>{indexTtsEmotions[key].toFixed(1)}</strong></label>)}
+          <label><span>随机情绪</span><input checked={indexTtsRandom} onChange={(event) => setIndexTtsRandom(event.target.checked)} type="checkbox" /><strong>{indexTtsRandom ? "开启" : "关闭"}</strong></label>
+        </div> : <div className="audio-parameter-menu nowheel" onWheelCapture={(event) => event.stopPropagation()}><span>语速</span><label><input max="1.5" min="0.6" onChange={(event) => setAudioSpeed(Number(event.target.value))} step="0.1" type="range" value={audioSpeed} /><strong>{audioSpeed.toFixed(1)}x</strong></label></div>}
       </details>
       <span className="generator-spacer" />
-      <button aria-busy={isNodeGenerating} aria-label="生成音频" className="send-dot generator-send" disabled={readOnly || isNodeGenerating || !audioVoiceRunnable} onClick={() => void saveAudioConfig()} title={readOnly ? "全自动运行期间只读" : isNodeGenerating ? "音频正在生成" : !audioVoiceRunnable ? "正式对白必须先选择音色" : audioSpeakerId ? "使用所选音色生成音频" : "使用默认音色生成音频"} type="button">{isNodeGenerating ? <LoaderCircle aria-hidden="true" className="model-execution-spinner" size={14} /> : <ArrowUp size={14} />}</button>
+      <button aria-busy={isNodeGenerating} aria-label="生成音频" className="send-dot generator-send" disabled={readOnly || isNodeGenerating || !audioVoiceRunnable} onClick={() => void saveAudioConfig()} title={readOnly ? "全自动运行期间只读" : isNodeGenerating ? "音频正在生成" : isAutoDlIndexTts2 && isFormalDialogueNode ? "正式对白仍须走已接受的角色声音权威" : isAutoDlIndexTts2 && !indexTtsReferenceReady ? "请连接1条音色参考；可再连接1条情绪参考" : !audioVoiceRunnable ? "正式对白必须先选择音色" : isAutoDlIndexTts2 ? "通过AutoDL生成IndexTTS2音频" : audioSpeakerId ? "使用所选音色生成音频" : "使用默认音色生成音频"} type="button">{isNodeGenerating ? <LoaderCircle aria-hidden="true" className="model-execution-spinner" size={14} /> : <ArrowUp size={14} />}</button>
     </div>
   );
 
@@ -831,9 +870,9 @@ export function PromptCard({
         ) : null}
         {isAudioExecutionNode ? (
           <div className="generator-audio-context">
-            <NodeReferenceControls actions={actions} assets={assets} node={node} sourceNodes={connectedSourceNodes}>
-              <button className="generator-addon" onClick={() => appendAudioToken("<break time=\"0.5s\" />")} title="插入 0.5 秒停顿标记" type="button"><Timer size={13} />停顿</button>
-              <button className="generator-addon" onClick={() => appendAudioToken("（轻声）")} title="插入语气提示" type="button"><MessageCircleMore size={13} />语气词</button>
+            <NodeReferenceControls actions={actions} assets={assets} maximumReferenceCount={isAutoDlIndexTts2 ? 2 : undefined} node={node} referenceIssue={isAutoDlIndexTts2 && !indexTtsReferenceReady ? "IndexTTS2需要1条音色参考，可选第2条情绪参考；参考音频会经临时公网链接发送给AutoDL。" : undefined} referenceMode={isAutoDlIndexTts2 ? "indextts2" : undefined} referenceState={isAutoDlIndexTts2 ? indexTtsReferenceReady ? "ready" : "missing" : undefined} requiredReferenceCount={isAutoDlIndexTts2 ? 1 : undefined} sourceNodes={connectedSourceNodes}>
+              {!isAutoDlIndexTts2 ? <><button className="generator-addon" onClick={() => appendAudioToken("<break time=\"0.5s\" />")} title="插入 0.5 秒停顿标记" type="button"><Timer size={13} />停顿</button>
+              <button className="generator-addon" onClick={() => appendAudioToken("（轻声）")} title="插入语气提示" type="button"><MessageCircleMore size={13} />语气词</button></> : null}
             </NodeReferenceControls>
           </div>
         ) : null}
@@ -975,9 +1014,9 @@ export function PromptCard({
                   sourceNodes={connectedSourceNodes}
                 />
               ) : (
-                <NodeReferenceControls actions={actions} assets={assets} node={node} sourceNodes={connectedSourceNodes}>
-                  <button className="generator-addon" onClick={() => appendAudioToken("<break time=\"0.5s\" />")} type="button"><Timer size={13} />停顿</button>
-                  <button className="generator-addon" onClick={() => appendAudioToken("（轻声）")} type="button"><MessageCircleMore size={13} />语气词</button>
+                <NodeReferenceControls actions={actions} assets={assets} maximumReferenceCount={isAutoDlIndexTts2 ? 2 : undefined} node={node} referenceIssue={isAutoDlIndexTts2 && !indexTtsReferenceReady ? "IndexTTS2需要1条音色参考，可选第2条情绪参考；参考音频会经临时公网链接发送给AutoDL。" : undefined} referenceMode={isAutoDlIndexTts2 ? "indextts2" : undefined} referenceState={isAutoDlIndexTts2 ? indexTtsReferenceReady ? "ready" : "missing" : undefined} requiredReferenceCount={isAutoDlIndexTts2 ? 1 : undefined} sourceNodes={connectedSourceNodes}>
+                  {!isAutoDlIndexTts2 ? <><button className="generator-addon" onClick={() => appendAudioToken("<break time=\"0.5s\" />")} type="button"><Timer size={13} />停顿</button>
+                  <button className="generator-addon" onClick={() => appendAudioToken("（轻声）")} type="button"><MessageCircleMore size={13} />语气词</button></> : null}
                 </NodeReferenceControls>
               )}
               <div className="text-prompt-dialog-editor nowheel" onWheelCapture={(event) => event.stopPropagation()}>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generationRunPayload } from "../apps/web/src/generation-run-payload.js";
+import { INDEXTTS2_MODEL_ID, generationRunPayload } from "../apps/web/src/generation-run-payload.js";
 
 const video = { id: "video-1", kind: "video", payload: {} };
 const first = { id: "image-1", kind: "image", payload: { currentMediaId: "media-first" } };
@@ -53,6 +53,42 @@ test("connected audio stays on the canvas and is not sent as a video image refer
     [video, first, voice]
   );
   assert.deepEqual(payload.request.referenceMediaIds, ["media-first"]);
+});
+
+test("local FLUX carries the selected male tuning preset into the Provider request", () => {
+  const image = { id: "image-output", kind: "image", payload: {} };
+  const payload = generationRunPayload(image, {
+    modelId: "fluxed-up-v9-fp8",
+    provider: "flux",
+    parameters: { size: "768x1024", quality: "balanced", referenceDenoise: 0.45, malePreset: "delicate", maleRegion: "east-asian" },
+    referenceMediaIds: [], referenceNodeIds: [], text: "清秀的男生"
+  }, [], [image]);
+  assert.equal(payload.request.malePreset, "delicate");
+  assert.equal(payload.request.maleRegion, "east-asian");
+  assert.equal(payload.request.referenceDenoise, 0.45);
+  assert.equal(payload.request.size, "768x1024");
+});
+
+test("IndexTTS2 sends ordered audio references and emotion controls", () => {
+  const output = { id: "audio-output", kind: "audio", payload: {} };
+  const voice = { id: "audio-voice", kind: "audio", payload: { currentMediaId: "media-voice" } };
+  const emotion = { id: "audio-emotion", kind: "audio", payload: { currentMediaId: "media-emotion" } };
+  const payload = generationRunPayload(output, {
+    modelId: INDEXTTS2_MODEL_ID,
+    provider: "autodl",
+    parameters: { emo_calm: 0.3, emo_happy: 0.5, emo_random: false, emo_control_method: "与音色参考音频相同" },
+    referenceMediaIds: [],
+    referenceNodeIds: [voice.id, emotion.id],
+    text: "你好，这是一段测试文本"
+  }, [
+    { fromNodeId: voice.id, toNodeId: output.id },
+    { fromNodeId: emotion.id, toNodeId: output.id }
+  ], [output, voice, emotion]);
+  assert.equal(payload.provider, "autodl");
+  assert.deepEqual(payload.request.audioReferenceMediaIds, ["media-voice", "media-emotion"]);
+  assert.equal(payload.request.emo_calm, 0.3);
+  assert.equal(payload.request.emo_happy, 0.5);
+  assert.equal(payload.request.emo_control_method, "与音色参考音频相同");
 });
 
 test("H3 sends connected audio as ordered standalone audio references", () => {

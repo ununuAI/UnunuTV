@@ -1,14 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  DEFAULT_VIDEO_MODEL_ID,
+  DEFAULT_VIDEO_PROVIDER_ID,
+  DEFAULT_VIDEO_RESOLUTION,
   GROK_PROMPT_MAX_BYTES,
   GROK_VIDEO_MODEL_ID,
   H3_VIDEO_MODEL_ID,
   SEEDANCE_VIDEO_MODEL_ID,
   clampVideoDuration,
   validateVideoGenerationSelection,
-  videoDurationRange
+  videoDurationRange,
+  videoProviderId
 } from "../apps/web/src/video-generation-capabilities.js";
+
+test("new video nodes default to MiniMax H3 on AutoDL", () => {
+  assert.equal(DEFAULT_VIDEO_MODEL_ID, H3_VIDEO_MODEL_ID);
+  assert.equal(DEFAULT_VIDEO_PROVIDER_ID, "autodl");
+  assert.equal(DEFAULT_VIDEO_RESOLUTION, "768p");
+  assert.equal(videoProviderId(DEFAULT_VIDEO_MODEL_ID, DEFAULT_VIDEO_PROVIDER_ID), "autodl");
+});
 
 test("Grok audio and all-purpose reference modes are capped at ten seconds", () => {
   assert.deepEqual(videoDurationRange({ modelId: GROK_VIDEO_MODEL_ID, mode: "first_frame", generateAudio: true }), { min: 1, max: 10 });

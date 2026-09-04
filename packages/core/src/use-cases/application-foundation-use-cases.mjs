@@ -10,6 +10,14 @@ import { parseScriptModelOutput } from "../script-output-policy.mjs";
 import { H3_PROMPT_COMPILER_VERSION, h3PromptCompilerSystemPrompt } from "../h3-prompt-compiler-policy.mjs";
 
 const H3_RANDOM_SEED_LIMIT = 2_147_483_647;
+const RETRYABLE_PROVIDER_POLL_CODES = new Set(["provider_request_failed", "provider_poll_failed", "flux_poll_failed", "h3_remote_unavailable"]);
+const STORED_PROMPT_REQUEST_PARAMETER_KEYS = new Set([
+  "aspectRatio", "background", "count", "duration", "firstFrameMediaId", "generateAudio",
+  "h3Profile", "lastFrameMediaId", "malePreset", "maleRegion", "mode", "n", "outputFormat", "quality", "referenceDenoise", "resolution",
+  "responseFormat", "seed", "size", "speakerId", "speed", "virtualPersonAssetIds",
+  "emo_sad", "emo_calm", "emo_angry", "emo_happy", "emo_afraid", "emo_random",
+  "emo_disgusted", "emo_surprised", "emo_melancholic", "emo_control_method"
+]);
 let previousAutomaticH3Seed = null;
 
 function nextAutomaticH3Seed() {
@@ -24,12 +32,40 @@ function isH3VideoRun(node, provider, request) {
   return [request.model, request.modelId, node.payload?.modelId].some((modelId) => modelId === MINIMAX_H3_MODEL_ID);
 }
 
+function isRetryableProviderPoll(run, code) {
+  return Boolean(run.result?.task?.taskId)
+    && (RETRYABLE_PROVIDER_POLL_CODES.has(code)
+      || (run.result?.task?.provider === "autodl" && code === "provider_artifact_missing"));
+}
+
+function storedPromptRequestDefaults(prompt) {
+  if (!prompt) return {};
+  const parameters = requireObject(prompt.parameters, "prompt.parameters", {});
+  const defaults = {};
+  for (const [key, value] of Object.entries(parameters)) {
+    if (STORED_PROMPT_REQUEST_PARAMETER_KEYS.has(key) && value !== undefined) defaults[key] = value;
+  }
+  if (defaults.aspectRatio === undefined && parameters.ratio !== undefined) defaults.aspectRatio = parameters.ratio;
+  if (prompt.modelId) {
+    defaults.model = prompt.modelId;
+    defaults.modelId = prompt.modelId;
+  }
+  if (defaults.mode === undefined && prompt.mode) defaults.mode = prompt.mode;
+  if (Array.isArray(prompt.referenceNodeIds) && prompt.referenceNodeIds.length) defaults.referenceNodeIds = prompt.referenceNodeIds;
+  if (Array.isArray(prompt.referenceMediaIds) && prompt.referenceMediaIds.length) defaults.referenceMediaIds = prompt.referenceMediaIds;
+  return defaults;
+}
+
 /**
  * Core project/runtime ports shared by every UnunuTV surface.
  * Keeping these primitives outside the application facade preserves one
  * mutation path while keeping the facade an atomic composition module.
  */
 export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = {}) {
+  const activeNodeRunBatches = new Map();
+  const activeNodeRunBatchReservations = new Set();
+  const activeProviderPolls = new Map();
+  const activeProviderRunIds = new Set();
   function normalizeCreatedNodePayload(kind, inputPayload) {
     const payload = requireObject(inputPayload, "payload", {});
     if (kind !== "text") return payload;
@@ -323,10 +359,18 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
 
   async function updateProviderSettings(input = {}) {
     const settings = requireObject(input, "settings");
-    const allowed = new Set(["ununuApiKey", "arkApiKey", "openrouterApiKey", "autodlApiToken", "arkTtsApiKey", "arkTtsVoiceId", "openspeechApiKey", "openspeechSpeakerId"]);
+    const allowed = new Set(["ununuApiKey", "fluxBaseUrl", "fluxApiToken", "arkApiKey", "openrouterApiKey", "autodlApiToken", "arkTtsApiKey", "arkTtsVoiceId", "openspeechApiKey", "openspeechSpeakerId"]);
     for (const [field, value] of Object.entries(settings)) {
       if (!allowed.has(field)) throw new UnuTvError("invalid_provider_setting", `Unknown provider setting: ${field}`);
       if (value !== null && typeof value !== "string") throw new UnuTvError("invalid_provider_setting", `${field} must be a string or null`);
+      if (field === "fluxBaseUrl" && value !== null) {
+        try {
+          const url = new URL(value);
+          if (!["http:", "https:"].includes(url.protocol)) throw new Error();
+        } catch {
+          throw new UnuTvError("invalid_provider_setting", "fluxBaseUrl must be an HTTP(S) URL");
+        }
+      }
     }
     return ports.credentials.update(settings);
   }
@@ -338,7 +382,12 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     if (!node) throw new UnuTvError("node_not_found", `Node not found: ${nodeId}`, 404);
     assertProductionNodeRunAllowed(node, { generationUnitId: input.generationUnitId, authorization: input.generationUnitAuthorization });
     const prompt = await ports.projects.getNodePrompt(projectId, nodeId);
-    const requested = { ...(prompt?.text && input.request?.prompt === undefined ? { prompt: prompt.text } : {}), ...requireObject(input.request, "request", {}) };
+    const explicitRequest = requireObject(input.request, "request", {});
+    const requested = {
+      ...storedPromptRequestDefaults(prompt),
+      ...(prompt?.text && explicitRequest.prompt === undefined ? { prompt: prompt.text } : {}),
+      ...explicitRequest
+    };
     if (node.kind === "image") {
       const ownPrompt = String(requested.prompt || prompt?.text || node.payload?.prompt || "").trim();
       const incomingPrompt = ownPrompt ? "" : await collectIncomingNodeText(projectId, node);
@@ -381,12 +430,113 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
       provider,
       request, createdAt: nowIso()
     });
+    activeProviderRunIds.add(run.id);
     try {
       const result = await ports.provider.run({ projectId, node, run, request: run.request });
       return finishProviderResult(projectId, nodeId, run.id, result);
     } catch (error) {
       return ports.projects.finishRun(projectId, run.id, "blocked", { code: error.code ?? "provider_unavailable", message: error.message, details: error.details ?? null });
+    } finally {
+      activeProviderRunIds.delete(run.id);
     }
+  }
+
+  async function runNodeBatch(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    if (!Array.isArray(input.nodeIds) || input.nodeIds.length === 0) {
+      throw new UnuTvError("node_run_batch_required", "nodeIds must be a non-empty array", 400);
+    }
+    const nodeIds = [...new Set(input.nodeIds.map((nodeId, index) => requireText(nodeId, `nodeIds[${index}]`)))];
+    const requestedConcurrency = Number(input.concurrency ?? 8);
+    if (!Number.isSafeInteger(requestedConcurrency) || requestedConcurrency < 1 || requestedConcurrency > 50) {
+      throw new UnuTvError("node_run_batch_concurrency_invalid", "concurrency must be an integer between 1 and 50", 400);
+    }
+    const batchId = createId("node-run-batch");
+    const activeRuns = await ports.projects.listRuns(projectId);
+    const replaceOrphanedQueued = input.replaceOrphanedQueued === true;
+    const abandonUnknownSubmissions = input.abandonUnknownSubmissions === true;
+    const orphanedRuns = replaceOrphanedQueued
+      ? activeRuns.filter((run) => run.status === "queued"
+        && !run.result?.task?.taskId
+        && !activeProviderRunIds.has(run.id)
+        && nodeIds.includes(run.nodeId))
+      : [];
+    for (const run of orphanedRuns) {
+      await ports.projects.finishRun(projectId, run.id, "failed", {
+        ...run.result,
+        code: "orphaned_synchronous_submission_after_restart",
+        message: "The local synchronous Provider request did not survive the UnunuTV restart and was superseded by an owner-authorized batch.",
+        paidOutcomeUnknown: true,
+        supersededByBatchId: batchId
+      });
+    }
+    const orphanedRunIds = new Set(orphanedRuns.map((run) => run.id));
+    const unknownRuns = activeRuns.filter((run) => run.result?.code === "paid_submission_outcome_unknown"
+      && nodeIds.includes(run.nodeId));
+    const unknownNodeIds = new Set(unknownRuns.map((run) => run.nodeId));
+    if (abandonUnknownSubmissions) {
+      for (const run of unknownRuns) {
+        await ports.projects.finishRun(projectId, run.id, run.status, {
+          ...run.result,
+          ownerAbandonedUnknownOutcome: true,
+          supersededByBatchId: batchId,
+          supersededAt: nowIso()
+        });
+      }
+    }
+    const activeNodeIds = new Set(activeRuns
+      .filter((run) => !orphanedRunIds.has(run.id))
+      .filter((run) => ["queued", "running"].includes(run.status))
+      .map((run) => run.nodeId));
+    if (!abandonUnknownSubmissions) {
+      for (const nodeId of unknownNodeIds) activeNodeIds.add(nodeId);
+    }
+    const skippedNodeIds = nodeIds.filter((nodeId) => activeNodeIds.has(nodeId) || activeNodeRunBatchReservations.has(nodeId));
+    const eligibleNodeIds = nodeIds.filter((nodeId) => !activeNodeIds.has(nodeId) && !activeNodeRunBatchReservations.has(nodeId));
+    for (const nodeId of eligibleNodeIds) {
+      const node = await ports.projects.getNode(projectId, nodeId);
+      if (!node) throw new UnuTvError("node_not_found", `Node not found: ${nodeId}`, 404);
+    }
+    for (const nodeId of eligibleNodeIds) activeNodeRunBatchReservations.add(nodeId);
+    const batchPromise = (async () => {
+      let cursor = 0;
+      const results = new Array(eligibleNodeIds.length);
+      async function worker() {
+        while (cursor < eligibleNodeIds.length) {
+          const index = cursor;
+          cursor += 1;
+          const nodeId = eligibleNodeIds[index];
+          try {
+            results[index] = await runNode({
+              projectId,
+              nodeId,
+              ...(input.provider ? { provider: input.provider } : {}),
+              request: requireObject(input.request, "request", {})
+            });
+          } catch (error) {
+            results[index] = { nodeId, status: "blocked", code: error.code ?? "node_run_failed", message: error.message };
+          } finally {
+            activeNodeRunBatchReservations.delete(nodeId);
+          }
+        }
+      }
+      await Promise.all(Array.from(
+        { length: Math.min(requestedConcurrency, eligibleNodeIds.length) },
+        () => worker()
+      ));
+      return results;
+    })();
+    activeNodeRunBatches.set(batchId, batchPromise);
+    batchPromise.finally(() => activeNodeRunBatches.delete(batchId)).catch(() => {});
+    return {
+      id: batchId,
+      status: eligibleNodeIds.length ? "running" : "reused",
+      concurrency: requestedConcurrency,
+      nodeIds: eligibleNodeIds,
+      skippedNodeIds,
+      supersededRunIds: [...orphanedRunIds],
+      abandonedUnknownRunIds: abandonUnknownSubmissions ? unknownRuns.map((run) => run.id) : []
+    };
   }
 
   async function compileH3Prompt(input = {}) {
@@ -502,12 +652,10 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
     });
   }
 
-  async function pollRun(input = {}) {
-    const projectId = requireText(input.projectId, "projectId");
-    const runId = requireText(input.runId, "runId");
+  async function pollRunOnce(projectId, runId) {
     const run = await ports.projects.getRun(projectId, runId);
     if (!run) throw new UnuTvError("run_not_found", `Run not found: ${runId}`, 404);
-    const recoverablePollFailure = run.status === "failed" && run.result?.task?.taskId && ["provider_request_failed", "provider_poll_failed", "h3_remote_unavailable"].includes(run.result?.code);
+    const recoverablePollFailure = run.status === "failed" && isRetryableProviderPoll(run, run.result?.code);
     if (["succeeded", "failed", "blocked", "canceled"].includes(run.status) && !recoverablePollFailure) return run;
     if (run.status === "queued" && !run.result?.task?.taskId) return run;
     const node = await ports.projects.getNode(projectId, run.nodeId);
@@ -516,11 +664,27 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
       const result = await ports.provider.poll({ projectId, node, run });
       return finishProviderResult(projectId, node.id, run.id, result);
     } catch (error) {
-      const retryable = Boolean(run.result?.task?.taskId) && ["provider_request_failed", "provider_poll_failed", "h3_remote_unavailable"].includes(error.code);
+      const retryable = isRetryableProviderPoll(run, error.code);
       return ports.projects.finishRun(projectId, run.id, retryable ? "running" : "failed", {
         ...run.result,
         ...(retryable ? { pollError: { code: error.code, message: error.message } } : { code: error.code ?? "provider_poll_failed", message: error.message })
       });
+    }
+  }
+
+  async function pollRun(input = {}) {
+    const projectId = requireText(input.projectId, "projectId");
+    const runId = requireText(input.runId, "runId");
+    const pollKey = `${projectId}:${runId}`;
+    const activePoll = activeProviderPolls.get(pollKey);
+    if (activePoll) return activePoll;
+
+    const pending = pollRunOnce(projectId, runId);
+    activeProviderPolls.set(pollKey, pending);
+    try {
+      return await pending;
+    } finally {
+      if (activeProviderPolls.get(pollKey) === pending) activeProviderPolls.delete(pollKey);
     }
   }
 
@@ -602,7 +766,7 @@ export function createApplicationFoundationUseCases({ ports, saveNodePrompt } = 
   return {
     addGroupMember, cancelRun, compileH3Prompt, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
     disconnectEdge, exportH3MotionContextWorkflows, finishProviderResult, getDirectorStage, getH3MotionContextCapabilities, getPanorama, getProviderHealth, getProviderSettings, getWorkspace, getWorkflow,
-    importH3ProviderConfig, initializeWorkspace, installH3MotionContext, listProjects, listProviderModels, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode,
+    importH3ProviderConfig, initializeWorkspace, installH3MotionContext, listProjects, listProviderModels, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode, runNodeBatch,
     saveDirectorStage, setPanorama, setWorkspaceRoot, setWorkflowLayer, updateNode, updateProject, updateProviderSettings
   };
 }

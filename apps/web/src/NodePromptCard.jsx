@@ -8,7 +8,9 @@ import { cinematicPromptFactsForNode } from "./cinematic-prompt-facts-view-model
 import { imageGenerationStarterPrompt } from "@ununu/unutv-contracts";
 import { DEFAULT_TEXT_MODEL_ID } from "./prompt-workbench-api.ts";
 import { normalizePromptOutputMode, promptOutputModeForNode } from "./prompt-output-mode-policy.js";
+import { resolvePromptModelSelection } from "./prompt-model-selection.js";
 import { providerFrameReferenceSources, providerReferenceMediaIds } from "./node-provider-reference-policy.js";
+import { DEFAULT_VIDEO_MODEL_ID, DEFAULT_VIDEO_PROVIDER_ID, DEFAULT_VIDEO_RESOLUTION } from "./video-generation-capabilities.js";
 
 function mediaUrl(projectId, mediaId, ownerProjectId) {
   return mediaId ? `/api/projects/${ownerProjectId || projectId}/media/${mediaId}` : undefined;
@@ -39,7 +41,7 @@ function mapAssets(projectId, assets) {
 function outputModeSelection(outputMode, hasVisualReference) {
   if (outputMode === "image") return { provider: "ununu", modelId: "openai/gpt-image-2", parameters: { outputMode } };
   if (outputMode === "audio") return { provider: "openspeech", modelId: "seed-audio-1.0", parameters: { outputMode, responseFormat: "mp3", speed: 1 } };
-  if (outputMode === "video") return { provider: "openrouter", modelId: "x-ai/grok-imagine-video", parameters: { outputMode, mode: hasVisualReference ? "image_reference" : "text_to_video", ratio: "16:9", resolution: "720p", duration: 4, n: 1, generateAudio: true } };
+  if (outputMode === "video") return { provider: DEFAULT_VIDEO_PROVIDER_ID, modelId: DEFAULT_VIDEO_MODEL_ID, parameters: { outputMode, mode: hasVisualReference ? "image_reference" : "text_to_video", ratio: "16:9", resolution: DEFAULT_VIDEO_RESOLUTION, duration: 4, n: 1, generateAudio: true } };
   return { provider: "ununu", modelId: DEFAULT_TEXT_MODEL_ID, parameters: { outputMode } };
 }
 
@@ -188,14 +190,7 @@ export function NodePromptCard({ actions, connectedNodes, node, readOnly = false
     id: node.id,
     imageNodeType: node.payload?.imageNodeType,
     kind: node.kind === "asset" ? outputMode : node.kind,
-    modelSelection: prompt?.modelId ? {
-      modelId: prompt.modelId,
-      providerId: prompt.provider || "ununu",
-      parameters: {
-        ...(prompt.parameters || {}),
-        ...(prompt.mode && !prompt.parameters?.mode ? { mode: prompt.mode } : {})
-      }
-    } : node.payload?.modelSelection,
+    modelSelection: resolvePromptModelSelection(prompt, node.payload),
     previewUrl: mediaUrl(node.projectId, node.payload?.currentMediaId, node.payload?.mediaOwnerProjectId),
     prompt: prompt?.text || node.payload?.prompt || templatePrompt,
     promptDocument: prompt?.document,

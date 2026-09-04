@@ -1,0 +1,4 @@
+interface:
+  display_name: "UnunuTV"
+  short_description: "Operate UnunuTV projects and canvas safely"
+  default_prompt: "Use $unutv to inspect and continue the current UnunuTV project through its official local API or CLI. If the task also uses a local video project, run paired-check first. Film-production nextAction lives in skills/unutv/references/cinematic.md."

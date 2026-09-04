@@ -11,6 +11,7 @@ import {
 import { projectDatabasePath, projectDirectory } from "./paths.mjs";
 import { PROJECT_SCHEMA } from "./schema.mjs";
 import { applyProjectMigrations } from "./project-migrations.mjs";
+import { mergeNodePromptPayload } from "./node-prompt-payload-policy.mjs";
 import { readNodePrompt, writeNodePrompt } from "./node-prompt-store.mjs";
 import { insertRun, selectRun, selectRuns, updateRun } from "./run-store.mjs";
 import { attachProjectStoreDomains } from "./attach-project-store-domains.mjs";
@@ -243,13 +244,7 @@ export class ProjectStore {
     const node = this.getNode(projectId, input.nodeId);
     if (!node) throw new UnuTvError("node_not_found", `Node not found: ${input.nodeId}`, 404);
     const saved = writeNodePrompt(database, input);
-    const nextPayload = {
-      ...node.payload,
-      prompt: input.text,
-      ...(input.provider ? { provider: input.provider } : {}),
-      ...(input.modelId ? { modelId: input.modelId } : {}),
-      ...(input.mode ? { mode: input.mode } : {})
-    };
+    const nextPayload = mergeNodePromptPayload(node.payload, input);
     this.updateNode(projectId, input.nodeId, { payload: nextPayload });
     event(database, "node.prompt_saved", input.nodeId, { version: saved.version, canvasId: node.canvasId, nodeId: input.nodeId });
     return saved;

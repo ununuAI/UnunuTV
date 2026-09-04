@@ -1,0 +1,20 @@
+{
+  "name": "ununu-tv",
+  "interface": {
+    "displayName": "UnunuTV"
+  },
+  "plugins": [
+    {
+      "name": "unutv",
+      "source": {
+        "source": "local",
+        "path": "./plugins/unutv"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Creative Tools"
+    }
+  ]
+}

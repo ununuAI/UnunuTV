@@ -36,6 +36,7 @@ function useModelExecution() {
 function modelLabel(modelId: string) {
   if (modelId === "openai/gpt-image-2") return "GPT Image 2";
   if (modelId === "google/gemini-3.1-flash-image-preview") return "Nano Banana 2";
+  if (modelId === "fluxed-up-v9-fp8") return "Fluxed Up v9 FP8 · 共享 1K/2K";
   return modelId.split("/").at(-1) ?? modelId;
 }
 
@@ -159,12 +160,17 @@ function Parameters() {
     const selectedValue = state.selected.parameters?.[key] ?? control?.defaultValue;
     return control?.options.find((option) => option.value === selectedValue)?.label;
   };
-  const trigger = [selectedLabel("size"), selectedLabel("quality"), selectedLabel("n"), selectedLabel("background")].filter(Boolean).join(" · ");
+  const trigger = [selectedLabel("size"), selectedLabel("quality"), selectedLabel("referenceDenoise"), selectedLabel("malePreset"), selectedLabel("maleRegion"), selectedLabel("n"), selectedLabel("background")].filter(Boolean).join(" · ");
   const parameterIcon = (key: string, value: string | number | boolean) => {
     if (key !== "size") return null;
     if (value === "1024x1024") return <Square aria-hidden="true" size={13} />;
+    if (value === "768x1024") return <RectangleVertical aria-hidden="true" size={13} />;
+    if (value === "1024x768") return <RectangleHorizontal aria-hidden="true" size={13} />;
     if (value === "1024x1536") return <RectangleVertical aria-hidden="true" size={13} />;
+    if (value === "1536x2048") return <RectangleVertical aria-hidden="true" size={13} />;
     if (value === "1536x1024") return <RectangleHorizontal aria-hidden="true" size={13} />;
+    if (value === "2048x1536") return <RectangleHorizontal aria-hidden="true" size={13} />;
+    if (value === "2048x2048") return <Square aria-hidden="true" size={13} />;
     if (value === "3808x1904") return <RectangleHorizontal aria-hidden="true" size={13} />;
     return <Sparkles aria-hidden="true" size={13} />;
   };

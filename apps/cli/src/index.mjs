@@ -100,7 +100,7 @@ Usage:
   ununu-unutv canvas open --project ID --canvas ID
   ununu-unutv node add --project ID --canvas ID --kind KIND [--title 标题 --x 0 --y 0 --payload '{}']
   ununu-unutv node update --project ID --node ID [--title 标题 --x 0 --y 0 --payload '{}']
-  ununu-unutv node delete|run --project ID --node ID
+  ununu-unutv node delete|run --project ID --node ID OR node run-batch --project ID --data '{"nodeIds":["node-1"],"concurrency":8}'
   ununu-unutv prompt get|save --project ID --node ID [--data '{}']
   ununu-unutv grid compose --project ID --node ID [--title 标题]
   ununu-unutv image-edit save --project ID --node ID --file /absolute/path [--data '{}']
@@ -294,7 +294,7 @@ async function execute(app, positionals, flags) {
     expectedRevision: flags.revision === undefined ? undefined : numeric(flags, "revision")
   });
   if (area === "node" && action === "delete") return app.deleteNode({ projectId: required(flags, "project"), nodeId: required(flags, "node") });
-  if (area === "node" && action === "run") return app.runNode({ projectId: required(flags, "project"), nodeId: required(flags, "node"), request: objectFlag(flags, "request") });
+  if (area === "node" && ["run", "run-batch"].includes(action)) return action === "run" ? app.runNode({ projectId: required(flags, "project"), nodeId: required(flags, "node"), request: objectFlag(flags, "request") }) : app.runNodeBatch({ projectId: required(flags, "project"), ...objectFlag(flags, "data") });
   if (area === "prompt" && action === "get") return { prompt: await app.getNodePrompt({ projectId: required(flags, "project"), nodeId: required(flags, "node") }) };
   if (area === "prompt" && action === "save") return app.saveNodePrompt({ projectId: required(flags, "project"), nodeId: required(flags, "node"), ...objectFlag(flags, "data") });
   if (area === "grid" && action === "compose") return app.composeGridNode({ projectId: required(flags, "project"), nodeId: required(flags, "node"), title: flags.title });

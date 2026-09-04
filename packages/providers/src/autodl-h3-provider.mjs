@@ -12,6 +12,9 @@ export const AUTODL_H3_WORKFLOWS = Object.freeze({
   imageAudioReference15s: "minimax_h3_image_audio_to_video_v2_15s",
   firstLastFrame: "minimax_h3_lightx2v"
 });
+export const AUTODL_INDEXTTS2_MODEL_ID = "IndexTTS2";
+export const AUTODL_INDEXTTS2_WORKFLOW_ID = "indextts2-v1";
+const AUTODL_INDEXTTS2_EMOTION_METHOD = "与音色参考音频相同";
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -73,6 +76,22 @@ async function publishedMedia(input, mediaId, expectedKind) {
     expiresInSeconds: 86400
   });
   return publication.remoteUrl;
+}
+
+function indexTtsReferenceIds(input) {
+  return [...new Set([
+    ...(Array.isArray(input.request?.audioReferenceMediaIds) ? input.request.audioReferenceMediaIds : []),
+    ...(Array.isArray(input.request?.referenceMediaIds) ? input.request.referenceMediaIds : [])
+  ].filter(Boolean))];
+}
+
+function emotionValue(request, key, fallback = 0) {
+  const value = request?.[key] ?? fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || number > 1) {
+    throw new UnuTvError("autodl_indextts2_emotion_invalid", `${key} must be a number from 0 to 1`, 400);
+  }
+  return number;
 }
 
 function selectWorkflow({ audioCount, duration, mode }) {
@@ -183,11 +202,66 @@ export async function submitAutoDlH3(input, config, fetchImpl = fetch) {
   };
 }
 
-function outputUrl(payload) {
+export async function submitAutoDlIndexTts2(input, config, fetchImpl = fetch) {
+  if (!text(config?.apiToken)) {
+    throw new UnuTvError("provider_not_configured", "AUTODL_API_TOKEN is not configured", 409);
+  }
+  const promptText = text(input.request?.text) || text(input.request?.prompt) || text(input.node.payload?.text) || text(input.node.payload?.prompt);
+  if (!promptText) throw new UnuTvError("audio_input_required", "AutoDL IndexTTS2 requires approved text", 400);
+  const references = indexTtsReferenceIds(input);
+  if (references.length < 1 || references.length > 2) {
+    throw new UnuTvError("autodl_indextts2_reference_count_invalid", "AutoDL IndexTTS2 requires one voice reference and accepts one optional emotion reference", 400);
+  }
+  const method = text(input.request?.emo_control_method) || AUTODL_INDEXTTS2_EMOTION_METHOD;
+  if (method !== AUTODL_INDEXTTS2_EMOTION_METHOD) {
+    throw new UnuTvError("autodl_indextts2_emotion_method_unsupported", `AutoDL IndexTTS2 currently exposes only ${AUTODL_INDEXTTS2_EMOTION_METHOD}`, 400);
+  }
+  if (emotionValue(input.request, "emo_surprised") !== 0) {
+    throw new UnuTvError("autodl_indextts2_surprised_unsupported", "AutoDL IndexTTS2 currently exposes emo_surprised only as the enum value 0", 400);
+  }
+  const voiceUrl = await publishedMedia(input, references[0], "audio");
+  const emotionUrl = references[1] ? await publishedMedia(input, references[1], "audio") : voiceUrl;
+  const body = {
+    emo_sad: emotionValue(input.request, "emo_sad"),
+    emo_calm: emotionValue(input.request, "emo_calm", 0.3),
+    emo_angry: emotionValue(input.request, "emo_angry"),
+    emo_happy: emotionValue(input.request, "emo_happy", 0.5),
+    emo_afraid: emotionValue(input.request, "emo_afraid"),
+    emo_random: input.request?.emo_random === true,
+    prompt_text: promptText,
+    emo_disgusted: emotionValue(input.request, "emo_disgusted"),
+    emo_ref_audio: emotionUrl,
+    prompt_simple: voiceUrl,
+    emo_melancholic: emotionValue(input.request, "emo_melancholic"),
+    emo_control_method: method
+  };
+  const response = await fetchImpl(`${config.baseUrl}${API_PATH}/${AUTODL_INDEXTTS2_WORKFLOW_ID}`, {
+    method: "POST",
+    headers: { authorization: config.apiToken, "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body)
+  });
+  const payload = await readPayload(response, "AutoDL IndexTTS2 submission");
+  const taskId = text(payload?.data?.task_id);
+  if (!taskId) throw new UnuTvError("provider_task_missing", "AutoDL IndexTTS2 response did not contain data.task_id", 502);
+  return {
+    status: "running",
+    task: { provider: "autodl", taskId, workflowId: AUTODL_INDEXTTS2_WORKFLOW_ID, artifactKind: "audio" },
+    requestSummary: {
+      model: AUTODL_INDEXTTS2_MODEL_ID,
+      channel: "autodl",
+      workflowId: AUTODL_INDEXTTS2_WORKFLOW_ID,
+      audioReferenceMediaIds: references,
+      emotionControlMethod: method,
+      textLength: promptText.length
+    },
+    submitResponse: payload
+  };
+}
+
+function outputResult(payload, expectedKind) {
   const results = Array.isArray(payload?.data?.results) ? payload.data.results : [];
-  const video = results.find((item) => text(item?.type).toLowerCase() === "video" && /^https?:\/\//.test(text(item?.url)))
+  return results.find((item) => text(item?.type).toLowerCase() === expectedKind && /^https?:\/\//.test(text(item?.url)))
     || results.find((item) => /^https?:\/\//.test(text(item?.url)));
-  return text(video?.url);
 }
 
 export async function pollAutoDlH3(input, config, fetchImpl = fetch) {
@@ -201,24 +275,44 @@ export async function pollAutoDlH3(input, config, fetchImpl = fetch) {
   const state = text(payload?.data?.status).toUpperCase() || "QUEUED";
   const previousResult = { ...input.run.result, pollResponse: payload };
   delete previousResult.pollError;
+  if (previousResult.code === "provider_artifact_missing") {
+    delete previousResult.code;
+    delete previousResult.message;
+  }
   if (FAILURE_STATES.has(state)) return { ...previousResult, status: "failed" };
   if (!SUCCESS_STATES.has(state)) return { ...previousResult, status: "running" };
-  const url = outputUrl(payload);
-  if (!url) throw new UnuTvError("provider_artifact_missing", "AutoDL H3 completed without a video URL", 502);
-  const artifactResponse = await fetchImpl(url, { headers: { accept: "video/*" } });
+  const kind = input.run?.result?.task?.artifactKind === "audio" ? "audio" : "video";
+  const result = outputResult(payload, kind);
+  const url = text(result?.url);
+  if (!url) {
+    if (previousResult.artifactPending) {
+      return {
+        ...previousResult,
+        status: "failed",
+        code: "autodl_artifact_unavailable",
+        message: `AutoDL completed without an ${kind} result after the artifact grace poll`
+      };
+    }
+    return { ...previousResult, status: "running", artifactPending: true };
+  }
+  const artifactResponse = await fetchImpl(url, { headers: { accept: `${kind}/*` } });
   if (!artifactResponse.ok) {
-    throw new UnuTvError("autodl_h3_download_failed", `AutoDL H3 video download failed (HTTP ${artifactResponse.status})`, 502);
+    throw new UnuTvError("autodl_download_failed", `AutoDL ${kind} download failed (HTTP ${artifactResponse.status})`, 502);
   }
   const bytes = Buffer.from(await artifactResponse.arrayBuffer());
-  if (!bytes.length) throw new UnuTvError("provider_empty_artifact", "AutoDL H3 returned an empty video", 502);
+  if (!bytes.length) throw new UnuTvError("provider_empty_artifact", `AutoDL returned an empty ${kind}`, 502);
+  const extension = kind === "audio" ? "wav" : "mp4";
+  const responseMime = text(artifactResponse.headers.get("content-type")).split(";", 1)[0];
+  const fallbackMime = kind === "audio" ? "audio/wav" : "video/mp4";
+  delete previousResult.artifactPending;
   return {
     ...previousResult,
     status: "succeeded",
     artifacts: [{
-      kind: "video",
-      mimeType: artifactResponse.headers.get("content-type")?.split(";", 1)[0] || "video/mp4",
+      kind,
+      mimeType: responseMime.startsWith(`${kind}/`) ? responseMime : fallbackMime,
       bytes,
-      title: `${input.node.title}.mp4`
+      title: `${input.node.title}.${extension}`
     }]
   };
 }

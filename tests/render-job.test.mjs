@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { compileRenderGraph } from "../packages/core/src/render-graph-policy.mjs";
 import { buildTechnicalQcReport } from "../packages/core/src/technical-qc-policy.mjs";
+import { buildAudioFilterGraph } from "../packages/local-runtime/src/ffmpeg-render-adapter.mjs";
 import { createLocalRuntime } from "../packages/local-runtime/src/index.mjs";
 
 const run = promisify(execFile);
@@ -36,6 +37,45 @@ test("render graph preserves main-track timing and rejects unresolved overlaps",
     { id: "clip-a", mediaId: "media-a", track: 0, startMs: 0, durationMs: 800, trimInMs: 0 },
     { id: "clip-b", mediaId: "media-b", track: 0, startMs: 700, durationMs: 500, trimInMs: 0 }
   ] }, "h264_review"), (error) => error.code === "render_track_overlap" && error.status === 409);
+});
+
+test("voiceover sound mix keeps roles, fades, narration ducking and loudness targets", () => {
+  const timeline = {
+    id: "timeline-sound-mix",
+    frameRate: 24,
+    width: 64,
+    height: 64,
+    colorSpace: "Rec.709",
+    tracks: [
+      { kind: "video", order: 0, visible: true, muted: false, payload: {} },
+      { kind: "audio", order: 1, visible: true, muted: false, payload: { role: "narration", soundMix: { normalize: true, targetLufs: -16, truePeakDbtp: -1.5 } } },
+      { kind: "audio", order: 3, visible: true, muted: false, payload: { role: "music", fadeInMs: 1000, fadeOutMs: 1500, ducking: { enabled: true, threshold: 0.05, ratio: 8, attackMs: 20, releaseMs: 300 } } }
+    ],
+    clips: [
+      { id: "video", mediaId: "video-media", track: 0, startMs: 0, durationMs: 15000, trimInMs: 0, payload: { includeEmbeddedAudio: false } },
+      { id: "voice", mediaId: "voice-media", track: 1, startMs: 0, durationMs: 15000, trimInMs: 0, payload: { volume: 1 } },
+      { id: "music", mediaId: "music-media", track: 3, startMs: 0, durationMs: 15000, trimInMs: 0, payload: { volume: 0.22 } }
+    ]
+  };
+  const graph = compileRenderGraph(timeline, "h264_review");
+  assert.deepEqual(graph.audioClips.map((clip) => clip.role), ["narration", "music"]);
+  assert.equal(graph.audioClips[1].fadeInMs, 1000);
+  assert.equal(graph.audioClips[1].ducking.enabled, true);
+  assert.deepEqual(graph.soundMix, { normalize: true, targetLufs: -16, truePeakDbtp: -1.5 });
+
+  const filterGraph = buildAudioFilterGraph(graph.audioClips.map((clip, index) => ({ ...clip, inputIndex: index })), graph.durationMs, graph.soundMix).filters.join(";");
+  assert.match(filterGraph, /afade=t=in/);
+  assert.match(filterGraph, /apad=whole_dur=15\.000/);
+  assert.match(filterGraph, /sidechaincompress=/);
+  assert.match(filterGraph, /loudnorm=I=-16:LRA=11:TP=-1\.5/);
+  assert.match(filterGraph, /aresample=48000/);
+
+  const boundaryGraph = buildAudioFilterGraph([
+    { inputIndex: 0, role: "narration", track: 1, startMs: 0, trimInMs: 0, durationMs: 1000, volume: 1 },
+    { inputIndex: 1, role: "music", track: 3, startMs: 0, trimInMs: 0, durationMs: 1000, volume: 0.2, fadeInMs: 900, ducking: { enabled: true, threshold: 0 } }
+  ], 1000).filters.join(";");
+  assert.match(boundaryGraph, /afade=t=in:st=0:d=0\.900/);
+  assert.match(boundaryGraph, /threshold=0\.001/);
 });
 
 test("render graph blocks repaired sources until original audio is disabled and the remix is time-aligned", () => {
@@ -166,6 +206,61 @@ test("local render preserves embedded audio from a video-track clip", async (con
   assert.equal(completed.status, "succeeded", completed.error?.message);
   const qc = await runtime.app.getTechnicalQcReport({ projectId: project.id, renderJobId: completed.id });
   assert.equal(qc.checks.find((check) => check.id === "audio_stream").status, "pass");
+});
+
+test("local render executes narration-driven music ducking with fades", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "unutv-render-voiceover-ducking-"));
+  context.after(async () => rm(dataRoot, { recursive: true, force: true }));
+  const runtime = createLocalRuntime({ dataRoot, recoverRenders: false, recoverAutomation: false });
+  context.after(() => runtime.close());
+  const videoPath = path.join(dataRoot, "video.mp4");
+  const narrationPath = path.join(dataRoot, "narration.wav");
+  const musicPath = path.join(dataRoot, "music.wav");
+  await Promise.all([
+    run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x64:r=24:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", videoPath]),
+    run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:duration=1", "-c:a", "pcm_s16le", narrationPath]),
+    run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000:duration=3", "-c:a", "pcm_s16le", musicPath])
+  ]);
+
+  const { project } = await runtime.app.createProject({ title: "旁白音乐Ducking回归" });
+  const opened = await runtime.app.openProject({ projectId: project.id });
+  const outputNode = await runtime.app.createNode({ projectId: project.id, canvasId: opened.rootCanvasId, kind: "compose", title: "声音母版" });
+  const [videoMedia, narrationMedia, musicMedia] = await Promise.all([
+    runtime.app.importMedia({ projectId: project.id, filePath: videoPath, kind: "video" }),
+    runtime.app.importMedia({ projectId: project.id, filePath: narrationPath, kind: "audio" }),
+    runtime.app.importMedia({ projectId: project.id, filePath: musicPath, kind: "audio" })
+  ]);
+  const timeline = await runtime.app.createTimeline({ projectId: project.id, title: "15秒声音职责轨", frameRate: 24, width: 64, height: 64 });
+  let document = await runtime.app.getTimeline({ projectId: project.id, timelineId: timeline.id });
+  const narrationTrack = document.tracks.find((track) => track.kind === "audio");
+  await runtime.app.updateTimelineTrack({
+    projectId: project.id,
+    timelineId: timeline.id,
+    trackId: narrationTrack.id,
+    patch: { payload: { role: "narration", soundMix: { normalize: true, targetLufs: -16, truePeakDbtp: -1.5 } } }
+  });
+  await runtime.app.addTimelineTrack({
+    projectId: project.id,
+    timelineId: timeline.id,
+    kind: "audio",
+    name: "音乐轨",
+    payload: { role: "music", fadeInMs: 250, fadeOutMs: 250, ducking: { enabled: true, threshold: 0, ratio: 8, attackMs: 20, releaseMs: 300 } }
+  });
+  document = await runtime.app.getTimeline({ projectId: project.id, timelineId: timeline.id });
+  const musicTrack = document.tracks.find((track) => track.name === "音乐轨");
+  await runtime.app.addTimelineClip({ projectId: project.id, timelineId: timeline.id, mediaId: videoMedia.id, track: 0, startMs: 0, durationMs: 3000, payload: { includeEmbeddedAudio: false } });
+  await runtime.app.addTimelineClip({ projectId: project.id, timelineId: timeline.id, mediaId: narrationMedia.id, track: narrationTrack.order, startMs: 0, durationMs: 1000 });
+  await runtime.app.addTimelineClip({ projectId: project.id, timelineId: timeline.id, mediaId: musicMedia.id, track: musicTrack.order, startMs: 0, durationMs: 3000, payload: { volume: 0.22 } });
+  const render = await runtime.app.createRenderJob({ projectId: project.id, timelineId: timeline.id, outputNodeId: outputNode.id, preset: "h264_review", idempotencyKey: "voiceover-ducking-v1" });
+  const completed = await waitForTerminal(runtime.app, project.id, render.id);
+  assert.equal(completed.status, "succeeded", JSON.stringify(completed.error));
+  const graph = (await runtime.app.getRenderJob({ projectId: project.id, renderJobId: render.id })).renderGraph;
+  assert.equal(graph.audioClips.find((clip) => clip.role === "music").ducking.enabled, true);
+  const output = runtime.media.open(project.id, completed.outputMediaId);
+  const { stdout } = await run("ffprobe", ["-v", "error", "-show_streams", "-of", "json", output.filePath]);
+  const audioStream = JSON.parse(stdout).streams.find((stream) => stream.codec_type === "audio");
+  assert.equal(audioStream.sample_rate, "48000");
+  assert.ok(Number(audioStream.duration) > 2.8, audioStream.duration);
 });
 
 test("technical QC keeps missing audio as a review warning", () => {

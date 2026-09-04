@@ -9,6 +9,25 @@ export function createNodePromptUseCases(ports) {
     if (!isPromptCapableNode(node)) {
       throw new UnuTvError("prompt_not_supported", `${node.kind} nodes do not own a Prompt`, 400);
     }
+    const current = await ports.projects.getNodePrompt(projectId, nodeId);
+    const payloadSelection = object(node.payload?.modelSelection);
+    const inheritedParameters = {
+      ...object(node.payload?.parameters),
+      ...object(payloadSelection.parameters),
+      ...object(current?.parameters)
+    };
+    const parameters = input.parameters === undefined
+      ? inheritedParameters
+      : requireObject(input.parameters, "parameters", {});
+    const provider = input.provider === undefined
+      ? normalizedOptionalText(current?.provider || payloadSelection.providerId || node.payload?.provider)
+      : normalizedOptionalText(input.provider);
+    const modelId = input.modelId === undefined
+      ? normalizedOptionalText(current?.modelId || payloadSelection.modelId || node.payload?.modelId)
+      : normalizedOptionalText(input.modelId);
+    const mode = input.mode === undefined
+      ? normalizedOptionalText(current?.mode || parameters.mode || node.payload?.mode)
+      : normalizedOptionalText(input.mode);
     const document = normalizePromptDocumentV1(input.document, typeof input.text === "string" ? input.text : "");
     const documentReferences = promptDocumentReferenceBindings(document);
     return ports.projects.saveNodePrompt(projectId, {
@@ -19,10 +38,10 @@ export function createNodePromptUseCases(ports) {
       // canvas.  Ordinary editor saves retain the historical document-derived
       // text behaviour.
       text: input.document && input.preserveText !== true ? promptDocumentPlainText(document) : typeof input.text === "string" ? input.text : "",
-      provider: normalizedOptionalText(input.provider),
-      modelId: normalizedOptionalText(input.modelId),
-      mode: normalizedOptionalText(input.mode),
-      parameters: requireObject(input.parameters, "parameters", {}),
+      provider,
+      modelId,
+      mode,
+      parameters,
       referenceNodeIds: uniqueStrings([...stringArray(input.referenceNodeIds), ...documentReferences.map((reference) => reference.sourceNodeId)]),
       referenceMediaIds: uniqueStrings([...stringArray(input.referenceMediaIds), ...documentReferences.map((reference) => reference.mediaId)]),
       updatedAt: nowIso()
@@ -43,6 +62,10 @@ export function createNodePromptUseCases(ports) {
 
 function normalizedOptionalText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function object(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function stringArray(value) {

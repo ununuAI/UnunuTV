@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 
 const FIELDS = Object.freeze({
   ununuApiKey: { file: "ununu-api-key", env: "UNUNU_GATE_API_KEY", provider: "ununu" },
+  fluxBaseUrl: { file: "flux-base-url", env: "UNUTV_FLUX_COMFY_URL", provider: "flux" },
+  fluxApiToken: { file: "flux-api-token", env: "UNUTV_FLUX_API_TOKEN", provider: "flux" },
   arkApiKey: { file: "ark-api-key", env: "ARK_API_KEY", provider: "ark" },
   openrouterApiKey: { file: "openrouter-api-key", env: "OPENROUTER_API_KEY", provider: "openrouter" },
   autodlApiToken: { file: "autodl-api-token", env: "AUTODL_API_TOKEN", provider: "autodl" },
@@ -113,10 +115,20 @@ export class LocalSecretStore {
   }
 
   status() {
+    const fluxBaseUrl = this.effectiveValue("fluxBaseUrl");
     return {
       storageDirectory: this.directory,
       providers: {
         ununu: { configured: Boolean(this.effectiveValue("ununuApiKey")), source: this.source("ununuApiKey") },
+        flux: {
+          configured: true,
+          source: fluxBaseUrl ? this.source("fluxBaseUrl") : "loopback",
+          kind: fluxBaseUrl ? "remote-comfyui" : "local-comfyui",
+          baseUrl: fluxBaseUrl || "http://127.0.0.1:18188",
+          endpointConfigured: Boolean(fluxBaseUrl),
+          tokenConfigured: Boolean(this.effectiveValue("fluxApiToken")),
+          tokenSource: this.source("fluxApiToken")
+        },
         ark: { configured: Boolean(this.effectiveValue("arkApiKey")), source: this.source("arkApiKey") },
         minimax: { configured: Boolean(this.h3Config()), source: this.h3ConfigSource(), kind: "local-comfyui" },
         autodl: { configured: Boolean(this.effectiveValue("autodlApiToken")), source: this.source("autodlApiToken"), kind: "hosted-comfyui-api" },

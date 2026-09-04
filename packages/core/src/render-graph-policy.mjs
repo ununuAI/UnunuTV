@@ -4,6 +4,7 @@ export function compileRenderGraph(timeline, preset) {
   const tracks = Array.isArray(timeline.tracks) ? timeline.tracks : [];
   const videoTrack = tracks.find((track) => track.kind === "video" && track.visible !== false) ?? { order: 0 };
   const audioTracks = tracks.filter((track) => track.kind === "audio" && track.visible !== false && !track.muted);
+  const audioTrackByOrder = new Map(audioTracks.map((track) => [track.order, track]));
   const subtitleOrders = new Set(tracks.filter((track) => ["subtitle", "text"].includes(track.kind) && track.visible !== false).map((track) => track.order));
   const soloAudioTracks = audioTracks.filter((track) => track.solo);
   const enabledAudioOrders = new Set((soloAudioTracks.length ? soloAudioTracks : audioTracks).map((track) => track.order));
@@ -88,6 +89,7 @@ export function compileRenderGraph(timeline, preset) {
   const effects = (timeline.effects ?? []).filter((effect) => effect.enabled !== false && clips.some((clip) => clip.id === effect.clipId));
   const keyframes = (timeline.keyframes ?? []).filter((keyframe) => clips.some((clip) => clip.id === keyframe.clipId));
   const audioDurationMs = Math.max(0, ...audioClips.map((clip) => clip.startMs + clip.durationMs));
+  const configuredSoundMix = audioTracks.map((track) => track.payload?.soundMix).find((value) => value && typeof value === "object") ?? {};
   return {
     timelineId: timeline.id, preset, audioOnly, frameRate: timeline.frameRate, width: target.width, height: target.height, sourceWidth: timeline.width, sourceHeight: timeline.height, colorSpace: timeline.colorSpace,
     clips: clips.map((clip) => ({
@@ -102,7 +104,28 @@ export function compileRenderGraph(timeline, preset) {
       effects: effects.filter((effect) => effect.clipId === clip.id),
       keyframes: keyframes.filter((keyframe) => keyframe.clipId === clip.id)
     })),
-    audioClips: audioClips.map((clip) => ({ clipId: clip.id, mediaId: clip.mediaId, track: clip.track, startMs: clip.startMs, durationMs: clip.durationMs, trimInMs: clip.trimInMs, volume: Number(clip.payload?.volume ?? 1), segmentSeam: clip.payload?.segmentSeam ?? null })),
+    audioClips: audioClips.map((clip) => {
+      const trackPayload = audioTrackByOrder.get(clip.track)?.payload ?? {};
+      return {
+        clipId: clip.id,
+        mediaId: clip.mediaId,
+        track: clip.track,
+        startMs: clip.startMs,
+        durationMs: clip.durationMs,
+        trimInMs: clip.trimInMs,
+        volume: Number(clip.payload?.volume ?? trackPayload.volume ?? 1),
+        role: String(clip.payload?.role ?? trackPayload.role ?? "audio"),
+        fadeInMs: Number(clip.payload?.fadeInMs ?? trackPayload.fadeInMs ?? 0),
+        fadeOutMs: Number(clip.payload?.fadeOutMs ?? trackPayload.fadeOutMs ?? 0),
+        ducking: clip.payload?.ducking ?? trackPayload.ducking ?? null,
+        segmentSeam: clip.payload?.segmentSeam ?? null
+      };
+    }),
+    soundMix: {
+      normalize: configuredSoundMix.normalize === true,
+      targetLufs: Number(configuredSoundMix.targetLufs ?? -16),
+      truePeakDbtp: Number(configuredSoundMix.truePeakDbtp ?? -1.5)
+    },
     subtitleCues: subtitleClips.map((clip) => ({ clipId: clip.id, startMs: clip.startMs, endMs: clip.startMs + clip.durationMs, text: clip.payload.text.trim() })),
     subtitleStyle,
     transitions: transitions.map((transition) => ({ id: transition.id, fromClipId: transition.fromClipId, toClipId: transition.toClipId, kind: transition.kind, durationMs: transition.durationMs, payload: transition.payload ?? {} })),

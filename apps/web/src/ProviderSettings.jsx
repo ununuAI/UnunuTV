@@ -4,15 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 
 function Status({ configured, source }) {
+  const sourceLabel = source === "environment" ? "环境变量" : source === "loopback" ? "本地隧道" : "本地文件";
   return <span className={`credential-status ${configured ? "configured" : "missing"}`}>
-    {configured ? `已配置 · ${source === "environment" ? "环境变量" : "本地文件"}` : "未配置"}
+    {configured ? `已配置 · ${sourceLabel}` : "未配置"}
   </span>;
 }
 
-function SecretField({ label, value, onChange, onSave, onClear, configured, source, placeholder }) {
+function SecretField({ label, value, onChange, onSave, onClear, configured, source, placeholder, type = "password" }) {
   return <label>{label}
     <div className="secret-field">
-      <input type="password" autoComplete="off" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+      <input type={type} autoComplete="off" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
       <button disabled={!value.trim()} onClick={onSave}>保存</button>
       <button className="clear-secret" disabled={!configured || source === "environment"} onClick={onClear}>清除</button>
     </div>
@@ -23,7 +24,7 @@ export default function ProviderSettings({ notify }) {
   const [status, setStatus] = useState(null);
   const [h3Health, setH3Health] = useState(null);
   const [checkingH3, setCheckingH3] = useState(false);
-  const [form, setForm] = useState({ ununuApiKey: "", arkApiKey: "", openrouterApiKey: "", autodlApiToken: "", openspeechApiKey: "", openspeechSpeakerId: "" });
+  const [form, setForm] = useState({ ununuApiKey: "", fluxBaseUrl: "", fluxApiToken: "", arkApiKey: "", openrouterApiKey: "", autodlApiToken: "", openspeechApiKey: "", openspeechSpeakerId: "" });
   const load = useCallback(async () => {
     const [settings, health] = await Promise.all([api.providerSettings(), api.providerHealth("minimax")]);
     setStatus(settings);
@@ -66,6 +67,12 @@ export default function ProviderSettings({ notify }) {
     </article>
 
     <article className="provider-card">
+      <header><div><b>Fluxed Up v9 FP8 · ComfyUI</b><small>本机 18188 或用户自有 HTTPS 网关 · 1K/2K</small></div><Status {...(status.providers.flux || { configured: false, source: "none" })} /></header>
+      <SecretField type="url" label="ComfyUI API 地址" placeholder={status.providers.flux?.baseUrl || "http://127.0.0.1:18188"} configured={status.providers.flux?.endpointConfigured} source={status.providers.flux?.source} {...field("fluxBaseUrl")} />
+      <SecretField label="远程网关 Token（本机可留空）" placeholder={status.providers.flux?.tokenConfigured ? "已配置（保存后不回显）" : "输入自己的网关 Token"} configured={status.providers.flux?.tokenConfigured} source={status.providers.flux?.tokenSource} {...field("fluxApiToken")} />
+    </article>
+
+    <article className="provider-card">
       <header><div><b>Ark Seedance</b><small>视频生成 · 隧道参考媒体</small></div><Status {...status.providers.ark} /></header>
       <SecretField label="ARK API Key" placeholder="输入新 Key（保存后立即清空）" configured={status.providers.ark.configured} source={status.providers.ark.source} {...field("arkApiKey")} />
     </article>
@@ -79,7 +86,7 @@ export default function ProviderSettings({ notify }) {
     </article>
 
     <article className="provider-card">
-      <header><div><b>MiniMax H3 · AutoDL</b><small>托管 ComfyUI API · 480P/768P · 1—15 秒</small></div><Status {...(status.providers.autodl || { configured: false, source: "none" })} /></header>
+      <header><div><b>AutoDL 托管生成</b><small>MiniMax H3 视频 · IndexTTS2 音频</small></div><Status {...(status.providers.autodl || { configured: false, source: "none" })} /></header>
       <SecretField label="AutoDL ComfyUI Token" placeholder="输入 ComfyUI 分组 Token（保存后立即清空）" configured={status.providers.autodl?.configured} source={status.providers.autodl?.source} {...field("autodlApiToken")} />
     </article>
 

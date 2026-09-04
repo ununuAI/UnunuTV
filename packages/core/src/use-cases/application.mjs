@@ -44,7 +44,7 @@ export function createApplication(ports) {
   const {
     addGroupMember, cancelRun, compileH3Prompt, connectEdge, createCanvas, createGroup, createNode, createProject, deleteGroup, deleteNode,
     disconnectEdge, exportH3MotionContextWorkflows, getDirectorStage, getH3MotionContextCapabilities, getPanorama, getProviderHealth, getProviderSettings, getWorkspace, getWorkflow, importH3ProviderConfig, initializeWorkspace, installH3MotionContext,
-    listProjects, listProviderModels, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode,
+    listProjects, listProviderModels, listReviews, listRuns, openCanvas, openProject, pollRun, restoreNode, runNode, runNodeBatch,
     saveDirectorStage, setPanorama, setWorkspaceRoot, setWorkflowLayer, updateNode, updateProject, updateProviderSettings
   } = foundation;
   const {
@@ -364,6 +364,7 @@ export function createApplication(ports) {
     publishMedia,
     reviewTarget,
     runNode,
+    runNodeBatch,
     saveDirectorStage,
     saveNodePrompt,
     saveScreenplayDocument,

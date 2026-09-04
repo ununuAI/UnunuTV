@@ -72,13 +72,76 @@ The active cinematic architecture and contracts are documented in
 and Provider parameters are separate. Storyboards are optional, and a single
 generation request may contain multiple designed artistic shots.
 Character, scene, prop, and storyboard image Prompts use deterministic V2
-compilers. UnunuTV remains the only execution runtime; ComfyUI is not required
-or integrated.
+compilers. UnunuTV remains the only execution runtime; supported local or
+remote ComfyUI providers are optional execution backends.
+
+## Install from GitHub in Codex
+
+The repository publishes the `unutv` Skill through its `ununu-tv` marketplace:
+
+```bash
+codex plugin marketplace add ununuAI/UnunuTV --ref main
+codex plugin add unutv@ununu-tv
+```
+
+Start a new Codex task after installation so the Skill is loaded.
+
+## Run the local canvas on Windows
+
+Install Node.js 26+, Git, FFmpeg, and Cloudflared. Then run in PowerShell:
+
+```powershell
+$UnunuTvRoot = "$env:LOCALAPPDATA\Ununu\ununu-unutv"
+git clone https://github.com/ununuAI/UnunuTV.git $UnunuTvRoot
+setx UNUTV_ROOT $UnunuTvRoot
+npm.cmd --prefix $UnunuTvRoot ci
+npm.cmd --prefix $UnunuTvRoot run build
+npm.cmd --prefix $UnunuTvRoot run dev
+```
+
+Keep the final command running while using the canvas at
+`http://127.0.0.1:4318`.
+
+## Tunnels
+
+- `npm run dev` and `npm run start` create a per-device Cloudflare Quick
+  Tunnel automatically. Its random URL is not configuration and must not be
+  copied from another computer or committed to Git.
+- Only signed, expiring `/provider-media/` files cross that tunnel. The canvas
+  UI and `/api/` remain loopback-only.
+- AutoDL H3 uses its own API Token. It needs the media tunnel only when a run
+  references local images, video, or audio; it does not need an SSH tunnel.
+- Self-hosted H3 may use the operator's own SSH host, port, and private-key
+  path to create a local port forward.
+- FLUX uses local ComfyUI by default or a user-owned HTTPS gateway. This public
+  repository contains no organization endpoint, Token, or reverse-tunnel
+  topology.
+
+## Update
+
+Stop UnunuTV, then update the runtime and Skill from PowerShell:
+
+```powershell
+$UnunuTvRoot = "$env:LOCALAPPDATA\Ununu\ununu-unutv"
+git -C $UnunuTvRoot pull --ff-only
+npm.cmd --prefix $UnunuTvRoot ci
+npm.cmd --prefix $UnunuTvRoot run build
+codex plugin marketplace upgrade ununu-tv
+codex plugin add unutv@ununu-tv
+```
+
+If Git reports local changes or a non-fast-forward update, stop and review the
+differences instead of overwriting them. Start UnunuTV again and open a new
+Codex task after the update.
+
+The plugin update does not replace local canvas state. Keep `.unutv`, project
+media, and credentials outside Git. Before publishing a Skill change, run
+`npm run plugin:sync` so the runtime and plugin copies stay identical.
 
 ## Paths
 
-- Source: `/Users/zhangxiaohao/Ununu/ununuAI/ununu-unutv`
-- Default runtime data: `/Users/<user>/.unutv`
+- Source: `UNUTV_ROOT`; Windows default `%LOCALAPPDATA%\Ununu\ununu-unutv`, macOS/Linux default `~/.local/share/ununu-unutv`
+- Default runtime data: `~/.unutv`
 - Override runtime data: `UNUTV_DATA_DIR=/absolute/path`
 
 Runtime layout:

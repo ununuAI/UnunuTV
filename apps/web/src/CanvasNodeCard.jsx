@@ -121,7 +121,7 @@ function CanvasNodeCard({ data, selected }) {
   const batchItemStatus = node.payload?.storyboardBatchTrace?.itemStatus;
   const isGenerating = node.payload?.generationStatus === "running" && batchItemStatus !== "queued";
   const isCancelingGeneration = node.payload?.generationPhase === "canceling";
-  const providerSupportsGenerationCancel = ["minimax", "ark"].includes(node.payload?.provider);
+  const providerSupportsGenerationCancel = ["minimax", "ark", "flux"].includes(node.payload?.provider);
   const imageEmptyState = mediaEmptyState(node, "image");
   const hasMultiSelection = selectedIds.length > 1;
   const title = isAsset && (!node.title || node.title === "资产") ? `${industrialAssetTypeLabel(assetTypeForNode(node))}资产` : node.title || LABELS[node.kind] || node.kind;

@@ -448,12 +448,13 @@ export const MomoCanvasWorkbench = forwardRef(function MomoCanvasWorkbench({ can
     setAssetRegistration(null);
   }, [readOnly]);
 
+  const flowNodeIdKey = flowNodes.map((node) => node.id).join("\u0000");
   const flowEdges = useMemo(() => {
     if (!showConnections) return [];
     const result = filterCanvasPresentationEdges(presentationCanvas.edges, presentationCanvas.nodes).map(toFlowEdge);
     if (menu?.temporary && menu.sourceNodeIds?.length === 1) result.push({ id: "__temporary_edge__", source: menu.sourceNodeIds[0], target: TEMP_NODE_ID, type: "smoothstep", style: { strokeDasharray: "6 4", opacity: .85 }, selectable: false });
     return result;
-  }, [menu, presentationCanvas.edges, presentationCanvas.nodes, showConnections]);
+  }, [flowNodeIdKey, menu, presentationCanvas.edges, presentationCanvas.nodes, showConnections]);
 
   useEffect(() => {
     if (!manualConnection) return;

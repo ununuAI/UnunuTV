@@ -22,6 +22,7 @@ function assetVersion(asset: ScriptAssetItem, versionId: string) {
 }
 
 function videoReferenceRole(mode: string | undefined, index: number, kind?: string) {
+  if (mode === "indextts2") return index === 0 ? "音色" : index === 1 ? "情绪" : "未使用";
   if (kind === "audio") return "音色";
   if (mode === "first_frame") return index === 0 ? "首帧" : "未使用";
   if (mode === "first_last_frame") return index === 0 ? "首帧" : index === 1 ? "尾帧" : "未使用";

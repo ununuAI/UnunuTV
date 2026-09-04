@@ -519,6 +519,127 @@ test("AutoDL H3 submits the hosted text workflow, polls data.status, and downloa
   assert.ok(existsSync(path.join(project.mediaRoot, completed.result.artifacts[0].relativePath)));
 });
 
+test("AutoDL H3 keeps terminal success pollable until the result URL appears", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-h3-artifact-delay-"));
+  let resultCalls = 0;
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "https://autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_lightx2v_no_pic" && options.method === "POST") {
+      return Response.json({ code: "Success", data: { task_id: "autodl-delayed-result", status: "QUEUED" } });
+    }
+    if (url === "https://autodl.art/api/v1/comfyui/comfyui_workflow/result/autodl-delayed-result") {
+      resultCalls += 1;
+      return Response.json({
+        code: "Success",
+        data: {
+          task_id: "autodl-delayed-result",
+          status: "SUCCESS",
+          results: resultCalls === 1 ? [] : [{ url: "https://result.autodl.test/delayed.mp4", type: "video" }]
+        }
+      });
+    }
+    if (url === "https://result.autodl.test/delayed.mp4") {
+      return new Response(Buffer.from("delayed-autodl-video"), { headers: { "content-type": "video/mp4" } });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const runtime = createLocalRuntime({ dataRoot, env: { AUTODL_API_TOKEN: "autodl-test-token" }, fetchImpl, connectH3Remote: false });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "video", payload: { provider: "autodl", modelId: "MiniMax-H3" } });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "autodl",
+    request: { prompt: "wait for the result URL", model: "MiniMax-H3", mode: "text_to_video", duration: 4, resolution: "480p", aspectRatio: "16:9" }
+  });
+
+  const pending = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
+  assert.equal(pending.status, "running");
+  assert.equal(pending.result.artifactPending, true);
+  const completed = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
+  assert.equal(completed.status, "succeeded");
+  assert.equal(completed.result.artifactPending, undefined);
+  assert.equal(resultCalls, 2);
+});
+
+test("AutoDL H3 fails clearly when a completed task remains empty after its grace poll", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-h3-empty-result-"));
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "https://autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_lightx2v_no_pic" && options.method === "POST") {
+      return Response.json({ code: "Success", data: { task_id: "autodl-empty-result", status: "QUEUED" } });
+    }
+    if (url === "https://autodl.art/api/v1/comfyui/comfyui_workflow/result/autodl-empty-result") {
+      return Response.json({ code: "Success", data: { task_id: "autodl-empty-result", status: "SUCCESS", results: [] } });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const runtime = createLocalRuntime({ dataRoot, env: { AUTODL_API_TOKEN: "autodl-test-token" }, fetchImpl, connectH3Remote: false });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({ projectId: project.id, canvasId: canvas.id, kind: "video", payload: { provider: "autodl", modelId: "MiniMax-H3" } });
+  const started = await runtime.app.runNode({
+    projectId: project.id,
+    nodeId: video.id,
+    provider: "autodl",
+    request: { prompt: "empty result", model: "MiniMax-H3", mode: "text_to_video", duration: 4, resolution: "480p", aspectRatio: "16:9" }
+  });
+
+  const pending = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
+  assert.equal(pending.status, "running");
+  const failed = await runtime.app.pollRun({ projectId: project.id, runId: started.id });
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.result.code, "autodl_artifact_unavailable");
+});
+
+test("node run inherits the saved AutoDL H3 duration, resolution, ratio, mode, and model", async (context) => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-h3-saved-selection-"));
+  let submitted;
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "https://autodl.art/api/v1/comfyui/comfyui_workflow/minimax_h3_lightx2v_no_pic" && options.method === "POST") {
+      submitted = JSON.parse(options.body);
+      return Response.json({ code: "Success", data: { task_id: "autodl-saved-selection", status: "QUEUED" } });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  };
+  const runtime = createLocalRuntime({
+    dataRoot,
+    env: { AUTODL_API_TOKEN: "autodl-test-token" },
+    fetchImpl,
+    connectH3Remote: false
+  });
+  context.after(() => runtime.close());
+  const { project, canvas } = await runtime.app.createProject();
+  const video = await runtime.app.createNode({
+    projectId: project.id,
+    canvasId: canvas.id,
+    kind: "video",
+    payload: { provider: "autodl", modelId: "MiniMax-H3" }
+  });
+  await runtime.app.saveNodePrompt({
+    projectId: project.id,
+    nodeId: video.id,
+    text: "integrated_multimodal_description: saved fifteen-second shot",
+    provider: "autodl",
+    modelId: "MiniMax-H3",
+    mode: "text_to_video",
+    parameters: { duration: 15, resolution: "768p", ratio: "16:9", generateAudio: true }
+  });
+
+  const started = await runtime.app.runNode({ projectId: project.id, nodeId: video.id });
+
+  assert.equal(started.status, "running");
+  assert.equal(started.request.duration, 15);
+  assert.equal(started.request.resolution, "768p");
+  assert.equal(started.request.aspectRatio, "16:9");
+  assert.equal(started.request.mode, "text_to_video");
+  assert.equal(started.request.model, "MiniMax-H3");
+  assert.deepEqual(submitted, {
+    prompt: "integrated_multimodal_description: saved fifteen-second shot",
+    duration: 15,
+    resolution: "768p横"
+  });
+});
+
 test("AutoDL H3 selects the 15-second multi-image/audio workflow and publishes signed references", async (context) => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ununu-unutv-autodl-h3-reference-"));
   let submission;

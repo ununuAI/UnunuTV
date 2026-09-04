@@ -1,6 +1,12 @@
 import { H3_VIDEO_MODEL_ID, validateVideoGenerationSelection } from "./video-generation-capabilities.js";
 import { providerReferenceMediaIds } from "./node-provider-reference-policy.js";
 
+export const INDEXTTS2_MODEL_ID = "IndexTTS2";
+const INDEXTTS2_EMOTION_KEYS = [
+  "emo_sad", "emo_calm", "emo_angry", "emo_happy", "emo_afraid", "emo_random",
+  "emo_disgusted", "emo_surprised", "emo_melancholic", "emo_control_method"
+];
+
 export function generationRunPayload(node, input, edges, nodes) {
   const incomingNodes = edges
     .filter((edge) => edge.toNodeId === node.id)
@@ -63,15 +69,25 @@ export function generationRunPayload(node, input, edges, nodes) {
     }
   }
   const mediaParameters = node.kind === "image"
-    ? { background: parameters.background, n: parameters.n, outputFormat: parameters.outputFormat, quality: parameters.quality, responseFormat: parameters.responseFormat, size: parameters.size }
+    ? { background: parameters.background, malePreset: parameters.malePreset, maleRegion: parameters.maleRegion, n: parameters.n, outputFormat: parameters.outputFormat, quality: parameters.quality, referenceDenoise: parameters.referenceDenoise, responseFormat: parameters.responseFormat, size: parameters.size }
     : { duration: parameters.duration, resolution: parameters.resolution, aspectRatio: parameters.ratio, mode: isVideoNode ? videoMode : input.mode, generateAudio: parameters.generateAudio, ...(input.modelId === H3_VIDEO_MODEL_ID ? { ...(input.provider === "minimax" ? { h3Profile: parameters.h3Profile } : {}), seed: parameters.seed } : {}) };
+  const indexTtsReferences = node.kind === "audio" && input.modelId === INDEXTTS2_MODEL_ID
+    ? [...new Set([...incomingAudioReferenceMediaIds, ...(input.referenceMediaIds || [])])]
+    : [];
+  const audioParameters = input.modelId === INDEXTTS2_MODEL_ID
+    ? {
+      text: input.text,
+      ...Object.fromEntries(INDEXTTS2_EMOTION_KEYS.filter((key) => parameters[key] !== undefined).map((key) => [key, parameters[key]])),
+      ...(indexTtsReferences.length ? { audioReferenceMediaIds: indexTtsReferences } : {})
+    }
+    : { text: input.text, speakerId: parameters.speakerId, speed: parameters.speed, responseFormat: parameters.responseFormat };
   return {
     provider: input.provider,
     request: {
       prompt: submissionPrompt,
       model: input.modelId,
       modelId: input.modelId,
-      ...(node.kind === "audio" ? { text: input.text, speakerId: parameters.speakerId, speed: parameters.speed, responseFormat: parameters.responseFormat } : mediaParameters),
+      ...(node.kind === "audio" ? audioParameters : mediaParameters),
       referenceNodeIds: input.referenceNodeIds,
       ...((isVideoNode ? videoReferences : referenceMediaIds).length ? { referenceMediaIds: isVideoNode ? videoReferences : referenceMediaIds } : {}),
       ...(input.modelId === H3_VIDEO_MODEL_ID && incomingAudioReferenceMediaIds.length ? { audioReferenceMediaIds: incomingAudioReferenceMediaIds } : {}),

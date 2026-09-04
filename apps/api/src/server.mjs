@@ -312,6 +312,9 @@ async function dispatch(request, response, runtime, webRoot) {
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/nodes/:nodeId/run"))) {
     return json(response, 200, await runtime.app.runNode({ ...params, ...(await body(request)) }));
   }
+  if ((params = route(method, pathname, "POST", "/api/projects/:projectId/nodes/run-batch"))) {
+    return json(response, 202, await runtime.app.runNodeBatch({ ...params, ...(await body(request)) }));
+  }
   if ((params = route(method, pathname, "POST", "/api/projects/:projectId/h3-motion-context/export"))) {
     return json(response, 200, await runtime.app.exportH3MotionContextWorkflows({ ...params, ...(await body(request, 2_000_000)) }));
   }

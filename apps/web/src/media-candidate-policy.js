@@ -1,14 +1,12 @@
 export function mediaCandidatesForNode(node) {
   const payload = node?.payload || {};
   const candidates = [...new Set([
-    ...(Array.isArray(payload.mediaIds) ? payload.mediaIds : []),
+    ...(Array.isArray(payload.mediaIds) ? [...payload.mediaIds].reverse() : []),
     ...(Array.isArray(payload.mediaCandidates) ? payload.mediaCandidates : []),
     ...(Array.isArray(payload.historyMediaIds) ? payload.historyMediaIds : []),
     payload.currentMediaId
   ].filter((id) => typeof id === "string" && id.trim()))];
-  return ["video", "videoShot", "compose", "video-clip"].includes(node?.kind)
-    ? candidates.reverse()
-    : candidates;
+  return candidates;
 }
 
 export function mediaUrlForNode(node, mediaId = node?.payload?.currentMediaId) {

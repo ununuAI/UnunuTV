@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mediaCandidatesForNode, mediaReviewStateForNode, mediaUrlForNode } from "../apps/web/src/media-candidate-policy.js";
 
-test("media candidates keep generation order, remove duplicates, and include the current media", () => {
-  const node = { projectId: "project-local", payload: { mediaIds: ["media-a", "media-b", "media-a"], currentMediaId: "media-c" } };
-  assert.deepEqual(mediaCandidatesForNode(node), ["media-a", "media-b", "media-c"]);
+test("image candidates show the newest generated version first", () => {
+  const node = { kind: "image", projectId: "project-local", payload: { mediaIds: ["media-old", "media-new", "media-new"], currentMediaId: "media-new" } };
+  assert.deepEqual(mediaCandidatesForNode(node), ["media-new", "media-old"]);
 });
 
 test("video candidates show the newest generated version first", () => {

@@ -1,0 +1,26 @@
+{
+  "name": "unutv",
+  "version": "0.1.0+codex.20260904090910",
+  "description": "Operate the local-first UnunuTV production canvas through its official API and CLI",
+  "author": {
+    "name": "Ununu"
+  },
+  "homepage": "https://github.com/ununuAI/UnunuTV",
+  "repository": "https://github.com/ununuAI/UnunuTV",
+  "keywords": [
+    "video",
+    "canvas",
+    "production",
+    "unutv"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "UnunuTV",
+    "shortDescription": "Operate the local UnunuTV production canvas",
+    "longDescription": "Create and resume UnunuTV projects, canvas nodes, media generations, timelines, and cinematic production through the official local API or CLI.",
+    "developerName": "Ununu",
+    "category": "Creative Tools",
+    "capabilities": [],
+    "defaultPrompt": "Use UnunuTV to inspect and continue the current local production canvas."
+  }
+}

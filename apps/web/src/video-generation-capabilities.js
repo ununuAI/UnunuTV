@@ -9,6 +9,9 @@ import {
 export const GROK_VIDEO_MODEL_ID = OPENROUTER_GROK_VIDEO_MODEL_ID;
 export const H3_VIDEO_MODEL_ID = MINIMAX_H3_MODEL_ID;
 export const SEEDANCE_VIDEO_MODEL_ID = ARK_SEEDANCE_2_MINI_MODEL_ID;
+export const DEFAULT_VIDEO_MODEL_ID = H3_VIDEO_MODEL_ID;
+export const DEFAULT_VIDEO_PROVIDER_ID = "autodl";
+export const DEFAULT_VIDEO_RESOLUTION = "768p";
 export const GROK_PROMPT_MAX_BYTES = getVideoModelCapability({ provider: "openrouter", model: GROK_VIDEO_MODEL_ID }).promptMaxBytes;
 
 export function videoProviderId(modelId, preferredProviderId) {

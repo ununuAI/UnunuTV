@@ -480,8 +480,8 @@ textarea { padding: 10px; resize: vertical; font-family: "SFMono-Regular", Conso
 @media (max-width: 900px) { .panorama-workspace > header { align-items: flex-start; flex-direction: column; } .panorama-workspace-toolbar { overflow-x: auto; width: 100%; } }
 .video-result-surface { height: 100%; position: relative; width: 100%; }
 .video-result-surface > video { background: transparent; display: block; height: 100%; object-fit: contain; width: 100%; }
-.media-candidate-rail { display: flex; flex-direction: column; gap: 8px; height: 100%; left: calc(100% + 18px); max-height: 100%; overscroll-behavior: contain; overflow-x: hidden; overflow-y: auto; padding: 1px 5px 1px 1px; position: absolute; scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent; scrollbar-width: thin; top: 0; width: 70px; z-index: 16; }
-.media-candidate-thumb { background: var(--popover); border: 2px solid transparent; border-radius: 9px; box-shadow: none; flex: 0 0 64px; height: 64px; overflow: hidden; position: relative; width: 64px; }
+.media-candidate-rail { display: flex; flex-direction: column; gap: 8px; height: 100%; left: calc(100% + 18px); max-height: 100%; overscroll-behavior: contain; overflow-x: hidden; overflow-y: auto; padding: 1px 5px 1px 1px; pointer-events: none; position: absolute; scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent; scrollbar-width: thin; top: 0; width: 70px; z-index: 16; }
+.media-candidate-thumb { background: var(--popover); border: 2px solid transparent; border-radius: 9px; box-shadow: none; flex: 0 0 64px; height: 64px; overflow: hidden; pointer-events: auto; position: relative; width: 64px; }
 .media-candidate-thumb.previewing { border-color: color-mix(in srgb, var(--text) 82%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--text) 18%, transparent), 0 7px 20px rgba(0,0,0,.25); }
 .media-candidate-preview { background: #080b0d; display: block; height: 100%; padding: 0; width: 100%; }
 .media-candidate-preview > img, .media-candidate-preview > video { display: block; height: 100%; object-fit: cover; pointer-events: none; width: 100%; }
@@ -2647,6 +2647,10 @@ textarea { padding: 10px; resize: vertical; font-family: "SFMono-Regular", Conso
   right: 0;
   width: 240px;
 }
+
+.index-tts-emotion-menu { max-height: min(70vh, 500px); overflow-y: auto; width: 280px; }
+.index-tts-emotion-menu label > span { color: var(--muted); flex: 0 0 38px; font-size: 10px; }
+.index-tts-emotion-menu input[type="checkbox"] { flex: 0 0 16px; height: 16px; margin-left: auto; width: 16px; }
 
 .prompt-card-video .generator-input-shell,
 .prompt-card-audio .generator-input-shell {
