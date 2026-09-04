@@ -43,8 +43,6 @@ node apps/cli/src/index.mjs workflow short-drama \
 npm run dev   # 查看渐进式画布、电影工作区与自动化
 ```
 
-规划文档：`docs/progress/general/20260723-unutv-ultimate-platform-os-plan.md`
-
 Next.js 在同一进程中运行浏览器界面与本地 API。SQLite 保存结构化状态；图片、视频和音频文件
 保留在项目媒体目录中。
 
